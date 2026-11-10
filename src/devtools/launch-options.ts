@@ -81,3 +81,24 @@ export function devToolsSpawnArgs(config: DevToolsLaunchConfig | undefined): str
     if (config?.noOverlay) { return ['--devtools', 'headless']; }
     return config?.useDevTools === true ? ['--devtools', 'on'] : [];
 }
+
+/**
+ * Why an explicit DevTools launch was refused for the app's type (WPF or
+ * Windows Forms), or undefined for any other failure. Such an app is relaunched
+ * without DevTools rather than failing F5; the CLI names no error code, so its message is matched.
+ */
+export function unsupportedAppTypeReason(spawnArgs: string[], failure: string): string | undefined {
+    const index = spawnArgs.indexOf('--devtools');
+    if (index === -1 || spawnArgs[index + 1] === 'off') { return undefined; }
+    const match = /^DevTools requires WinUI 3;\s*(.+?)\.(?:\s+Run with --devtools off\b.*)?$/i.exec(failure.trim());
+    return match ? match[1] : undefined;
+}
+
+/** The same launch with DevTools turned off. */
+export function withDevToolsOff(spawnArgs: string[]): string[] {
+    const index = spawnArgs.indexOf('--devtools');
+    if (index === -1) { return [...spawnArgs, '--devtools', 'off']; }
+    const next = [...spawnArgs];
+    next[index + 1] = 'off';
+    return next;
+}

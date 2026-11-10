@@ -9,7 +9,9 @@
 
 import { test } from 'node:test';
 import * as assert from 'assert';
-import { devToolsSpawnArgs, shouldAttachDebugger, shouldUseDevTools } from '../devtools/launch-options';
+import {
+    devToolsSpawnArgs, shouldAttachDebugger, shouldUseDevTools, unsupportedAppTypeReason, withDevToolsOff,
+} from '../devtools/launch-options';
 
 // ───────────────────────────── the default ─────────────────────────────
 
@@ -154,4 +156,25 @@ test('noDebug and useDevTools are independent across every combination', () => {
             );
         }
     }
+});
+
+// Captured from `winapp run BBWpf.csproj --devtools on --json` against the pinned CLI.
+const WPF_REFUSAL = "DevTools requires WinUI 3; 'BBWpf.csproj' is a WPF-only project. Run with --devtools off to start the app without DevTools.";
+
+test('an explicit DevTools launch of a WPF or WinForms app falls back to running without DevTools', () => {
+    assert.strictEqual(unsupportedAppTypeReason(['run', '.', '--devtools', 'on'], WPF_REFUSAL),
+        "'BBWpf.csproj' is a WPF-only project");
+    assert.strictEqual(unsupportedAppTypeReason(['run', '.', '--devtools', 'headless'],
+        "DevTools requires WinUI 3; 'Forms.csproj' is a Windows Forms-only project. Run with --devtools off to start the app without DevTools."),
+        "'Forms.csproj' is a Windows Forms-only project");
+    assert.deepStrictEqual(withDevToolsOff(['run', '.', '--devtools', 'headless', '--json']),
+        ['run', '.', '--devtools', 'off', '--json']);
+});
+
+test('only the app-type refusal of an explicit request falls back; other failures still fail', () => {
+    assert.strictEqual(unsupportedAppTypeReason(['run', '.'], WPF_REFUSAL), undefined, 'automatic mode never refuses');
+    assert.strictEqual(unsupportedAppTypeReason(['run', '.', '--devtools', 'off'], WPF_REFUSAL), undefined);
+    assert.strictEqual(unsupportedAppTypeReason(['run', '.', '--devtools', 'on'], 'Build failed with 3 errors.'), undefined);
+    assert.strictEqual(unsupportedAppTypeReason(['run', '.', '--devtools', 'on'],
+        'Could not prepare DevTools: the DevTools engine is missing.'), undefined);
 });

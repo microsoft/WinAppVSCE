@@ -623,10 +623,46 @@ test('a delayed highlight cannot send an obsolete selection or reveal an old loc
     await until(() => engine.received.some(m => m.method === 'Selection.select' && m.params.handle === 'second'));
     const reveals = panel.reveals.length;
     release();
-    engine.emit('Selection.picked', { handle: 'first', origin: 'fake-owner-token' });
+    // The live engine names the panel's own changes by its negotiate connection id.
+    engine.emit('Selection.picked', { handle: 'first', origin: 'fake-connection' });
     await new Promise(resolve => setTimeout(resolve, 100));
     assert.ok(!engine.received.some(m => m.method === 'Selection.select' && m.params.handle === 'first'));
     assert.equal(panel.reveals.length, reveals);
+});
+
+test('a failed CLI detail read keeps the engine\'s live comments on screen', async t => {
+    const pid = 870500 + process.pid;
+    const engine = await FakeDevToolsEngine.start(pid, {
+        methods: [...USED_METHODS],
+        handlers: { 'Comment.list': () => ({ comments: [{ id: 'c1', text: 'live note', status: 'open', placed: true }] }) },
+    });
+    t.mock.method(DevToolsCli.prototype, 'comments', async () => {
+        throw new Error('Command failed: winapp.exe devtools comments list --source-root C:\\app --json');
+    });
+    t.after(async () => { DevToolsPanel.disposeAll(); await engine.stop(); });
+    await DevToolsPanel.show(pid, extensionUri);
+    const panel = panels.at(-1)!;
+    panel.receive({ type: 'ready' });
+    await until(() => panel.messages.some(m => m.type === 'comments'));
+    const shown = panel.messages.filter(m => m.type === 'comments').at(-1);
+    assert.ok(shown?.type === 'comments');
+    assert.deepEqual(shown.comments.map(c => c.id), ['c1']);
+    assert.equal(shown.storeError, undefined);
+});
+
+test('a saved-comments panel with no running app does not poll the CLI', async t => {
+    let reads = 0;
+    t.mock.method(DevToolsCli.prototype, 'comments', async () => { reads++; return []; });
+    t.after(() => DevToolsPanel.disposeAll());
+    await DevToolsPanel.showComments(extensionUri, path.resolve('offline-root'));
+    const panel = panels.at(-1)!;
+    panel.visible = true;
+    panel.receive({ type: 'ready' });
+    panel.receive({ type: 'loadComments' });
+    await until(() => reads >= 1);
+    const afterOpen = reads;
+    await new Promise(resolve => setTimeout(resolve, 3500));
+    assert.equal(reads, afterOpen, 'no CLI read per poll tick while offline');
 });
 
 test('a literal write waits for the pending binding capture', async t => {

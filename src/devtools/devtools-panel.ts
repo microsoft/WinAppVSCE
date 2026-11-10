@@ -120,6 +120,11 @@ interface OverlayStateEvent {
 const RAW_TREE_NOTICE = 'This app has no XAML source information (DevTools was not on when it started), '
     + 'so Just my XAML has nothing to match. Showing the full visual tree.';
 
+/** Engine events name their cause by connection id; older builds used the owner token. */
+function isOwnOrigin(client: DevToolsClient, origin: string | null | undefined): boolean {
+    return !!origin && (origin === client.info?.connectionId || origin === client.ownerToken);
+}
+
 export class DevToolsPanel {
     private static readonly viewType = 'winapp.devToolsPanel';
 
@@ -165,7 +170,6 @@ export class DevToolsPanel {
     /** CLI view of each comment (current line, placement reason), keyed by id. */
     private commentDetails = new Map<string, CommentPayload>();
     private commentDetailsStale = true;
-    private commentStoreError: string | undefined;
     private lastLiveCommentsJson = '';
     private lastLayoutJson = '';
 
@@ -412,8 +416,7 @@ export class DevToolsPanel {
     private onOverlayStateChanged(client: DevToolsClient, state: OverlayStateEvent): void {
         if (!this.keepToolbarHidden || state.toolbarVisible !== true) { return; }
         // The engine attributes events to its connection id; older builds used the owner token.
-        const self = [client.info?.connectionId, client.ownerToken].filter(Boolean);
-        const ours = self.includes(state.origin ?? '') || self.includes(state.toolbarOwner ?? '');
+        const ours = isOwnOrigin(client, state.origin) || isOwnOrigin(client, state.toolbarOwner);
         const settling = !state.origin && Date.now() - this.connectedAt < HEADLESS_SETTLE_MS;
         if (!ours && !settling) {
             this.keepToolbarHidden = false;
@@ -441,7 +444,7 @@ export class DevToolsPanel {
             if (!handle) { return; }
             this.post({ type: 'pickStateChanged', armed: false });
             // The engine echoes the panel's own selection; revealing it would steal keyboard focus.
-            if ((payload as SelectionEvent).origin === client.ownerToken || handle === this.selectedHandle) { return; }
+            if (isOwnOrigin(client, (payload as SelectionEvent).origin) || handle === this.selectedHandle) { return; }
             void this.revealPickedElement(handle).catch(error => this.reportError(error));
         });
 
@@ -581,8 +584,9 @@ export class DevToolsPanel {
         if (this.commentPoll) { return; }
         const slowEvery = Math.max(1, Math.round(COMMENT_BACKGROUND_POLL_MS / COMMENT_POLL_MS));
         this.commentPoll = setInterval(() => {
-            if (this.disposed || !this.panel.visible) { return; }
-            if (!this.commentsVisible && (++this.commentTicks % slowEvery !== 0 || !this.connected)) { return; }
+            // Offline, the list comes from a CLI process; it is re-read on open, tab switch, edits and XAML saves instead.
+            if (this.disposed || !this.panel.visible || !this.connected) { return; }
+            if (!this.commentsVisible && ++this.commentTicks % slowEvery !== 0) { return; }
             void this.refreshComments(false).catch(error => this.reportError(error));
         }, COMMENT_POLL_MS);
     }
@@ -649,9 +653,7 @@ export class DevToolsPanel {
                 const changed = JSON.stringify(comments) !== this.lastLiveCommentsJson;
                 this.lastLiveCommentsJson = JSON.stringify(comments);
                 if (force || changed || this.commentDetailsStale) {
-                    storeError = await this.loadCommentDetails();
-                } else {
-                    storeError = this.commentStoreError;
+                    await this.loadCommentDetails();
                 }
                 // The engine reports where a comment was made; the CLI knows where that element is now.
                 comments = comments.map(comment => {
@@ -686,21 +688,17 @@ export class DevToolsPanel {
     }
 
     /**
-     * Re-reads the CLI's view of the store. Returns a store error only when the
-     * store itself is unusable; a CLI that cannot run just leaves the live list as is.
+     * Re-reads the CLI's view of the store (current lines, placement notes). The
+     * engine's list stays authoritative while connected, so a failed read only keeps the old details.
      */
-    private async loadCommentDetails(): Promise<string | undefined> {
+    private async loadCommentDetails(): Promise<void> {
         this.commentDetailsStale = false;
         try {
             const details = await this.cli.comments(this.sourceRoot);
             this.commentDetails = new Map(details.map(detail => [detail.id, detail]));
-            this.commentStoreError = undefined;
         } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            this.log(`Reading saved comments failed: ${message}`);
-            this.commentStoreError = /comment|store|corrupt|ui-comments/i.test(message) ? message : undefined;
+            this.log(`Reading saved comment details failed: ${error instanceof Error ? error.message : String(error)}`);
         }
-        return this.commentStoreError;
     }
 
     /**

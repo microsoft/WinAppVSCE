@@ -469,12 +469,12 @@
               },
               "useDevTools": {
                 "type": "boolean",
-                "description": "Override the CLI's automatic WinUI DevTools mode: true requests DevTools explicitly, false disables it. When omitted, the CLI enables it for supported WinUI projects outside CI and falls back to launching normally if unavailable. The VS Code panel opens only after DevTools attaches."
+                "description": "Override the CLI's automatic WinUI DevTools mode: true turns DevTools on even when the CLI's saved default is off, false disables it. When omitted, the CLI enables it for supported WinUI projects outside CI and falls back to launching normally if unavailable. WPF and Windows Forms apps always launch, without DevTools. The VS Code panel opens only after DevTools attaches."
               },
               "noOverlay": {
                 "type": "boolean",
                 "default": false,
-                "description": "Run DevTools headless: inspection and the VS Code panel work, but the in-app toolbar stays hidden. Ignored when 'useDevTools' is false."
+                "description": "Turn DevTools on headless: inspection and the VS Code panel work, but the in-app toolbar stays hidden. Like 'useDevTools: true', it overrides the CLI's saved default. Ignored when 'useDevTools' is false."
               },
               "devToolsInspector": {
                 "type": "string",

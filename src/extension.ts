@@ -39,7 +39,10 @@ import { resolveProjectDirectory as resolveProjectDirectoryCore } from './projec
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
 import { activateXaml, deactivateXaml } from './xaml/xamlLanguageService';
 import { DevToolsPanel } from './devtools/devtools-panel';
-import { devToolsSpawnArgs, inspectorPreference, shouldAttachDebugger, shouldUseDevTools } from './devtools/launch-options';
+import {
+	devToolsSpawnArgs, inspectorPreference, shouldAttachDebugger, shouldUseDevTools,
+	unsupportedAppTypeReason, withDevToolsOff,
+} from './devtools/launch-options';
 import { registerDevToolsCommands } from './devtools/commands';
 import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
 import { SchemaModel } from './manifest-schema/schema-model';
@@ -1110,12 +1113,21 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			const baseSpawnArgs = [...buildRunArgs(runOptions), ...devToolsSpawnArgs(config)];
 
 			const outputChannel = getWinappOutputChannel();
-			const { processId, runProcess, warning, devToolsAttached } = await launchRunProcess({
-				cliPath,
-				args: baseSpawnArgs,
-				cwd,
-				outputChannel
-			});
+			let launched: Awaited<ReturnType<typeof launchRunProcess>>;
+			try {
+				launched = await launchRunProcess({ cliPath, args: baseSpawnArgs, cwd, outputChannel });
+			} catch (launchError) {
+				// DevTools is WinUI-only; an explicit request for another app type still starts the app.
+				const reason = launchError instanceof WinAppRunFailure
+					? unsupportedAppTypeReason(baseSpawnArgs, launchError.message) : undefined;
+				if (!reason) { throw launchError; }
+				outputChannel.appendLine(`DevTools is not supported for this app: ${reason}. Relaunching without DevTools.`);
+				launched = await launchRunProcess({ cliPath, args: withDevToolsOff(baseSpawnArgs), cwd, outputChannel });
+				void vscode.window.showWarningMessage(
+					`WinUI DevTools only supports WinUI 3 apps, and ${reason}. The app was started without DevTools; `
+					+ 'remove "useDevTools" and "noOverlay" from this launch configuration to hide this warning.');
+			}
+			const { processId, runProcess, warning, devToolsAttached } = launched;
 			// The app is running; this is a partial failure such as DevTools not attaching.
 			if (warning) {
 				void vscode.window.showWarningMessage(`WinApp launched the app, but reported: ${warning}`);
