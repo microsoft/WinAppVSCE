@@ -34,20 +34,7 @@ internal sealed partial class XamlLanguageServer
             }
             else
             {
-                var context = doc.Parsed.FindNode(offset);
-                foreach (var element in XamlSemanticFacts.EnumerateElementsInNameScope(
-                    doc,
-                    context,
-                    typeSystem))
-                {
-                    CollectNameOccurrences(
-                        element,
-                        symbol.Name,
-                        doc,
-                        typeSystem,
-                        occurrences,
-                        recurse: false);
-                }
+                CollectScopedNameOccurrences(doc, doc.Parsed.FindNode(offset), symbol.Name, typeSystem, occurrences);
             }
         }
         else
@@ -98,21 +85,68 @@ internal sealed partial class XamlLanguageServer
         XamlTypeSystem typeSystem)
     {
         var occurrences = new List<(Lsp.Range Range, bool IsDeclaration)>();
-        foreach (var element in XamlSemanticFacts.EnumerateElementsInNameScope(
-            doc,
-            context,
-            typeSystem))
+        CollectScopedNameOccurrences(doc, context, name, typeSystem, occurrences);
+        return DedupeAndSort(occurrences);
+    }
+
+    /// <summary>Collects a name's declaration scope plus classic ElementName references in nested templates that resolve to it.</summary>
+    private static void CollectScopedNameOccurrences(
+        TextDocument doc,
+        XamlNode? context,
+        string name,
+        XamlTypeSystem typeSystem,
+        List<(Lsp.Range Range, bool IsDeclaration)> occurrences)
+    {
+        var declaration = XamlSemanticFacts.FindElementNameBindingTarget(doc, context, name, typeSystem);
+        var scopeContext = (XamlNode?)declaration ?? context;
+        var inScope = new HashSet<XamlElement>(XamlSemanticFacts.EnumerateElementsInNameScope(doc, scopeContext, typeSystem));
+        foreach (var element in inScope)
         {
-            CollectNameOccurrences(
-                element,
-                name,
-                doc,
-                typeSystem,
-                occurrences,
-                recurse: false);
+            CollectNameOccurrences(element, name, doc, typeSystem, occurrences, recurse: false);
         }
 
-        return DedupeAndSort(occurrences);
+        if (declaration is null || doc.Parsed.Root is not { } root)
+        {
+            return;
+        }
+
+        foreach (var element in root.DescendantNodesAndSelf().OfType<XamlElement>())
+        {
+            if (inScope.Contains(element))
+            {
+                continue;
+            }
+
+            foreach (var attribute in element.Attributes)
+            {
+                if (attribute.Value?.MarkupExtension is not { } extension)
+                {
+                    continue;
+                }
+
+                ForEachExtension(extension, e =>
+                {
+                    if (!XamlSemanticFacts.IsBindingMarkupExtension(e, element.NamespaceScope, typeSystem))
+                    {
+                        return;
+                    }
+
+                    foreach (var argument in e.Arguments)
+                    {
+                        if (argument.IsNamed &&
+                            argument.Name?.LocalName == "ElementName" &&
+                            argument.Value?.Trim() == name &&
+                            argument.ValueSpan is { } span &&
+                            ReferenceEquals(
+                                XamlSemanticFacts.FindElementNameBindingTarget(doc, attribute, name, typeSystem),
+                                declaration))
+                        {
+                            occurrences.Add((doc.RangeOf(span), false));
+                        }
+                    }
+                });
+            }
+        }
     }
 
     /// <summary>Classifies the renameable/referenceable symbol the caret sits on: an x:Name/Name (whether the caret is on the declaration or a usage) or an x:Key resource key.</summary>

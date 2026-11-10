@@ -814,20 +814,43 @@ internal static class XamlSemanticFacts
         TextDocument document,
         XamlNode? context,
         string name,
+        XamlTypeSystem typeSystem) =>
+        EnumerateElementNameBindingTargets(document, context, typeSystem)
+            .FirstOrDefault(candidate => string.Equals(candidate.Name, name, StringComparison.Ordinal))
+            .Element;
+
+    /// <summary>Named elements visible to a classic Binding ElementName, innermost namescope first, shadowed names omitted.</summary>
+    internal static IEnumerable<(string Name, XamlElement Element)> EnumerateElementNameBindingTargets(
+        TextDocument document,
+        XamlNode? context,
         XamlTypeSystem typeSystem)
     {
-        var found = FindNamedElementInScope(document, context, name, typeSystem);
-        for (var node = context; found is null && node is not null; node = node.Parent)
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var candidate in EnumerateNamedElementsInScope(document, context, typeSystem))
         {
-            if (node is XamlElement element &&
-                IsNameScopeBoundary(element, typeSystem) &&
-                IsWithinElementContent(context, element))
+            if (seen.Add(candidate.Name))
             {
-                found = FindNamedElementInScope(document, element, name, typeSystem);
+                yield return candidate;
             }
         }
 
-        return found;
+        for (var node = context; node is not null; node = node.Parent)
+        {
+            if (node is not XamlElement element ||
+                !IsNameScopeBoundary(element, typeSystem) ||
+                !IsWithinElementContent(context, element))
+            {
+                continue;
+            }
+
+            foreach (var candidate in EnumerateNamedElementsInScope(document, element, typeSystem))
+            {
+                if (seen.Add(candidate.Name))
+                {
+                    yield return candidate;
+                }
+            }
+        }
     }
 
     internal static INamedTypeSymbol? ResolveNamedElementTypeInScope(

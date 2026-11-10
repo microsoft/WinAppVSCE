@@ -589,6 +589,14 @@ public sealed class AttributeCompletionTests
         var viewModel = Assert.Single(dataTypes, item => item.Label == "converters:ItemViewModel");
         Assert.Equal("converters:ItemViewModel", viewModel.TextEdit!.NewText);
         Assert.NotNull(viewModel.AdditionalTextEdits);
+        Assert.StartsWith("0", viewModel.SortText);
+
+        var targetTypeItems = CompleteItems("""
+            <Style xmlns="using:Microsoft.UI.Xaml" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   xmlns:app="using:TestApp" TargetType="|" />
+            """);
+        var importedTarget = Assert.Single(targetTypeItems, item => item.Label == "app:Button");
+        Assert.StartsWith("\uffff", importedTarget.SortText);
 
         var targetTypes = CompleteLabels("""
             <Style xmlns="using:Microsoft.UI.Xaml" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -596,6 +604,31 @@ public sealed class AttributeCompletionTests
             """);
         Assert.Contains("app:Button", targetTypes);
         Assert.DoesNotContain("app:HelperService", targetTypes);
+    }
+
+    // Text-created framework types (FontFamily) and enums are valid object elements; source classes need a parameterless constructor.
+    [Fact]
+    public void Constructibility_MatchesXamlCompilerRules()
+    {
+        var corlib = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+        var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary);
+        var framework = CSharpCompilation.Create(
+            "Framework",
+            [CSharpSyntaxTree.ParseText("namespace Fx { public class FontFamily { public FontFamily(string name) { } } public enum Mode { A } }")],
+            [corlib],
+            options);
+        using var image = new System.IO.MemoryStream();
+        Assert.True(framework.Emit(image).Success);
+        var app = CSharpCompilation.Create(
+            "App",
+            [CSharpSyntaxTree.ParseText("namespace App { public class NeedsArgs { public NeedsArgs(string v) { } } public class Hidden { internal Hidden() { } } }")],
+            [corlib, MetadataReference.CreateFromImage(image.ToArray())],
+            options);
+
+        Assert.True(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("Fx.FontFamily")!));
+        Assert.True(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("Fx.Mode")!));
+        Assert.True(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("App.Hidden")!));
+        Assert.False(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("App.NeedsArgs")!));
     }
 
     private static string[] CompleteLabels(string marked)

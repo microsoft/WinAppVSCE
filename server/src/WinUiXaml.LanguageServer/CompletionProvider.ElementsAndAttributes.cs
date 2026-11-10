@@ -275,7 +275,7 @@ internal static partial class CompletionProvider
         if (includeProjectObjects)
         {
             candidates = candidates.Concat(typeSystem.GetSourceTypes()
-                .Where(type => XamlTypeSystem.IsXamlConstructible(type) && !type.IsImplicitClass));
+                .Where(type => type.TypeKind == TypeKind.Class && !type.IsImplicitClass));
         }
 
         foreach (var type in candidates)
@@ -1083,7 +1083,7 @@ internal static partial class CompletionProvider
             "DataType",
             scope))
         {
-            return CompleteTypeNameValue(ctx.Partial, scope, typeSystem, replaceRange, allTypeKinds: true, doc: doc);
+            return CompleteTypeNameValue(ctx.Partial, scope, typeSystem, replaceRange, allTypeKinds: true, doc: doc, rankProjectTypesFirst: true);
         }
 
         // mc:Ignorable="d …" lists the namespace prefixes a runtime XAML processor may ignore — offer the declared design-time prefixes (space-separated), the near-universal WinUI header attribute. Matched by the RESOLVED markup-compatibility URI (a custom prefix mapped to it works; a foreign one does not).
@@ -1225,7 +1225,8 @@ internal static partial class CompletionProvider
         string partial, XamlNamespaceScope scope, XamlTypeSystem typeSystem, Lsp.Range replaceRange,
         bool allTypeKinds = false,
         INamedTypeSymbol? requiredBaseType = null,
-        TextDocument? doc = null)
+        TextDocument? doc = null,
+        bool rankProjectTypesFirst = false)
     {
         SplitQualified(partial, out var prefix, out var local);
         if (!scope.TryResolvePrefix(prefix, out var uri))
@@ -1237,7 +1238,7 @@ internal static partial class CompletionProvider
         var seen = new HashSet<string>(StringComparer.Ordinal);
         if (doc is not null && prefix.Length == 0)
         {
-            AddProjectTypeNames(doc, items, seen, local, uri, scope, typeSystem, replaceRange, allTypeKinds, requiredBaseType);
+            AddProjectTypeNames(doc, items, seen, local, uri, scope, typeSystem, replaceRange, allTypeKinds, requiredBaseType, rankProjectTypesFirst);
         }
 
         var types = allTypeKinds ? typeSystem.GetAllTypes(uri) : typeSystem.GetTypes(uri);
@@ -1301,7 +1302,7 @@ internal static partial class CompletionProvider
     private static void AddProjectTypeNames(
         TextDocument doc, List<CompletionItem> items, HashSet<string> seen, string local, string defaultUri,
         XamlNamespaceScope scope, XamlTypeSystem typeSystem, Lsp.Range replaceRange,
-        bool allTypeKinds, INamedTypeSymbol? requiredBaseType)
+        bool allTypeKinds, INamedTypeSymbol? requiredBaseType, bool rankProjectTypesFirst)
     {
         var defaultReachable = new HashSet<string>(typeSystem.ClrNamespacesForUri(defaultUri), StringComparer.Ordinal);
         foreach (var type in typeSystem.GetSourceTypes())
@@ -1332,8 +1333,8 @@ internal static partial class CompletionProvider
                 TextEdit = new TextEdit { Range = replaceRange, NewText = label },
                 AdditionalTextEdits = declarationEdit is null ? null : new List<TextEdit> { declarationEdit },
                 FilterText = type.Name,
-                // Project types rank ahead of the framework's large type list.
-                SortText = "0" + type.Name,
+                // x:DataType usually names a project view model; elsewhere framework matches keep precedence.
+                SortText = (rankProjectTypesFirst ? "0" : "\uffff") + type.Name,
             });
         }
     }

@@ -31,6 +31,11 @@ internal static partial class XamlValidator
     {
         foreach (var element in root.DescendantNodesAndSelf().OfType<XamlElement>())
         {
+            if (element.Name is { } elementName && IsIgnorableName(elementName, element))
+            {
+                continue;
+            }
+
             ValidateUnsupportedMarkupExtensions(element, doc, typeSystem, diagnostics);
             ValidateLoadRequiresName(element, typeSystem, doc, diagnostics);
             if (element.Name is not { IsDotted: false } ||
@@ -49,13 +54,48 @@ internal static partial class XamlValidator
         }
     }
 
+    /// <summary>True for names in a design-time or mc:Ignorable namespace; the compiler strips them.</summary>
+    private static bool IsIgnorableName(XamlName name, XamlElement element)
+    {
+        if (!name.HasPrefix || !element.NamespaceScope.TryResolvePrefix(name.Prefix, out var uri))
+        {
+            return false;
+        }
+
+        if (XamlNamespaces.IsDesignTime(uri))
+        {
+            return true;
+        }
+
+        for (XamlNode? node = element; node is not null; node = node.Parent)
+        {
+            if (node is not XamlElement ancestor ||
+                ancestor.Attributes.FirstOrDefault(attribute =>
+                    attribute.Name is { HasPrefix: true, LocalName: "Ignorable" } &&
+                    ancestor.NamespaceScope.TryResolvePrefix(attribute.Name.Prefix, out var mcUri) &&
+                    mcUri == XamlNamespaces.MarkupCompatibility)?.Value?.Text is not { } prefixes)
+            {
+                continue;
+            }
+
+            if (prefixes.Split((char[]?)null, System.StringSplitOptions.RemoveEmptyEntries).Any(prefix =>
+                    ancestor.NamespaceScope.TryResolvePrefix(prefix, out var ignored) && ignored == uri))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static void ValidateUnsupportedMarkupExtensions(
         XamlElement element, TextDocument doc, XamlTypeSystem typeSystem, List<Diagnostic> diagnostics)
     {
         var scope = element.NamespaceScope;
         foreach (var attribute in element.Attributes)
         {
-            if (attribute.Value is not { IsMarkupExtension: true } value)
+            if (attribute.Value is not { IsMarkupExtension: true } value ||
+                IsIgnorableName(attribute.Name, element))
             {
                 continue;
             }
@@ -74,8 +114,14 @@ internal static partial class XamlValidator
                      XamlSemanticFacts.ResolveMarkupExtensionType(name.FullName, scope, typeSystem) is null);
                 if (unsupported)
                 {
+                    var replacement = name.LocalName switch
+                    {
+                        "DynamicResource" => " Use ThemeResource or StaticResource instead.",
+                        "Static" => " Use x:Bind with a static path instead.",
+                        _ => " Use the type name directly instead.",
+                    };
                     diagnostics.Add(Diag(doc, name.Span, SeverityError, UnsupportedMarkupExtensionCode,
-                        $"The markup extension '{name.FullName}' is not supported by WinUI XAML."));
+                        $"The markup extension '{name.FullName}' is not supported by WinUI XAML.{replacement}"));
                 }
             }
         }
@@ -103,19 +149,10 @@ internal static partial class XamlValidator
             return;
         }
 
-        bool fromSource = elementType.Locations.Any(location => location.IsInSource);
-        bool hasAccessibleConstructor =
-            elementType.TypeKind == TypeKind.Struct ||
-            elementType.InstanceConstructors.Any(ctor =>
-                ctor.DeclaredAccessibility == Accessibility.Public ||
-                (fromSource && ctor.DeclaredAccessibility is Accessibility.Internal or Accessibility.ProtectedOrInternal));
-        if (elementType.TypeKind is not (TypeKind.Class or TypeKind.Struct) ||
-            elementType.IsAbstract ||
-            elementType.IsStatic ||
-            !hasAccessibleConstructor)
+        if (!XamlTypeSystem.IsXamlConstructible(elementType))
         {
             diagnostics.Add(Diag(doc, element.Name!.LocalNameSpan, SeverityError, NonConstructibleElementCode,
-                $"'{elementType.Name}' cannot be created in XAML because it is abstract or has no public constructor."));
+                $"'{elementType.Name}' cannot be created in XAML because it is abstract or has no parameterless constructor."));
         }
     }
 
@@ -186,7 +223,8 @@ internal static partial class XamlValidator
         if (typeSystem.GetContentPropertyName(elementType) is { } contentName &&
             element.GetAttribute(contentName) is not null &&
             element.Content.FirstOrDefault(node =>
-                (node is XamlElement { IsPropertyElement: false }) ||
+                (node is XamlElement { IsPropertyElement: false, Name: { } childName } child &&
+                 !IsIgnorableName(childName, child)) ||
                 node is XamlText { IsWhitespace: false }) is { } content)
         {
             diagnostics.Add(Diag(doc, content is XamlElement { Name: { } contentElementName } ? contentElementName.Span : content.Span,

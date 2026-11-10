@@ -414,14 +414,25 @@ namespace WinUiXaml.Workspace
             }
         }
 
-        /// <summary>True when the XAML compiler can create the type as an object element: a concrete, non-generic class with a public parameterless constructor.</summary>
-        public static bool IsXamlConstructible(INamedTypeSymbol type) =>
-            type.TypeKind == TypeKind.Class &&
-            !type.IsAbstract &&
-            !type.IsStatic &&
-            type.Arity == 0 &&
-            type.InstanceConstructors.Any(ctor =>
-                ctor.Parameters.Length == 0 && ctor.DeclaredAccessibility == Accessibility.Public);
+        /// <summary>True when the XAML compiler can create the type as an object element. Framework classes created from text (FontFamily) only need a public constructor.</summary>
+        public static bool IsXamlConstructible(INamedTypeSymbol type)
+        {
+            if (type.TypeKind is TypeKind.Struct or TypeKind.Enum)
+            {
+                return true;
+            }
+
+            if (type.TypeKind != TypeKind.Class || type.IsAbstract || type.IsStatic || type.Arity != 0)
+            {
+                return false;
+            }
+
+            bool fromSource = type.Locations.Any(location => location.IsInSource);
+            return type.InstanceConstructors.Any(ctor => ctor.Parameters.Length == 0
+                ? ctor.DeclaredAccessibility == Accessibility.Public ||
+                  (fromSource && ctor.DeclaredAccessibility is Accessibility.Internal or Accessibility.ProtectedOrInternal)
+                : !fromSource && ctor.DeclaredAccessibility == Accessibility.Public);
+        }
 
         /// <summary>Every accessible, non-generic top-level type declared in the project's own source.</summary>
         public IReadOnlyList<INamedTypeSymbol> GetSourceTypes()
@@ -459,8 +470,9 @@ namespace WinUiXaml.Workspace
             !string.IsNullOrEmpty(path) &&
             (path.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase) ||
              path.EndsWith(".g.i.cs", StringComparison.OrdinalIgnoreCase) ||
-             path.Contains($"{System.IO.Path.DirectorySeparatorChar}obj{System.IO.Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) ||
-             path.Contains($"{System.IO.Path.DirectorySeparatorChar}packages{System.IO.Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
+             path.Contains(
+                 $"{System.IO.Path.DirectorySeparatorChar}.nuget{System.IO.Path.DirectorySeparatorChar}packages{System.IO.Path.DirectorySeparatorChar}",
+                 StringComparison.OrdinalIgnoreCase));
 
         /// <summary>Finds public, concrete WinUI element types with the given simple name in the project and its references.</summary>
         public IReadOnlyList<INamedTypeSymbol> FindElementTypesByName(string simpleName)

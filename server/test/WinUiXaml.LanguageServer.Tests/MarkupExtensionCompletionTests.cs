@@ -314,8 +314,9 @@ public sealed class MarkupExtensionCompletionTests
         Assert.DoesNotContain("Outside", labels);
     }
 
+    // Regression #351: Binding ElementName in a template also sees the enclosing page's names.
     [Fact]
-    public void BindingElementNameCompletionStaysWithinTemplateNameScope()
+    public void BindingElementNameCompletionIncludesEnclosingNameScopes()
     {
         var labels = Complete(
             """
@@ -331,7 +332,7 @@ public sealed class MarkupExtensionCompletionTests
             CreateTypeSystem(includeMarkupExtensionBase: true));
 
         Assert.Contains("Inside", labels);
-        Assert.DoesNotContain("Outside", labels);
+        Assert.Contains("Outside", labels);
     }
 
     [Fact]

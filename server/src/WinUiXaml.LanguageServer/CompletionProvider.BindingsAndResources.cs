@@ -302,7 +302,7 @@ internal static partial class CompletionProvider
     {
         var items = new List<CompletionItem>();
         var context = doc.Parsed.FindNode(Math.Max(0, doc.OffsetAt(replaceRange.Start) - 1));
-        foreach (var (name, element) in XamlSemanticFacts.EnumerateNamedElementsInScope(
+        foreach (var (name, element) in XamlSemanticFacts.EnumerateElementNameBindingTargets(
             doc,
             context,
             typeSystem))

@@ -446,6 +446,28 @@ public class XamlRenameTests
         Assert.All(edits, edit => Assert.Equal("Outer", edit.NewText));
     }
 
+    // Regression #351: a template ElementName with no local match binds to the outer element, so rename follows it.
+    [Theory]
+    [InlineData("<controls:Grid x:Name=\"Out|er\" />", "<controls:TextBox Text=\"{Binding ElementName=Outer}\" />")]
+    [InlineData("<controls:Grid x:Name=\"Outer\" />", "<controls:TextBox Text=\"{Binding ElementName=Out|er}\" />")]
+    public void Rename_NameFollowsTemplateElementNameToOuterScope(string declaration, string usage)
+    {
+        var buffer = $$"""
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              {{declaration}}
+              <DataTemplate>
+                {{usage}}
+              </DataTemplate>
+            </Page>
+            """;
+
+        var edits = RenameEdits(buffer, "Renamed", CreateFrameworkTypeSystem());
+
+        Assert.Equal(2, edits.Count);
+    }
+
     [Fact]
     public void Rename_NameInsideTemplateDoesNotCrossToOuterNameScope()
     {

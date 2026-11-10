@@ -185,6 +185,8 @@ public class XamlValidatorTests
             public class BaseControl { }
             public abstract class AbstractElement : Microsoft.UI.Xaml.FrameworkElement { }
             public class ProtectedElement : Microsoft.UI.Xaml.FrameworkElement { protected ProtectedElement() { } }
+            public class InternalCtorElement : Microsoft.UI.Xaml.FrameworkElement { internal InternalCtorElement() { } }
+            public class NeedsArgs { public NeedsArgs(string value) { } }
             [Microsoft.UI.Xaml.Markup.ContentProperty(Name = "Children")]
             public class UiPanel : Microsoft.UI.Xaml.FrameworkElement
             {
@@ -2469,6 +2471,7 @@ public class XamlValidatorTests
     [InlineData("""<Child Text="{ui:DynamicResource Key}" />""", XamlValidator.UnsupportedMarkupExtensionCode)]
     [InlineData("<AbstractElement />", XamlValidator.NonConstructibleElementCode)]
     [InlineData("<ProtectedElement />", XamlValidator.NonConstructibleElementCode)]
+    [InlineData("""<ui:ResourceDictionary><NeedsArgs x:Key="A" /></ui:ResourceDictionary>""", XamlValidator.NonConstructibleElementCode)]
     [InlineData("""<ui:FrameworkElement x:Name="A" Name="B" />""", XamlValidator.ConflictingNameCode)]
     [InlineData("<UiPanel>hello</UiPanel>", XamlValidator.InvalidTextContentCode)]
     [InlineData("""<ContentHost Content="a"><ContentHost.Content>b</ContentHost.Content></ContentHost>""", XamlValidator.DuplicatePropertyAssignmentCode)]
@@ -2488,6 +2491,11 @@ public class XamlValidatorTests
     [InlineData("""<ContentHost><ContentHost.Content><Child /></ContentHost.Content></ContentHost>""")]
     [InlineData("""<Child x:Name="Lazy" x:Load="False" />""")]
     [InlineData("""<ui:Style TargetType="Child" />""")]
+    [InlineData("""<ui:ResourceDictionary><ui:Visibility x:Key="V">Collapsed</ui:Visibility></ui:ResourceDictionary>""")]
+    [InlineData("""<ui:ResourceDictionary><ui:Thickness x:Key="T" /></ui:ResourceDictionary>""")]
+    [InlineData("""<InternalCtorElement />""")]
+    [InlineData("""<Child d:Tag="{x:Type local:Child}" />""")]
+    [InlineData("""<ContentHost Content="a"><d:Child /></ContentHost>""")]
     public void Structure_AcceptsValidConstructs(string body)
     {
         var codes = new[]
@@ -2498,6 +2506,15 @@ public class XamlValidatorTests
             XamlValidator.LoadRequiresNameCode, XamlValidator.UnknownTypeCode,
         };
         Assert.DoesNotContain(Validate(PageWithContent(body), "Key"), d => codes.Contains(d.Code));
+    }
+
+    [Fact]
+    public void Structure_UnsupportedMarkupExtensionSuggestsReplacement()
+    {
+        var diagnostic = Assert.Single(
+            Validate(PageWithContent("""<Child Text="{ui:DynamicResource Key}" />""")),
+            d => d.Code == XamlValidator.UnsupportedMarkupExtensionCode);
+        Assert.Contains("ThemeResource", diagnostic.Message);
     }
 
     [Fact]
