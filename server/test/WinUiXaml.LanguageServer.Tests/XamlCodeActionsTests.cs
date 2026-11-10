@@ -341,6 +341,34 @@ public class XamlCodeActionsTests
         Assert.Empty(AttributeActions(ColumnDocument(attributes), ColumnTypeSystem()));
     }
 
+    [Theory]
+    [InlineData("FrozenEdgeCount", null)]
+    [InlineData("FrozenEdg", "FrozenEdge")]
+    public void MissingClosingQuoteBeforeNextElement_NeverRewritesFollowingMarkup(string bad, string? good)
+    {
+        var typeSystem = ColumnTypeSystem();
+        var doc = new TextDocument(Uri,
+            $"<tabular:TableViewTemplateColumn xmlns:tabular=\"using:TestControls\" {bad}=\"1 />" +
+            "<tabular:TableViewTemplateColumn FrozenEdge=\"keep\" />", version: 17);
+        var diagnostic = Assert.Single(XamlValidator.Validate(doc, typeSystem),
+            item => item.Code == XamlValidator.UnknownAttributeCode && RangeText(doc, item.Range) == bad);
+        var actions = XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem)
+            .Where(action => action.Kind == "quickfix" && action.Diagnostics?.Contains(diagnostic) == true)
+            .ToList();
+
+        if (good is null)
+        {
+            Assert.Empty(actions);
+            return;
+        }
+
+        var action = Assert.Single(actions);
+        Assert.Equal($"Change '{bad}' to '{good}'", action.Title);
+        var edit = Assert.Single(action.Edit!.Changes[Uri]);
+        Assert.Equal(bad, RangeText(doc, edit.Range));
+        Assert.Contains("<tabular:TableViewTemplateColumn FrozenEdge=\"keep\" />", ApplyEdit(doc, edit));
+    }
+
     [Fact]
     public void LargeEnum_DoesNotFloodMenu_ButStillOffersCloseValueSpelling()
     {

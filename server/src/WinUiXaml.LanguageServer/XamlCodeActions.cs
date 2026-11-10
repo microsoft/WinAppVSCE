@@ -222,6 +222,9 @@ internal static class XamlCodeActions
             return true;
         }
 
+        // A '<' in the value means a missing quote swallowed later markup; only rename the name.
+        bool reliableValue = attribute.Value is not { } parsedValue ||
+            doc.Text.IndexOf('<', parsedValue.Span.Start, parsedValue.Span.Length) < 0;
         var members = typeSystem.GetAttributeMembers(elementType).ToDictionary(member => member.Name);
         var nearby = XamlSuggestions.Nearest(attribute.Name.LocalName, members.Keys);
         var candidates = XamlSuggestions.AttributeNames(attribute.Name.LocalName, members.Keys)
@@ -229,7 +232,7 @@ internal static class XamlCodeActions
                 !ReferenceEquals(other, attribute) && !other.Name.HasPrefix && other.Name.FullName == name))
             .Where(name => !element.Content.OfType<XamlElement>().Any(child =>
                 child.IsPropertyElement && child.Name!.LocalName.EndsWith("." + name, StringComparison.Ordinal)))
-            .Where(name => nearby.Contains(name) ||
+            .Where(name => nearby.Contains(name) || reliableValue &&
                 members[name] is { Kind: XamlMemberKind.Property, Type: { } type } &&
                 XamlValueConverter.UnwrapNullable(type).TypeKind == TypeKind.Enum &&
                 attribute.Value is { IsMarkupExtension: false, Quote: not null })
@@ -238,7 +241,7 @@ internal static class XamlCodeActions
         foreach (var name in candidates)
         {
             var member = members[name];
-            var values = member.Kind == XamlMemberKind.Property && member.Type is { } memberType &&
+            var values = reliableValue && member.Kind == XamlMemberKind.Property && member.Type is { } memberType &&
                 attribute.Value is { IsMarkupExtension: false, Quote: not null } value
                     ? AttributeReplacementValues(value.Text, memberType, typeSystem)
                     : new[] { attribute.Value?.Text ?? string.Empty };
