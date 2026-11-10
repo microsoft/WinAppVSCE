@@ -114,8 +114,6 @@ internal static partial class XamlValidator
     public const string EmptyEventHandlerCode = "WXAML0043";
     /// <summary>A TwoWay x:Bind targets a source member that cannot be written.</summary>
     public const string ReadOnlyTwoWayBindCode = "WXAML0044";
-    /// <summary>A ResourceDictionary Source points at a project file that does not exist.</summary>
-    public const string MissingResourceDictionarySourceCode = "WXAML0045";
     /// <summary>A Style.BasedOn is self-referencing, cyclic, or has an incompatible TargetType.</summary>
     public const string InvalidBasedOnCode = "WXAML0046";
     /// <summary>A StaticResource value is not assignable to the target property type.</summary>
@@ -136,8 +134,7 @@ internal static partial class XamlValidator
         TextDocument doc,
         XamlTypeSystem typeSystem,
         IReadOnlyCollection<string>? projectResourceKeys = null,
-        bool resourceCatalogIsAuthoritative = true,
-        XamlFileSystemContext? fileSystem = null)
+        bool resourceCatalogIsAuthoritative = true)
     {
         var diagnostics = new List<Diagnostic>();
         if (doc.Parsed.Root is { } root)
@@ -160,7 +157,7 @@ internal static partial class XamlValidator
 
             ValidateUniqueNames(root, doc, typeSystem, diagnostics);
             ValidateUniqueResourceKeys(root, doc, typeSystem, diagnostics);
-            ValidateStructure(root, doc, typeSystem, resourceIndex, fileSystem, diagnostics);
+            ValidateStructure(root, doc, typeSystem, resourceIndex, diagnostics);
         }
 
         return diagnostics;

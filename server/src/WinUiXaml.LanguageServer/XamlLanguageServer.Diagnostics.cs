@@ -129,10 +129,7 @@ internal sealed partial class XamlLanguageServer
                     doc,
                     context.TypeSystem,
                     resourceKeys,
-                    context.TypeSystem.IsResourceCatalogAuthoritative,
-                    XamlFileSystemContext.ForProject(
-                        System.IO.Path.GetDirectoryName(context.Resolution.ProjectPath),
-                        context.Resolution.XamlFiles)),
+                    context.TypeSystem.IsResourceCatalogAuthoritative),
                 diagnosticsLevel);
             if (semantic.Count == 0 || !IsCurrentDiagnostics(doc, diagnosticsGeneration))
             {

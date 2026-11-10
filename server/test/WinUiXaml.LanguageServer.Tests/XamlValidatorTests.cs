@@ -2588,44 +2588,7 @@ public class XamlValidatorTests
         Assert.Contains("'Width'", diagnostic.Message);
     }
 
-    [Fact]
-    public void Structure_ReportsMissingResourceDictionarySource()
-    {
-        var xaml = PageWithContent("""
-            <ui:ResourceDictionary Source="ms-appx:///Styles/Missing.xaml" />
-            <ui:ResourceDictionary Source="ms-appx:///Styles/Present.xaml" />
-            <ui:ResourceDictionary Source="ms-appx:///SomeLibrary/Theme.xaml" />
-            """);
-        var fileSystem = new XamlFileSystemContext(
-            @"C:\test",
-            path => path.EndsWith("Present.xaml", StringComparison.OrdinalIgnoreCase),
-            path => path.EndsWith(@"\Styles", StringComparison.OrdinalIgnoreCase));
-
-        var diagnostic = Assert.Single(
-            ValidateWithFileSystem(xaml, fileSystem),
-            d => d.Code == XamlValidator.MissingResourceDictionarySourceCode);
-        Assert.Contains("Missing.xaml", diagnostic.Message);
-
-        // A same-named project item may be linked into the package under another path.
-        var linked = XamlFileSystemContext.ForProject(@"C:\test", [@"C:\Shared\Missing.xaml", @"C:\Shared\Present.xaml"]);
-        Assert.DoesNotContain(ValidateWithFileSystem(xaml, linked with { DirectoryExists = fileSystem.DirectoryExists }),
-            d => d.Code == XamlValidator.MissingResourceDictionarySourceCode);
-    }
-
     private static string PageWithContent(string content) => Page(string.Empty).Replace("/>", ">" + content + "</Page>");
-
-    private static System.Collections.Generic.List<Lsp.Diagnostic> ValidateWithFileSystem(
-        string xaml, XamlFileSystemContext fileSystem)
-    {
-        var compilation = CSharpCompilation.Create(
-            "TestApp",
-            [CSharpSyntaxTree.ParseText(Types)],
-            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        var typeSystem = XamlTypeSystem.FromCompilation(compilation, ImmutableArray<IAssemblySymbol>.Empty);
-        return XamlValidator.Validate(
-            new TextDocument("file:///C:/test/Page.xaml", xaml), typeSystem, null, true, fileSystem);
-    }
 
     private static string Page(string attributes) => $$"""
         <Page xmlns="using:TestApp"

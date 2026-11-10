@@ -8,24 +8,6 @@ using Diagnostic = WinUiXaml.LanguageServer.Lsp.Diagnostic;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>File-system facts the validator may consult, injected so tests stay hermetic.</summary>
-internal sealed record XamlFileSystemContext(
-    string? ProjectDirectory,
-    System.Func<string, bool> FileExists,
-    System.Func<string, bool> DirectoryExists)
-{
-    /// <summary>A project XAML item may be linked from elsewhere, so a same-named project item counts as present.</summary>
-    public static XamlFileSystemContext ForProject(string? projectDirectory, IEnumerable<string> projectXamlFiles)
-    {
-        var xamlNames = new HashSet<string>(
-            projectXamlFiles.Select(System.IO.Path.GetFileName).OfType<string>(), System.StringComparer.OrdinalIgnoreCase);
-        return new(
-            projectDirectory,
-            path => System.IO.File.Exists(path) || xamlNames.Contains(System.IO.Path.GetFileName(path)),
-            System.IO.Directory.Exists);
-    }
-}
-
 /// <summary>Structural validation: element construction, content, property assignment, and style/resource wiring.</summary>
 internal static partial class XamlValidator
 {
@@ -34,10 +16,8 @@ internal static partial class XamlValidator
         TextDocument doc,
         XamlTypeSystem typeSystem,
         XamlSemanticFacts.ResourceScopeIndex resourceIndex,
-        XamlFileSystemContext? fileSystem,
         List<Diagnostic> diagnostics)
     {
-        var acyclicStyles = new HashSet<XamlElement>();
         var pending = new Stack<XamlElement>();
         pending.Push(root);
         while (pending.TryPop(out var element))
@@ -66,8 +46,7 @@ internal static partial class XamlValidator
             ValidateTextContent(element, elementType, typeSystem, doc, diagnostics);
             ValidateDuplicatePropertyAssignment(element, elementType, typeSystem, doc, diagnostics);
             ValidateStyleTargetTypeExists(element, typeSystem, doc, diagnostics);
-            ValidateBasedOn(element, typeSystem, resourceIndex, acyclicStyles, doc, diagnostics);
-            ValidateResourceDictionarySource(element, typeSystem, doc, fileSystem, diagnostics);
+            ValidateBasedOn(element, typeSystem, resourceIndex, doc, diagnostics);
         }
     }
 
@@ -257,7 +236,7 @@ internal static partial class XamlValidator
 
     private static void ValidateBasedOn(
         XamlElement style, XamlTypeSystem typeSystem, XamlSemanticFacts.ResourceScopeIndex resourceIndex,
-        HashSet<XamlElement> acyclicStyles, TextDocument doc, List<Diagnostic> diagnostics)
+        TextDocument doc, List<Diagnostic> diagnostics)
     {
         if (!XamlSemanticFacts.IsElement(style, typeSystem.Capabilities.Style, typeSystem, allowDerived: true) ||
             TryGetBasedOnReference(style, resourceIndex, typeSystem) is not { } reference)
@@ -273,9 +252,8 @@ internal static partial class XamlValidator
             return;
         }
 
-        // Chains already proven to terminate are skipped, so each style is walked once per pass.
         var visited = new HashSet<XamlElement> { style };
-        for (var current = target; current is not null && !acyclicStyles.Contains(current) && visited.Add(current);)
+        for (var current = target; current is not null && visited.Add(current);)
         {
             current = TryGetBasedOnReference(current, resourceIndex, typeSystem)?.Target;
             if (ReferenceEquals(current, style))
@@ -283,11 +261,6 @@ internal static partial class XamlValidator
                 diagnostics.Add(Diag(doc, span, SeverityError, InvalidBasedOnCode,
                     $"The BasedOn chain through '{key}' is circular."));
                 return;
-            }
-
-            if (current is null)
-            {
-                acyclicStyles.UnionWith(visited);
             }
         }
 
@@ -446,36 +419,5 @@ internal static partial class XamlValidator
         }
 
         return symbol;
-    }
-
-    private static void ValidateResourceDictionarySource(
-        XamlElement element, XamlTypeSystem typeSystem, TextDocument doc,
-        XamlFileSystemContext? fileSystem, List<Diagnostic> diagnostics)
-    {
-        if (fileSystem?.ProjectDirectory is not { } projectDirectory ||
-            !XamlSemanticFacts.IsResourceDictionary(element, typeSystem) ||
-            element.GetAttribute("Source")?.Value is not { IsMarkupExtension: false } value ||
-            value.Text.Trim() is not { Length: > 0 } source ||
-            LspUri.ToPath(doc.Uri) is not { } documentPath)
-        {
-            return;
-        }
-
-        var candidate = XamlDocumentLinks.ResolvePath(
-            source, System.IO.Path.GetDirectoryName(documentPath), projectDirectory, _ => true);
-
-        // Only report paths inside an existing project folder; other roots may be library resources.
-        var projectRoot = System.IO.Path.TrimEndingDirectorySeparator(projectDirectory) + System.IO.Path.DirectorySeparatorChar;
-        if (candidate is null ||
-            !candidate.StartsWith(projectRoot, System.StringComparison.OrdinalIgnoreCase) ||
-            fileSystem.FileExists(candidate) ||
-            System.IO.Path.GetDirectoryName(candidate) is not { } directory ||
-            !fileSystem.DirectoryExists(directory))
-        {
-            return;
-        }
-
-        diagnostics.Add(Diag(doc, value.InnerSpan, SeverityWarning, MissingResourceDictionarySourceCode,
-            $"The resource dictionary '{source}' was not found in the project."));
     }
 }
