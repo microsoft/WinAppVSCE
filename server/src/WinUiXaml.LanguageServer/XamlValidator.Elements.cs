@@ -341,6 +341,37 @@ internal static partial class XamlValidator
                     : null));
     }
 
+    /// <summary>The type a literal value of this attribute is validated against, mirroring the member paths above; null when unresolved.</summary>
+    internal static ITypeSymbol? ResolveAttributeValueType(
+        XamlAttribute attribute,
+        INamedTypeSymbol elementType,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem)
+    {
+        var name = attribute.Name;
+        if (!name.IsDotted)
+        {
+            return !name.HasPrefix &&
+                typeSystem.FindAttributeMember(elementType, name.LocalName) is { Kind: XamlMemberKind.Property, Type: { } type }
+                    ? type
+                    : null;
+        }
+
+        int dot = name.LocalName.LastIndexOf('.');
+        if (dot <= 0 || dot >= name.LocalName.Length - 1 ||
+            !scope.TryResolvePrefix(name.Prefix, out var uri) ||
+            typeSystem.ResolveType(uri, name.LocalName.Substring(0, dot)) is not { } owner)
+        {
+            return null;
+        }
+
+        var memberName = name.LocalName.Substring(dot + 1);
+        return XamlTypeSystem.IsAssignableTo(elementType, owner) &&
+            typeSystem.FindAttributeMember(elementType, memberName) is { Kind: XamlMemberKind.Property, Type: { } ordinaryType }
+                ? ordinaryType
+                : typeSystem.GetAttachedMemberType(owner, memberName, elementType);
+    }
+
     /// <summary>Validates an Owner.Member attached-property attribute: resolves the owner type through the attribute's namespace and checks it actually exposes the member.</summary>
     private static void ValidateAttachedProperty(
         XamlAttribute attribute,

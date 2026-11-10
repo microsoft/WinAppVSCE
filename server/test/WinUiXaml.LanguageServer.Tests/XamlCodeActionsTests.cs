@@ -492,6 +492,73 @@ public class XamlCodeActionsTests
         Assert.Empty(AttributeActions(doc, ColumnTypeSystem()));
     }
 
+    private const string TagsOwner = """
+        public static class Tags
+        {
+            public static string GetLabel(object target) => "";
+            public static void SetLabel(object target, string value) { }
+            public static Edge GetEdge(object target) => Edge.None;
+            public static void SetEdge(object target, Edge value) { }
+        }
+        """;
+
+    [Theory]
+    [InlineData("FrozenEdgeCount=\"1\" tabular:Column.FrozenEdge=\"Trailing\"")]
+    [InlineData("FrozenEdgeCount=\"1\" tabular:TableViewTemplateColumn.FrozenEdge=\"Trailing\"")]
+    [InlineData("Labl=\"x\" tabular:Column.Label=\"y\"")]
+    public void UnknownProperty_DoesNotDuplicateOwnerQualifiedAssignment(string attributes)
+    {
+        Assert.Empty(AttributeActions(ColumnDocument(attributes), ColumnTypeSystem(enumPrefix: TagsOwner)));
+    }
+
+    [Fact]
+    public void UnknownProperty_IgnoresUnrelatedAttachedPropertyWithSameMemberName()
+    {
+        var typeSystem = ColumnTypeSystem(enumPrefix: TagsOwner);
+        var attributeForm = ColumnDocument("Labl=\"x\" tabular:Tags.Label=\"y\"");
+        var elementForm = new TextDocument(Uri, """
+            <tabular:TableViewTemplateColumn xmlns:tabular="using:TestControls" Labl="x">
+              <tabular:Tags.Label>y</tabular:Tags.Label>
+            </tabular:TableViewTemplateColumn>
+            """);
+
+        foreach (var doc in new[] { attributeForm, elementForm })
+        {
+            var action = Assert.Single(AttributeActions(doc, typeSystem));
+            Assert.Equal("Change 'Labl' to 'Label'", action.Title);
+            Assert.True(action.IsPreferred);
+        }
+    }
+
+    [Fact]
+    public void StaleInvalidValueDiagnostic_IsNotAppliedToRenamedProperty()
+    {
+        var typeSystem = ColumnTypeSystem(extraMembers: "public string GroupName { get; set; }");
+        var doc = ColumnDocument("IsEnabled=\"Ture\"");
+        var diagnostic = Assert.Single(XamlValidator.Validate(doc, typeSystem),
+            item => item.Code == XamlValidator.InvalidAttributeValueCode);
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem),
+            item => item.Kind == "quickfix");
+        Assert.Equal("Change 'Ture' to 'True'", action.Title);
+
+        // Same-length rename keeps the stale range on the "Ture" token.
+        var renamed = new TextDocument(Uri, doc.Text.Replace("IsEnabled", "GroupName"), version: 18);
+        Assert.Empty(XamlValidator.Validate(renamed, typeSystem));
+        Assert.DoesNotContain(XamlCodeActions.Compute(Uri, renamed, Context(diagnostic), typeSystem),
+            item => item.Kind == "quickfix");
+    }
+
+    [Fact]
+    public void InvalidAttachedEnumValue_StillOffersSpellingFix()
+    {
+        var typeSystem = ColumnTypeSystem(enumPrefix: TagsOwner);
+        var doc = ColumnDocument("tabular:Tags.Edge=\"Leadng\"");
+        var diagnostic = Assert.Single(XamlValidator.Validate(doc, typeSystem),
+            item => item.Code == XamlValidator.InvalidAttributeValueCode);
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem),
+            item => item.Kind == "quickfix" && item.IsPreferred == true);
+        Assert.Equal("Change 'Leadng' to 'Leading'", action.Title);
+    }
     private static XamlTypeSystem ColumnTypeSystem(
         string members = "None = 0, Leading = 1, Trailing = 2",
         string extraMembers = "",

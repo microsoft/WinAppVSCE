@@ -229,9 +229,12 @@ internal static class XamlCodeActions
         var nearby = XamlSuggestions.Nearest(attribute.Name.LocalName, members.Keys);
         var candidates = XamlSuggestions.AttributeNames(attribute.Name.LocalName, members.Keys)
             .Where(name => !element.Attributes.Any(other =>
-                !ReferenceEquals(other, attribute) && !other.Name.HasPrefix && other.Name.FullName == name))
+                !ReferenceEquals(other, attribute) &&
+                (!other.Name.HasPrefix && other.Name.FullName == name ||
+                    other.Name.IsDotted && SetsElementProperty(other.Name, element.NamespaceScope, elementType, name, typeSystem))))
             .Where(name => !element.Content.OfType<XamlElement>().Any(child =>
-                child.IsPropertyElement && child.Name!.LocalName.EndsWith("." + name, StringComparison.Ordinal)))
+                child.IsPropertyElement &&
+                SetsElementProperty(child.Name!, child.NamespaceScope, elementType, name, typeSystem)))
             .Where(name => nearby.Contains(name) || reliableValue &&
                 members[name] is { Kind: XamlMemberKind.Property, Type: { } type } &&
                 XamlValueConverter.UnwrapNullable(type).TypeKind == TypeKind.Enum &&
@@ -295,6 +298,19 @@ internal static class XamlCodeActions
 
         return true;
     }
+
+    // True when Owner.Member sets the element's own property; attached members of other owners do not count.
+    private static bool SetsElementProperty(
+        XamlName name, XamlNamespaceScope scope, INamedTypeSymbol elementType, string member, XamlTypeSystem typeSystem) =>
+        name.LocalName.EndsWith("." + member, StringComparison.Ordinal) &&
+        (!scope.TryResolvePrefix(name.Prefix, out var uri) ||
+            XamlSemanticFacts.ResolvePropertyElementMember(name, uri, typeSystem) is not { Owner: { } owner } ||
+            XamlTypeSystem.IsAssignableTo(elementType, owner));
+
+    private static bool? IsValidLiteral(string text, ITypeSymbol type, XamlTypeSystem typeSystem) =>
+        XamlValueConverter.TryValidate(text, XamlValueConverter.UnwrapNullable(type), typeSystem, out bool valid)
+            ? valid
+            : null;
 
     private static IReadOnlyList<string> AttributeReplacementValues(
         string text, ITypeSymbol memberType, XamlTypeSystem typeSystem)
@@ -854,16 +870,28 @@ internal static class XamlCodeActions
 
             case XamlValidator.InvalidAttributeValueCode:
             {
-                if (ReadSuggestions(diagnostic.Data).Suggestions.Count > 0)
-                {
-                    return false;
-                }
-
                 var attribute = FindAncestor<XamlAttribute>(doc.Parsed.FindNode(offset));
                 var element = attribute?.Parent as XamlElement;
                 var elementType = element is null || typeSystem is null
                     ? null
                     : XamlSemanticFacts.ResolveElementType(element, typeSystem);
+                var suggestions = ReadSuggestions(diagnostic.Data).Suggestions;
+                if (suggestions.Count > 0 && typeSystem is not null)
+                {
+                    // A diagnostic can outlive a property rename; spell-fix only if the current member still rejects the value.
+                    var currentType = attribute is null || elementType is null
+                        ? null
+                        : XamlValidator.ResolveAttributeValueType(attribute, elementType, element!.NamespaceScope, typeSystem);
+                    return currentType is null ||
+                        attribute!.Value is not { IsMarkupExtension: false } currentValue ||
+                        IsValidLiteral(currentValue.Text, currentType, typeSystem) != false ||
+                        suggestions.Any(suggestion => IsValidLiteral(suggestion, currentType, typeSystem) != true);
+                }
+                else if (suggestions.Count > 0)
+                {
+                    return false;
+                }
+
                 var memberType = elementType is null || attribute is null
                     ? null
                     : typeSystem!.FindAttributeMember(elementType, attribute.Name.LocalName)?.Type;
