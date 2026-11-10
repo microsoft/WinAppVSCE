@@ -86,7 +86,7 @@ export const PROPERTIES_FRAGMENT = `
      */
     function renderProperties() {
         // Rebuilding would destroy an open menu under the pointer; redraw once it closes.
-        if (openDrop && el.propsViewport.contains(openDrop.root)
+        if (((openDrop && el.propsViewport.contains(openDrop.root)) || document.querySelector('.wcp-pop'))
             && state.properties && state.properties.handle === renderedHandle) {
             propsRenderPending = true;
             return;
@@ -99,6 +99,12 @@ export const PROPERTIES_FRAGMENT = `
                 handle: renderedHandle,
                 prop: active.dataset.draft,
                 value: active.value,
+                values: Array.from(el.propsViewport.querySelectorAll('[data-draft]'))
+                    .filter(function (box) {
+                        return (box.dataset.draftGroup || box.dataset.draft)
+                            === (active.dataset.draftGroup || active.dataset.draft);
+                    })
+                    .map(function (box) { return { key: box.dataset.draft, value: box.value }; }),
                 committed: active.dataset.committed === '1',
                 save: active.saveDraft,
                 start: active.selectionStart,
@@ -121,6 +127,12 @@ export const PROPERTIES_FRAGMENT = `
             return;
         }
         const boxes = el.propsViewport.querySelectorAll('[data-draft]');
+        if (!draft.committed) {
+            for (const box of Array.from(boxes)) {
+                const saved = draft.values.find(function (value) { return value.key === box.dataset.draft; });
+                if (saved) { box.value = saved.value; }
+            }
+        }
         for (const box of Array.from(boxes)) {
             if (box.dataset.draft !== draft.prop) { continue; }
             // A committed value is the app's to report back, not ours to keep.
@@ -131,7 +143,12 @@ export const PROPERTIES_FRAGMENT = `
             try { box.setSelectionRange(draft.start, draft.end); } catch (e) { /* not a text box */ }
             break;
         }
+
     }
+
+    document.addEventListener('colorclosed', function () {
+        if (propsRenderPending) { renderProperties(); }
+    });
 
     function renderPropertiesNow() {
         el.propsHeader.textContent = '';

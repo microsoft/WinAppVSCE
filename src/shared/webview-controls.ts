@@ -287,6 +287,7 @@ export function getSharedColorPickerScript(): string {
         let pop = null;
         let target = null;
         let original = '';
+        let changed = false;
         let hsv = { h: 0, s: 0, v: 0 };
 
         function clamp(n, lo, hi) { return n < lo ? lo : (n > hi ? hi : n); }
@@ -340,6 +341,7 @@ export function getSharedColorPickerScript(): string {
         /** Pushes the working colour onto the input and lets the page react live. */
         function apply(syncHexField) {
             if (!target) { return; }
+            changed = true;
             const hex = currentHex();
             target.value = hex;
             paint(syncHexField, hex);
@@ -473,17 +475,20 @@ export function getSharedColorPickerScript(): string {
             pop = null;
             if (popup && popup.root.parentNode) { popup.root.parentNode.removeChild(popup.root); }
             if (commit) {
-                input.dispatchEvent(new Event('change', { bubbles: true }));
-            } else if (input.value !== original) {
+                if (changed) { input.dispatchEvent(new Event('change', { bubbles: true })); }
+            } else {
                 input.value = original;
-                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('colorcancel', { bubbles: true }));
             }
+            document.dispatchEvent(new Event('colorclosed'));
         }
 
         function open(input) {
             close(false);
             target = input;
             original = input.value;
+            changed = false;
+            input.dispatchEvent(new Event('coloropen', { bubbles: true }));
             hsv = rgbToHsv(parseHex(input.value) || { r: 0, g: 0, b: 0 });
             pop = build();
             document.body.appendChild(pop.root);

@@ -337,11 +337,11 @@ test.describe('run target picker', () => {
         }
     });
 
-    test('explains why an unbuilt native-only solution is not offered', async () => {
+    test('explains why an unbuilt packaging-only solution is not offered', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-unbuilt-native-e2e-'));
         fs.writeFileSync(path.join(tmpDir, 'App.sln'), [
             'Microsoft Visual Studio Solution File, Format Version 12.00',
-            'Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "App", "App\\App.vcxproj", "{11111111-1111-1111-1111-111111111111}"',
+            'Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "App", "App\\App.wapproj", "{11111111-1111-1111-1111-111111111111}"',
             'EndProject',
         ].join('\r\n'));
 
@@ -377,14 +377,12 @@ test.describe('run target picker', () => {
         }
     });
 
-    // CLI v0.7.1 cannot build a .vcxproj through solution mode. Keeping the
-    // solution would auto-select an input that always fails and hide the
-    // folder-mode path the released extension used for native apps.
+    // Packaging projects are not runnable CLI project inputs.
     test('falls back to native build output when a solution has no supported members', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-native-e2e-'));
         fs.writeFileSync(path.join(tmpDir, 'App.sln'), [
             'Microsoft Visual Studio Solution File, Format Version 12.00',
-            'Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "App", "App\\App.vcxproj", "{11111111-1111-1111-1111-111111111111}"',
+            'Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "App", "App\\App.wapproj", "{11111111-1111-1111-1111-111111111111}"',
             'EndProject',
         ].join('\r\n'));
 

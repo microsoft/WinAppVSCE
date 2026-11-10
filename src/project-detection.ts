@@ -372,6 +372,16 @@ export function classifyProjectRunnability(content: string): ProjectRunnability 
 		return 'test';
 	}
 
+	const nativeTypes = findElementsByLocalName(doc, 'ConfigurationType');
+	if (nativeTypes.length > 0) {
+		const unconditional = nativeTypes.filter(element => !hasAttributeOnSelfOrAncestor(element, 'Condition'));
+		if (unconditional.length === 0) { return 'unknown'; }
+		const nativeType = elementText(unconditional[unconditional.length - 1]).toLowerCase();
+		if (nativeType === 'application') { return 'app'; }
+		if (nativeType === 'dynamiclibrary' || nativeType === 'staticlibrary') { return 'library'; }
+		return 'unknown';
+	}
+
 	// A conditioned OutputType is exactly the "can't tell without MSBuild"
 	// case this heuristic must not guess at, so it is left to the CLI. The
 	// condition may sit on the property or on an enclosing PropertyGroup —

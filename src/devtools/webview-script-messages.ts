@@ -36,6 +36,7 @@ export const MESSAGES_FRAGMENT = `
                     state.roots = [];
                     state.properties = null;
                     state.layout = null;
+                    state.composePending = null;
                     state.comments.forEach(function (comment) { delete comment.handle; });
                     el.pick.disabled = true;
                     el.layoutBtn.disabled = true;
@@ -181,11 +182,16 @@ export const MESSAGES_FRAGMENT = `
                 break;
 
             case 'commentError':
+                if (message.requestId !== undefined) {
+                    if (message.requestId !== state.composePending) { break; }
+                    state.composePending = null;
+                }
                 showComposeError(message.message || 'Adding the comment failed.');
                 updateCompose();
                 break;
 
             case 'commentAdded':
+                if (message.requestId !== state.composePending) { break; }
                 commentAdded();
                 break;
 
@@ -195,17 +201,20 @@ export const MESSAGES_FRAGMENT = `
                 break;
 
             case 'binding':
+                if (!state.properties || message.handle !== state.properties.handle) { break; }
                 state.bindings[message.name] = message.binding;
                 renderProperties();
                 break;
 
             case 'bindingRestoreConfirm':
+                if (!state.properties || message.handle !== state.properties.handle) { break; }
                 state.restoreConfirm = message.name;
                 state.restoreConfirmScope = message.scope || '';
                 renderProperties();
                 break;
 
             case 'resource':
+                if (!state.properties || message.handle !== state.properties.handle) { break; }
                 state.resources[message.name] = message.resource;
                 renderProperties();
                 break;

@@ -10,13 +10,7 @@
 
 /** The subset of a launch.json entry that the DevTools integration reads. */
 export interface DevToolsLaunchConfig {
-    /**
-     * Opt out of DevTools for this configuration.
-     *
-     * Deliberately tri-state: absent means on. DevTools is the default
-     * experience, so a configuration written before the feature existed still
-     * gets it, and only an explicit `false` turns it off.
-     */
+    /** Override the CLI's automatic DevTools choice for this configuration. */
     useDevTools?: boolean;
 
     /**
@@ -78,21 +72,12 @@ export function shouldAttachDebugger(config: DevToolsLaunchConfig | undefined): 
     return config?.noDebug !== true;
 }
 
-/**
- * The `winapp run` arguments that select a DevTools mode.
- *
- * `--devtools` takes a mode: `on` draws the in-app toolbar, `headless` runs the
- * engine with nothing drawn in the app, and `off` disables it. The mode is
- * always passed explicitly, including `off`: the CLI turns DevTools on by
- * default for WinUI projects, so omitting the flag would quietly enable it for
- * someone who asked for `useDevTools: false`.
- */
+/** Leave automatic launches to the CLI; explicit choices override its defaults. */
 export function devToolsSpawnArgs(config: DevToolsLaunchConfig | undefined): string[] {
     if (!shouldUseDevTools(config)) {
         return ['--devtools', 'off'];
     }
 
-    // The panel is a second client of the same engine, so hiding the overlay
-    // has to keep the engine running - that is exactly what headless is.
-    return ['--devtools', config?.noOverlay ? 'headless' : 'on'];
+    if (config?.noOverlay) { return ['--devtools', 'headless']; }
+    return config?.useDevTools === true ? ['--devtools', 'on'] : [];
 }

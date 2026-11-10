@@ -58,6 +58,7 @@ export async function diagnoseBinding(
         // Native AOT and C++ apps have no managed agent to ask.
         return {
             type: 'binding',
+            handle,
             name,
             binding: { unavailable: true, message: 'Binding diagnosis needs a managed (.NET) app.' },
         };
@@ -77,6 +78,7 @@ export async function diagnoseBinding(
 
     return {
         type: 'binding',
+        handle,
         name,
         binding: {
             status: result.state,
@@ -116,6 +118,7 @@ export async function restoreBinding(
     if (restored?.state === 'confirmation-required') {
         return {
             type: 'bindingRestoreConfirm',
+            handle,
             name,
             scope: ownerName(restored.restoreOwner) ?? restored.rebindScope,
         };
@@ -146,6 +149,7 @@ export async function resolveResource(
 
     return {
         type: 'resource',
+        handle,
         name,
         resource: { key: resource?.prop ?? name, resolved: resource?.value },
     };

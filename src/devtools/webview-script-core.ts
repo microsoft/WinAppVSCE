@@ -115,6 +115,8 @@ export const CORE_FRAGMENT = `
         comments: [],
         /** Element a non-empty comment draft was started on. */
         composeHandle: null,
+        composeRequest: 0,
+        composePending: null,
         surfaces: [],
         layout: null,
         restoreConfirm: null,

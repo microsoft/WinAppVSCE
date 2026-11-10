@@ -1,20 +1,4 @@
-/**
- * Reports whether the winapp CLI DevTools branch has moved since we last synced.
- *
- * DevTools is still an unmerged branch in another repository, so there is no
- * package version to watch and nothing fails loudly when upstream changes. The
- * only record of what we are built against is schemas/devtools/pinned-cli.json.
- * This compares that pin against the live branch and says how far behind we are.
- *
- * Deliberately local-only and non-failing:
- *   - local, because CI's GITHUB_TOKEN cannot read microsoft/winappCli; wiring
- *     this into a workflow would need a PAT for a cross-repo private read.
- *   - non-failing, because upstream moving is normal and expected. Falling
- *     behind is information, not a defect in this repo's tree.
- *
- * Run it with `npm run check-cli-freshness`. Acting on the result is Pass 1 of
- * .github/skills/devtools-cli-sync/AGENTS.md.
- */
+/** Reports upstream changes since the pinned CLI build; freshness is informational. */
 
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';

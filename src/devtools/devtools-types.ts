@@ -125,14 +125,14 @@ export type ExtensionToWebviewMessage =
     | { type: 'treeInvalidated'; reason?: string }
     | { type: 'comments'; comments: CommentPayload[] }
     | { type: 'previews'; previews: PreviewPayload[] }
-    | { type: 'commentError'; message: string }
-    | { type: 'binding'; name: string; binding: BindingPayload }
-    | { type: 'bindingRestoreConfirm'; name: string; scope?: string }
-    | { type: 'resource'; name: string; resource: { key: string; resolved?: string } }
+    | { type: 'commentError'; message: string; requestId?: number }
+    | { type: 'binding'; handle: string; name: string; binding: BindingPayload }
+    | { type: 'bindingRestoreConfirm'; handle: string; name: string; scope?: string }
+    | { type: 'resource'; handle: string; name: string; resource: { key: string; resolved?: string } }
     | { type: 'surfaces'; surfaces: SurfacePayload[] }
     | { type: 'layout'; layout: LayoutPayload }
     | { type: 'focusChanged'; handle?: string; label?: string }
-    | { type: 'commentAdded' }
+    | { type: 'commentAdded'; requestId: number }
     | { type: 'capabilities'; canEdit: boolean; canPick: boolean; canHighlight: boolean };
 
 /** Messages the webview sends to the extension host. */
@@ -150,7 +150,7 @@ export type WebviewToExtensionMessage =
     | { type: 'setSurface'; surface: string }
     | { type: 'loadComments' }
     | { type: 'commentsHidden' }
-    | { type: 'addComment'; handle: string; text: string }
+    | { type: 'addComment'; handle: string; text: string; requestId: number }
     | { type: 'resolveComment'; id: string }
     | { type: 'deleteComment'; id: string }
     | { type: 'diagnoseBinding'; handle: string; name: string }

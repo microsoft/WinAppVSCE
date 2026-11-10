@@ -193,75 +193,11 @@ export function createDevToolsWorkspace(inputFolder: string): string {
                     // spec does not depend on C# Dev Kit being installed.
                     noDebug: true,
                     useDevTools: true,
+                    unregisterOnExit: true,
                 },
             ],
         }, null, 2),
     );
 
     return tmpDir;
-}
-
-/** Image names the fixture launch is responsible for: the app and the CLI host. */
-const OWNED_IMAGES = ['DevToolsFixtureApp.exe', 'winapp.exe'];
-
-/** Process IDs currently running for the images this fixture launches. */
-export function snapshotOwnedPids(): Set<number> {
-    const pids = new Set<number>();
-    for (const image of OWNED_IMAGES) {
-        const result = spawnSync(
-            'tasklist',
-            ['/FI', `"IMAGENAME eq ${image}"`, '/NH', '/FO', 'CSV'],
-            { encoding: 'utf-8', shell: true },
-        );
-        for (const line of (result.stdout ?? '').split('\n')) {
-            // CSV rows look like: "winapp.exe","1234","Console","1","12,345 K"
-            const match = /^"[^"]+","(\d+)"/.exec(line.trim());
-            if (match) {
-                pids.add(Number(match[1]));
-            }
-        }
-    }
-    return pids;
-}
-
-/**
- * Kills app/CLI processes that appeared after `before` was taken.
- *
- * Stopping the debug session should do this, but it is not reliable while VS
- * Code is shutting down — and a leaked process holds its DevTools named pipe,
- * which makes the *next* run fail to open the panel at all. Only processes
- * started after the snapshot are touched, so a developer's own `winapp` session
- * running alongside the test is never killed.
- */
-export function killProcessesStartedSince(before: Set<number>): number[] {
-    const killed: number[] = [];
-    for (const pid of snapshotOwnedPids()) {
-        if (before.has(pid)) {
-            continue;
-        }
-        try {
-            process.kill(pid);
-            killed.push(pid);
-        } catch {
-            // Already gone — the session tore down cleanly.
-        }
-    }
-    return killed;
-}
-
-/**
- * Sweeps repeatedly, because a process can still be starting when the first
- * sweep runs and would otherwise be missed and leak into the next run.
- */
-export async function killProcessesStartedSinceWithRetry(
-    before: Set<number>,
-    attempts = 4,
-    delayMs = 2_000,
-): Promise<number[]> {
-    const killed: number[] = [];
-    for (let i = 0; i < attempts; i++) {
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-        killed.push(...killProcessesStartedSince(before));
-    }
-    return killed;
 }

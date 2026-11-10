@@ -51,6 +51,7 @@ test('a healthy binding is reported as ok with its path and mode', async () => {
     const message = await diagnoseBinding(client, 'h-title', 'Text');
 
     assert.strictEqual(message.type, 'binding');
+    assert.ok('handle' in message && message.handle === 'h-title');
     const binding = bindingOf(message);
     assert.strictEqual(binding.ok, true);
     assert.strictEqual(binding.path, 'Vm.Title');
@@ -170,6 +171,7 @@ test('restoring a binding the engine wants confirmed asks the user first', async
     const message = await restoreBinding(client, 'h-title', 'Text', false);
 
     assert.ok(message && 'type' in message && message.type === 'bindingRestoreConfirm');
+    assert.ok('handle' in message && message.handle === 'h-title');
     assert.strictEqual((message as Extract<ExtensionToWebviewMessage, { type: 'bindingRestoreConfirm' }>).scope, 'MainPage');
 });
 

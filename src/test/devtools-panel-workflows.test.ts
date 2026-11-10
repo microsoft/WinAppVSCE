@@ -370,15 +370,15 @@ test('a stale comment anchor is not re-resolved by an ambiguous name', async t =
     const panel = panels.at(-1)!;
     panel.receive({ type: 'ready' });
     await until(() => panel.messages.some(m => m.type === 'tree'));
-    panel.receive({ type: 'addComment', handle: 'n1', text: 'too tight' });
+    panel.receive({ type: 'addComment', handle: 'n1', text: 'too tight', requestId: 1 });
     await until(() => panel.messages.some(m => m.type === 'commentError'));
     const error = panel.messages.find(m => m.type === 'commentError');
-    assert.match(error?.type === 'commentError' ? error.message : '', /not unique/);
+    assert.match(error?.type === 'commentError' ? error.message : '', /stale/);
     assert.ok(!engine.received.some(m => m.method === 'Comment.add' && m.params.name));
     assert.ok(!panel.messages.some(m => m.type === 'commentAdded'));
 });
 
-test('a stale comment anchor falls back to a unique name and confirms the add', async t => {
+test('a stale comment anchor never moves to a reused name from a later page', async t => {
     const pid = 863000 + process.pid;
     const engine = await duplicateNameEngine(pid, ['Only', 'Other']);
     t.after(async () => { DevToolsPanel.disposeAll(); await engine.stop(); });
@@ -386,10 +386,10 @@ test('a stale comment anchor falls back to a unique name and confirms the add', 
     const panel = panels.at(-1)!;
     panel.receive({ type: 'ready' });
     await until(() => panel.messages.some(m => m.type === 'tree'));
-    panel.receive({ type: 'addComment', handle: 'n0', text: 'too tight' });
-    await until(() => panel.messages.some(m => m.type === 'commentAdded'));
-    assert.deepEqual(engine.received.filter(m => m.method === 'Comment.add').at(-1)?.params,
-        { name: 'Only', text: 'too tight' });
+    panel.receive({ type: 'addComment', handle: 'n0', text: 'too tight', requestId: 1 });
+    await until(() => panel.messages.some(m => m.type === 'commentError'));
+    assert.ok(!engine.received.some(m => m.method === 'Comment.add' && m.params.name));
+    assert.ok(!panel.messages.some(m => m.type === 'commentAdded'));
 });
 
 test('app-driven value changes reach the selected element, unchanged polls post nothing', async t => {
@@ -486,4 +486,63 @@ test('an edit saved to an element the user has left does not pull the panel back
 
     panel.receive({ type: 'setProperty', handle: 'second', name: 'Width', value: '10', writeType: 'Double' });
     await until(() => engine.received.slice(before).some(m => m.method === 'Property.get' && m.params.handle === 'second'));
+});
+
+test('a delayed highlight cannot send an obsolete selection or reveal an old local echo', async t => {
+    const pid = 868000 + process.pid;
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const engine = await FakeDevToolsEngine.start(pid, {
+        methods: [...USED_METHODS],
+        handlers: {
+            'Overlay.highlight': async params => {
+                if (params.handle === 'first') { await held; }
+                return {};
+            },
+        },
+    });
+
+    t.after(async () => { release(); DevToolsPanel.disposeAll(); await engine.stop(); });
+    await DevToolsPanel.show(pid, extensionUri);
+    const panel = panels.at(-1)!;
+    panel.receive({ type: 'ready' });
+    await until(() => panel.messages.some(m => m.type === 'comments'));
+    panel.receive({ type: 'selectNode', handle: 'first' });
+    await until(() => engine.received.some(m => m.method === 'Overlay.highlight' && m.params.handle === 'first'));
+    panel.receive({ type: 'selectNode', handle: 'second' });
+    await until(() => engine.received.some(m => m.method === 'Selection.select' && m.params.handle === 'second'));
+    const reveals = panel.reveals.length;
+    release();
+    engine.emit('Selection.picked', { handle: 'first', origin: 'fake-owner-token' });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.ok(!engine.received.some(m => m.method === 'Selection.select' && m.params.handle === 'first'));
+    assert.equal(panel.reveals.length, reveals);
+});
+
+test('a literal write waits for the pending binding capture', async t => {
+    const pid = 869000 + process.pid;
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const engine = await FakeDevToolsEngine.start(pid, {
+        methods: [...USED_METHODS],
+        handlers: {
+            'Binding.diagnose': () => ({ state: 'evaluated' }),
+            'Binding.walk': async () => { await held; return { segments: [] }; },
+            'Binding.capture': () => ({}),
+        },
+    });
+    t.after(async () => { release(); DevToolsPanel.disposeAll(); await engine.stop(); });
+    await DevToolsPanel.show(pid, extensionUri);
+    const panel = panels.at(-1)!;
+    panel.receive({ type: 'ready' });
+    await until(() => panel.messages.some(m => m.type === 'comments'));
+    panel.receive({ type: 'diagnoseBinding', handle: 'h-title', name: 'Text' });
+    await until(() => engine.received.some(m => m.method === 'Binding.walk'));
+    panel.receive({ type: 'setProperty', handle: 'h-title', name: 'Text', value: 'literal', writeType: 'String' });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.ok(!engine.received.some(m => m.method === 'HotReload.setProperty'));
+    release();
+    await until(() => engine.received.some(m => m.method === 'HotReload.setProperty'));
+    assert.ok(engine.received.findIndex(m => m.method === 'Binding.capture')
+        < engine.received.findIndex(m => m.method === 'HotReload.setProperty'));
 });

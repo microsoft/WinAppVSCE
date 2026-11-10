@@ -29,7 +29,7 @@ import { copySourcePath, openSourceLocation, revealSourceLocation } from './sour
 import { diagnoseBinding, resolveResource, restoreBinding } from './binding-handlers';
 import { highlightTarget } from './overlay';
 import { DevToolsCli } from './devtools-cli';
-import { countNamedNodes, findTreeNode, replaceSubtree, subtreeRoot } from './tree-model';
+import { findTreeNode, replaceSubtree, subtreeRoot } from './tree-model';
 
 /**
  * Depth requested from `VisualTree.enumerate`.
@@ -124,6 +124,7 @@ export class DevToolsPanel {
     private treeRevision = 0;
     private readonly expanding = new Set<string>();
     private refreshingComments = false;
+    private readonly bindingInspections = new Map<string, Promise<ExtensionToWebviewMessage>>();
 
     /** Shared across panels so protocol noise lands in one place. */
     private static output: vscode.OutputChannel | undefined;
@@ -347,7 +348,7 @@ export class DevToolsPanel {
             if (!handle) { return; }
             this.post({ type: 'pickStateChanged', armed: false });
             // The engine echoes the panel's own selection; revealing it would steal keyboard focus.
-            if (handle === this.selectedHandle) { return; }
+            if ((payload as SelectionEvent).origin === client.ownerToken || handle === this.selectedHandle) { return; }
             void this.revealPickedElement(handle).catch(error => this.reportError(error));
         });
 
@@ -446,14 +447,7 @@ export class DevToolsPanel {
         }
     }
 
-    /**
-     * Adds a comment, returning an error message on failure or undefined on
-     * success.
-     *
-     * `Comment.add` accepts either a handle or a name. Handles are only
-     * meaningful for the enumeration that produced them, so a selection that
-     * went stale between enumerate and add is retried by name before giving up.
-     */
+    /** A stale handle must not silently retarget a draft to a reused name. */
     private async addComment(
         client: DevToolsClient,
         handle: string,
@@ -467,28 +461,8 @@ export class DevToolsPanel {
             await client.send('Comment.add', { handle, text });
             return undefined;
         } catch (err) {
-            const first = err instanceof Error ? err.message : String(err);
-            const name = this.nameForHandle(handle);
-            if (!name) { return first; }
-            // A name shared by several elements would anchor the comment to
-            // whichever one the engine finds first, not the one selected.
-            if (countNamedNodes(this.lastTree, name) !== 1) {
-                return `${first} The element could not be found again by name because "${name}" is not unique. Select it and try again.`;
-            }
-
-            this.log(`Comment.add by handle ${handle} failed (${first}); retrying by name "${name}".`);
-            try {
-                await client.send('Comment.add', { name, text });
-                return undefined;
-            } catch (retryErr) {
-                return retryErr instanceof Error ? retryErr.message : String(retryErr);
-            }
+            return err instanceof Error ? err.message : String(err);
         }
-    }
-
-    /** Looks up the x:Name for a handle in the tree we last sent the webview. */
-    private nameForHandle(handle: string): string | undefined {
-        return findTreeNode(this.lastTree, handle)?.name || undefined;
     }
 
     /**
@@ -718,6 +692,7 @@ export class DevToolsPanel {
                 if (this.selectedHandle !== message.handle) { return; }
                 if (this.layoutOn) {
                     const layout = await client?.trySend('Layout.get', { handle: message.handle });
+                    if (this.selectedHandle !== message.handle) { return; }
                     if (layout) { this.post({ type: 'layout', layout: layout as never }); }
                 }
                 if (client?.supports('Overlay.highlight')) {
@@ -726,6 +701,7 @@ export class DevToolsPanel {
                         owner: client.ownerToken,
                     });
                 }
+                if (this.selectedHandle !== message.handle) { return; }
                 if (client?.supports('Selection.select')) {
                     const result = await client.trySend<{ selected: boolean }>('Selection.select', {
                         handle: message.handle, owner: client.ownerToken,
@@ -805,15 +781,15 @@ export class DevToolsPanel {
 
             case 'addComment': {
                 if (!client) {
-                    this.post({ type: 'commentError', message: 'Not connected to the app, so the comment cannot be anchored.' });
+                    this.post({ type: 'commentError', requestId: message.requestId, message: 'Not connected to the app, so the comment cannot be anchored.' });
                     return;
                 }
                 const failure = await this.addComment(client, message.handle, message.text);
                 if (failure) {
                     this.log(`Comment.add failed: ${failure}`);
-                    this.post({ type: 'commentError', message: failure });
+                    this.post({ type: 'commentError', requestId: message.requestId, message: failure });
                 } else {
-                    this.post({ type: 'commentAdded' });
+                    this.post({ type: 'commentAdded', requestId: message.requestId });
                 }
                 await this.refreshComments(true);
                 return;
@@ -849,10 +825,20 @@ export class DevToolsPanel {
                 await this.refreshComments(true);
                 return;
 
-            case 'diagnoseBinding':
+            case 'diagnoseBinding': {
                 if (!client) { return; }
-                this.post(await diagnoseBinding(client, message.handle, message.name));
+                const key = JSON.stringify([message.handle, message.name]);
+                let pending = this.bindingInspections.get(key);
+                if (!pending) {
+                    pending = diagnoseBinding(client, message.handle, message.name);
+                    this.bindingInspections.set(key, pending);
+                }
+                try { this.post(await pending); }
+                finally {
+                    if (this.bindingInspections.get(key) === pending) { this.bindingInspections.delete(key); }
+                }
                 return;
+            }
 
             case 'restoreBinding': {
                 if (!client) { return; }
@@ -899,6 +885,7 @@ export class DevToolsPanel {
                     return;
                 }
                 try {
+                    await this.bindingInspections.get(JSON.stringify([message.handle, message.name]));
                     await client.send('HotReload.setProperty', {
                         handle: message.handle,
                         prop: message.name,

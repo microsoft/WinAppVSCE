@@ -1110,7 +1110,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			const baseSpawnArgs = [...buildRunArgs(runOptions), ...devToolsSpawnArgs(config)];
 
 			const outputChannel = getWinappOutputChannel();
-			const { processId, runProcess, warning } = await launchRunProcess({
+			const { processId, runProcess, warning, devToolsAttached } = await launchRunProcess({
 				cliPath,
 				args: baseSpawnArgs,
 				cwd,
@@ -1195,7 +1195,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// DevTools panel for the same process. Failures here are reported
 			// inside the panel so a DevTools problem never takes down a working
 			// debug session.
-			if (shouldUseDevTools(config) && inspectorPreference(config,
+			if (devToolsAttached && shouldUseDevTools(config) && inspectorPreference(config,
 				vscode.workspace.getConfiguration('winapp.devTools', folder.uri).get('inspector')) === 'vscode') {
 				void DevToolsPanel.show(
 					processId,

@@ -171,14 +171,20 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
                 kind,
                 'Kind of value for ' + prop.name,
                 function (picked) {
-                    state.staged[prop.name] = { kind: picked };
+                    if (picked === currentKind(prop) || ['binding', 'xbind', 'resource'].includes(picked)) {
+                        delete state.staged[prop.name];
+                        state.applied[prop.name] = picked;
+                    } else {
+                        state.staged[prop.name] = { kind: picked };
+                    }
                     renderProperties();
                 },
             ));
 
-            card.appendChild(buildEditor(kind, prop, payload));
-
             const staged = state.staged[prop.name];
+            card.appendChild(buildEditor(kind,
+                staged && staged.value !== undefined ? Object.assign({}, prop, { value: staged.value }) : prop,
+                payload));
             if (staged) { card.appendChild(buildStaged(prop, staged)); }
 
             if (isEdited(payload.handle, prop.name)) {
@@ -292,9 +298,8 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         apply.className = 'pbtn primary';
         apply.textContent = 'Apply';
         apply.addEventListener('click', function () {
-            state.applied[prop.name] = staged.kind;
-            delete state.staged[prop.name];
-            renderProperties();
+            commit(state.properties.handle, prop,
+                staged.value === undefined ? prop.value : staged.value, { apply: true });
         });
         actions.appendChild(apply);
 
@@ -418,6 +423,7 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
 
     function textEditor(prop, payload) {
         const input = document.createElement('input');
+        const wasStaged = !!state.staged[prop.name];
         input.type = 'text';
         input.className = 'pfield';
         input.value = prop.value;
@@ -428,7 +434,7 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         input.dataset.draft = prop.name;
         // Lets a re-render for another element save this draft where it was typed.
         input.saveDraft = function (value) {
-            if (value !== prop.value) { commit(payload.handle, prop, value); }
+            if (!wasStaged && value !== prop.value) { commit(payload.handle, prop, value); }
         };
         input.addEventListener('keydown', function (event) {
             if (event.key === 'Enter') {
@@ -440,7 +446,10 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
                 input.blur();
             }
         });
-        input.addEventListener('input', function () { delete input.dataset.committed; });
+        input.addEventListener('input', function () {
+            delete input.dataset.committed;
+            if (state.staged[prop.name]) { state.staged[prop.name].value = input.value; }
+        });
         input.addEventListener('blur', function () {
             // A re-render replaces this box; that is not the user leaving it.
             if (propsRendering) { return; }
@@ -494,8 +503,12 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         text.className = 'pfield';
         text.value = prop.value;
         text.setAttribute('aria-label', prop.name);
+        text.dataset.draft = prop.name;
         host.appendChild(text);
 
+        let originalText;
+        swatch.addEventListener('coloropen', function () { originalText = text.value; });
+        swatch.addEventListener('colorcancel', function () { text.value = originalText; });
         swatch.addEventListener('input', function () {
             text.value = swatch.value;
         });
@@ -507,6 +520,10 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
                 event.preventDefault();
                 commit(payload.handle, prop, text.value);
             }
+        });
+        text.addEventListener('input', function () {
+            delete text.dataset.committed;
+            if (state.staged[prop.name]) { state.staged[prop.name].value = text.value; }
         });
         return host;
     }
@@ -538,6 +555,8 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
             input.className = 'pfield';
             input.value = (parts[i] === undefined ? (parts[0] || '') : parts[i]).trim();
             input.setAttribute('aria-label', prop.name + ' ' + names[i]);
+            input.dataset.draft = prop.name + '/' + i;
+            input.dataset.draftGroup = prop.name;
             input.title = names[i];
             inputs.push(input);
             host.appendChild(input);
@@ -547,6 +566,12 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
             commit(payload.handle, prop, inputs.map(function (i) { return i.value.trim(); }).join(','));
         }
         for (const input of inputs) {
+            input.addEventListener('input', function () {
+                inputs.forEach(function (field) { delete field.dataset.committed; });
+                if (state.staged[prop.name]) {
+                    state.staged[prop.name].value = inputs.map(function (field) { return field.value.trim(); }).join(',');
+                }
+            });
             input.addEventListener('keydown', function (event) {
                 if (event.key === 'Enter') { event.preventDefault(); send(); }
             });
@@ -631,6 +656,11 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
     }
 
     function commit(handle, prop, value, opts) {
+        const staged = state.properties && state.properties.handle === handle && state.staged[prop.name];
+        if (staged && !(opts && opts.apply)) {
+            staged.value = String(value);
+            return;
+        }
         const key = editKey(handle, prop.name);
         if (opts && opts.restore) {
             delete state.edited[key];
@@ -639,11 +669,12 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
             // go back to; the engine does not keep this for us.
             recordOriginal(handle, prop);
         }
-        // Writing through the staged kind's editor is the apply; drop the pending bar.
-        const staged = state.staged[prop.name];
         if (staged) {
             state.applied[prop.name] = staged.kind;
             delete state.staged[prop.name];
+        }
+        for (const box of Array.from(el.propsViewport.querySelectorAll('[data-draft]'))) {
+            if ((box.dataset.draftGroup || box.dataset.draft) === prop.name) { box.dataset.committed = '1'; }
         }
         vscode.postMessage({
             type: 'setProperty',

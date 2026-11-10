@@ -138,7 +138,7 @@ export const COMMENTS_FRAGMENT = `
         const node = handle ? nodeForHandle(handle) : null;
         if (pinned && !node) {
             el.composeTarget.textContent = 'The element this draft was for is gone. Copy or clear the text to comment on another element.';
-            el.composeText.disabled = false;
+            el.composeText.disabled = state.composePending !== null;
             el.composeAdd.disabled = true;
             return;
         }
@@ -150,8 +150,8 @@ export const COMMENTS_FRAGMENT = `
             target += '. Draft started here; clear it to comment on the selected element.';
         }
         el.composeTarget.textContent = target;
-        el.composeText.disabled = !hasTarget;
-        el.composeAdd.disabled = !hasTarget || el.composeText.value.trim() === '';
+        el.composeText.disabled = !hasTarget || state.composePending !== null;
+        el.composeAdd.disabled = !hasTarget || state.composePending !== null || el.composeText.value.trim() === '';
     }
 
     function nodeForHandle(handle) {
@@ -173,15 +173,17 @@ export const COMMENTS_FRAGMENT = `
     el.composeAdd.addEventListener('click', function () {
         const text = el.composeText.value.trim();
         const handle = state.composeHandle || state.selected;
-        if (!text || !handle) { return; }
+        if (!text || !handle || state.composePending !== null) { return; }
         showComposeError('');
         // The draft stays until the host confirms the add; a failure must not
         // throw away what the user typed.
-        vscode.postMessage({ type: 'addComment', handle: handle, text: text });
-        el.composeAdd.disabled = true;
+        state.composePending = ++state.composeRequest;
+        updateCompose();
+        vscode.postMessage({ type: 'addComment', handle: handle, text: text, requestId: state.composePending });
     });
 
     function commentAdded() {
+        state.composePending = null;
         el.composeText.value = '';
         state.composeHandle = null;
         updateCompose();

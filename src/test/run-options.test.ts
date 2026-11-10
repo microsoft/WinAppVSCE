@@ -8,6 +8,7 @@ import {
 	expandRequiredToggles,
 	parseProcessIdFromJson,
 	parseRunErrorFromJson,
+	parseDevToolsAttachedFromJson,
 	PROGRESS_MESSAGE_MAX_LENGTH,
 	resolveDebugInput,
 	resolveRunProject,
@@ -27,6 +28,15 @@ import {
 function options(overrides: Partial<WinAppRunOptions> = {}): WinAppRunOptions {
 	return { input: 'C:/ws/MyApp.csproj', ...overrides };
 }
+
+describe('DevTools launch outcome', () => {
+	it('opens a panel only for a successful attachment', () => {
+		assert.equal(parseDevToolsAttachedFromJson('{"ProcessId":42,"devTools":{"mode":"on","nodeCount":0}}'), true);
+		assert.equal(parseDevToolsAttachedFromJson('{"ProcessId":42}'), false);
+		assert.equal(parseDevToolsAttachedFromJson('{"ProcessId":42,"devTools":{"mode":"off"}}'), false);
+		assert.equal(parseDevToolsAttachedFromJson('{"ProcessId":42,"Error":"attachment failed"}'), false);
+	});
+});
 
 describe('buildRunArgs', () => {
 	it('emits the run verb and positional input first', () => {

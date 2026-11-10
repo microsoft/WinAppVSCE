@@ -17,6 +17,11 @@ function csproj(body: string): string {
 }
 
 describe('classifyProjectRunnability', () => {
+	it('recognizes native applications and libraries without guessing conditional configurations', () => {
+		assert.equal(classifyProjectRunnability('<Project><PropertyGroup><ConfigurationType>Application</ConfigurationType></PropertyGroup></Project>'), 'app');
+		assert.equal(classifyProjectRunnability('<Project><PropertyGroup><ConfigurationType>StaticLibrary</ConfigurationType></PropertyGroup></Project>'), 'library');
+		assert.equal(classifyProjectRunnability('<Project><PropertyGroup Condition="Debug"><ConfigurationType>Application</ConfigurationType></PropertyGroup></Project>'), 'unknown');
+	});
 	it('classifies WinExe and Exe as runnable apps', () => {
 		assert.strictEqual(classifyProjectRunnability(csproj('<OutputType>WinExe</OutputType>')), 'app');
 		assert.strictEqual(classifyProjectRunnability(csproj('<OutputType>Exe</OutputType>')), 'app');

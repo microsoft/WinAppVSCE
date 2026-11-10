@@ -24,8 +24,6 @@ import {
 import {
     ensureFixtureAppBuilt,
     createDevToolsWorkspace,
-    snapshotOwnedPids,
-    killProcessesStartedSinceWithRetry,
     cliSupportsDevTools,
     readOverlayState,
     FIXTURE_APP_DIR,
@@ -33,6 +31,7 @@ import {
 } from './devtools-fixture';
 import { NO_HIGHLIGHT } from '../../devtools/overlay';
 import { DevToolsClient } from '../../devtools/devtools-client';
+import { RUN_EXIT_GRACE_MS } from '../../process-tree';
 
 // One VS Code instance and one launched app shared by the whole file: starting a
 // WinUI app per test would multiply the slowest part of the run.
@@ -40,7 +39,6 @@ test.describe.configure({ mode: 'serial' });
 
 let ctx: VSCodeTestContext | undefined;
 let launchFailure: string | undefined;
-let preLaunchPids = new Set<number>();
 
 /** The DevTools panel's webview root; present only once the panel has rendered. */
 const TREE_VIEWPORT = '#tree-viewport';
@@ -100,10 +98,6 @@ test.beforeAll(async () => {
     const inputFolder = ensureFixtureAppBuilt();
     const workspace = createDevToolsWorkspace(inputFolder);
 
-    // Recorded before anything launches so teardown can tell our processes apart
-    // from any the developer already had running.
-    preLaunchPids = snapshotOwnedPids();
-
     // The workspace holds only a launch.json — there is no manifest to open.
     ctx = await launchVSCode(workspace, { openManifest: false });
 
@@ -112,21 +106,19 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+    test.setTimeout(RUN_EXIT_GRACE_MS + 30_000);
     if (!ctx) {
         return;
     }
     // Stop the debug session first so the extension's own teardown runs.
     try {
         await ctx.page.keyboard.press('Shift+F5');
-        await ctx.page.waitForTimeout(3_000);
+        // Keep the extension host alive until the CLI finishes unregistering.
+        await ctx.page.waitForTimeout(RUN_EXIT_GRACE_MS + 1_000);
     } catch { /* window may already be gone */ }
 
     await teardown(ctx);
 
-    // Backstop: a leaked app or CLI process keeps its DevTools named pipe open,
-    // which makes a subsequent run fail to open the panel. Shutting VS Code down
-    // does not reliably stop it, so clean up explicitly.
-    await killProcessesStartedSinceWithRetry(preLaunchPids);
 });
 
 /**
@@ -301,6 +293,52 @@ test('switching to the Comments tab shows the comments view @winui-app', async (
     // Return to the tree so a retry of a later test starts from the default view.
     await frame.locator('#tab-tree').click();
     await expect(frame.locator(TREE_VIEWPORT)).toBeVisible();
+});
+
+test('cancelling a staged literal and returning to Binding preserves the live binding @winui-app', async () => {
+    const frame = await devToolsFrame();
+    await frame.locator('#filter').fill('FixtureBoundLabel');
+    await frame.locator('.tree-row', { hasText: 'FixtureBoundLabel' }).last().click();
+    await expect(frame.locator('#props-header')).toContainText('FixtureBoundLabel');
+    await frame.locator('#prop-filter').fill('Text');
+    const row = frame.locator('.prow[data-prop="Text"]');
+    await row.locator('.pvalue').click();
+    const kind = row.getByRole('combobox', { name: 'Kind of value for Text' });
+    await kind.click();
+    await row.getByRole('option', { name: 'Text', exact: true }).click();
+    await row.getByRole('textbox', { name: 'Text', exact: true }).fill('do not write');
+    await row.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(row.locator('.pvalue')).toHaveText('Bound fixture');
+    await kind.click();
+    await row.getByRole('option', { name: 'Text', exact: true }).click();
+    await kind.click();
+    await row.getByRole('option', { name: 'A binding', exact: true }).click();
+    await expect(row.locator('.pstaged')).toHaveCount(0);
+    const read = spawnSync(devToolsCliPath(), ['devtools', 'get-property', 'FixtureBoundLabel', 'Text',
+        '-a', 'DevToolsFixtureApp', '--json'], { encoding: 'utf8' });
+    expect(read.status, read.stderr).toBe(0);
+    expect(read.stdout).toContain('Bound fixture');
+    expect(read.stdout).not.toContain('do not write');
+});
+
+test('a live property change preserves all pending Margin fields @winui-app', async () => {
+    const frame = await devToolsFrame();
+    await frame.locator('#filter').fill('FixtureHeading');
+    await frame.locator('.tree-row', { hasText: 'FixtureHeading' }).last().click();
+    await expect(frame.locator('#props-header')).toContainText('FixtureHeading');
+    await frame.locator('#prop-filter').fill('Margin');
+    await frame.locator('.prow[data-prop="Margin"] .pvalue').click();
+    const left = frame.getByRole('textbox', { name: 'Margin Left', exact: true });
+    const top = frame.getByRole('textbox', { name: 'Margin Top', exact: true });
+    await left.fill('77');
+    await top.fill('88');
+    const write = spawnSync(devToolsCliPath(), ['devtools', 'set-property', 'FixtureHeading', 'Text',
+        'Live tick', '-a', 'DevToolsFixtureApp'], { encoding: 'utf8' });
+    expect(write.status, write.stderr).toBe(0);
+    await ctx!.page.waitForTimeout(2_000);
+    await expect(left).toHaveValue('77');
+    await expect(top).toHaveValue('88');
+    await expect(top).toBeFocused();
 });
 
 test('VS Code registers as the exclusive external inspector @winui-app', async () => {

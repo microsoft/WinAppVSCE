@@ -17,7 +17,7 @@ opens the follow-up patch-version PR. Git push access is required; an authentica
 creates the follow-up PR automatically; when `gh` is not installed, the script prints a browser URL
 for creating it manually.
 
-Pipeline runs may select a specific `CliReleaseTag`; leaving it empty uses the release pinned in
+Pipeline runs may select a specific `CliReleaseTag`; leaving it empty uses the build pinned in
 `cli-version.json`. Production publishing requires `DoEsrp=true`, while `SkipPublish=true`
 produces artifacts without publishing.
 
@@ -28,13 +28,18 @@ The release pipeline calls `scripts/download-cli.ps1` with its artifact staging 
 of installing the x64 and arm64 binaries under `bin`.
 
 An explicit `-Tag` takes precedence over `WINAPP_CLI_RELEASE_TAG`; when neither is set, the script
-downloads the release in `cli-version.json`. Use `-Tag latest` only for deliberate compatibility
-testing, then update the pinned tag in a reviewed change before shipping it.
+downloads the source pinned in `cli-version.json`. This preview pins a successful upstream `main`
+CI artifact by run, commit, artifact ID, and archive SHA256. Downloading requires PowerShell 7.4+
+and an authenticated GitHub account or token with access to that upstream Actions artifact.
+
+CI artifacts expire. Replace this pin with a supported release containing external-inspector
+routing before production publication. An expired or inaccessible artifact fails explicitly;
+the downloader never substitutes a different build. Use `-Tag latest` only for deliberate testing.
 
 ## Release checks
 
 - [ ] Run `npm run test:unit` and `npm test`.
-- [ ] Confirm `cli-version.json` names the WinApp CLI release intended for this extension release.
+- [ ] Confirm `cli-version.json` names the intended CLI build and use a release pin for production.
 - [ ] Run `.\scripts\download-cli.ps1` and confirm both `bin/win-x64/winapp.exe` and
       `bin/win-arm64/winapp.exe` are present.
 - [ ] Run `.\scripts\package-vsc.ps1 -Stable` and confirm the VSIX is created in `artifacts`.

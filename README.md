@@ -27,7 +27,7 @@ packaging, and language-service commands.
 | **WinApp: Initialize Project** | Set up a new project with the Windows SDK and/or Windows App SDK. Prompts for SDK channel (stable, preview, experimental, or none). |
 | **WinApp: Restore Packages** | Restore project packages and dependencies. |
 | **WinApp: Update Packages** | Update packages and dependencies to the latest versions. |
-| **WinApp: Run Application** | Build and run your app as a loose-layout packaged application with full package identity, which is great for testing APIs that require identity. Select a project (`.csproj`), a solution (`.sln`/`.slnx`), or an already-built output folder. |
+| **WinApp: Run Application** | Build and run your app as a loose-layout packaged application with full package identity. Select a project (`.csproj`/`.vcxproj`), a solution (`.sln`/`.slnx`), or an already-built output folder. |
 | **WinApp: Run Application With Options...** | Same as **Run Application**, but prompts for the build configuration, target architecture, and options such as cleaning app data, skipping the build, detaching, or unregistering on exit. |
 | **WinApp: Create Debug Identity** | Add sparse package identity to an existing executable so you can launch and debug it directly from VS Code with identity. |
 | **WinApp: Unregister Package** | Unregister a sideloaded development package (e.g., one registered via Run or Create Debug Identity). |
@@ -59,7 +59,7 @@ When you run a project-context WinApp command (such as **Initialize Project**, *
 
 Commands that already take an explicit target — such as **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
 
-**Run Application and F5** use their own target discovery rather than the project detection above. They auto-discover runnable `.csproj` and `.sln` files for .NET apps and prompt only if several are found. If none is found, they fall back to discovering build output folders. You can always pick something that wasn't listed with **Browse…**, which then asks whether you want a project or solution file or a build output folder. Running a build output folder needs a `Package.appxmanifest` (or `AppxManifest.xml`) in it. Run **WinApp: Generate Manifest** if you don't have one.
+**Run Application and F5** discover runnable `.csproj`/`.vcxproj` projects and `.sln`/`.slnx` solutions, prompting when several are found. Otherwise they look for build output folders. **Browse** lets you select a target manually. A build output folder needs `Package.appxmanifest` or `AppxManifest.xml`; use **WinApp: Generate Manifest** if needed.
 
 **Configuration (optional):**
 
@@ -110,9 +110,9 @@ You can press F5 without creating `launch.json` first: WinApp contributes a defa
 4. It launches your app via `winapp run` to give it package identity, using the manifest specified via `manifest` in `launch.json` or auto-detected by the CLI.
 5. A child debug session attaches to the running process using the debugger you specified.
 
-> **Point `input` at a project to get builds for free.** When `input` is a `.csproj`, `.sln`, or `.slnx`, `winapp run` restores and builds before launching, so your code changes are always reflected. When `input` is a build output folder, WinApp **does not** build; you must rebuild yourself (or use a `preLaunchTask`) after making code changes.
+> **Point `input` at a project to get builds for free.** A `.csproj`, `.vcxproj`, `.sln`, or `.slnx` input builds before launch. A build output folder launches existing binaries; rebuild first or use a `preLaunchTask`.
 
-> When `input` is a build output folder, you can automate the build step by adding a `preLaunchTask` to your `launch.json` configuration. This tells VS Code to run a build task before every debug session, so your changes are always compiled before launch. Apps without a project file, such as Electron, Rust, and C++ apps, always run this way, so a `preLaunchTask` is the way to keep their builds current.
+> For apps without a supported project file, such as Electron, Rust, or CMake-only projects, use a build output folder and a `preLaunchTask` to keep binaries current.
 >
 > 1. Define a build task in `.vscode/tasks.json`. Any build command works; this example uses .NET, but `npm run build`, `cargo build`, or an MSBuild invocation work the same way:
 >    ```jsonc
@@ -170,7 +170,7 @@ You can press F5 without creating `launch.json` first: WinApp contributes a defa
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `input` | string | | What to run: a project (`.csproj`), a solution (`.sln`/`.slnx`), a directory containing one, or a build output folder (e.g., `${workspaceFolder}/bin/Debug/net8.0-windows10.0.22621`). If not set, you will be prompted to select a target. |
+| `input` | string | | What to run: a project (`.csproj`/`.vcxproj`), a solution (`.sln`/`.slnx`), a directory containing one, or a build output folder. If omitted, the extension discovers targets and prompts when needed. |
 | `inputFolder` | string | | **Deprecated.** Use `input`, which also accepts projects and solutions. Still honored for existing configurations; if both are set, `input` wins. |
 | `project` | string | | *Project mode only.* Selects which project to launch, by name or path, when `input` is a solution or a directory containing more than one runnable app project. |
 | `configuration` | string | `Debug` | *Project mode only.* Build configuration to use. |
@@ -191,14 +191,14 @@ You can press F5 without creating `launch.json` first: WinApp contributes a defa
 | `workingDirectory` | string | workspace folder | Working directory for the application. |
 | `args` | string | | Command-line arguments to pass to the application. |
 | `outputAppxDirectory` | string | | Output directory for the loose-layout package. Defaults to an `AppX` folder inside the input folder. |
-| `useDevTools` | boolean | `true` | Launch the app with [WinUI DevTools](#winui-devtools) enabled. Set to `false` to launch without DevTools. |
+| `useDevTools` | boolean | automatic | Override the CLI's [WinUI DevTools](#winui-devtools) choice: `true` requires DevTools; `false` disables it. Omit to use CLI defaults. |
 | `noOverlay` | boolean | `false` | Suppress the in-app DevTools overlay while keeping DevTools inspection available. Requires `useDevTools`. |
 | `devToolsInspector` | string | setting | Override `winapp.devTools.inspector`: `vscode` opens the editor panel; `native` leaves inspection to the app toolbar. |
 | `noDebug` | boolean | `false` | Launch the app without attaching a debugger. DevTools still works, and no debugger extension is required. Equivalent to **Run Without Debugging** (Ctrl+F5). |
 
 ### WinUI DevTools
 
-For **WinUI 3** apps, pressing **F5** also starts **WinUI DevTools** — a live view of the running app's XAML tree. Nothing to install and nothing to add to your app: it is on by default for the `winapp` debug type.
+For supported **WinUI 3 projects**, **F5** also starts **WinUI DevTools**, a live view of the running app's XAML tree. The CLI enables it by default outside CI, respects its saved configuration, and falls back to a normal launch if automatic attachment fails. Set `useDevTools: true` to require attachment explicitly, including for build-output folders.
 
 DevTools has two halves, and you can use either on its own:
 
@@ -236,7 +236,7 @@ DevTools has two halves, and you can use either on its own:
 - **Comments without a running app:** run **WinApp: Open DevTools Comments**. Saved comments can be read, resolved, deleted, and opened in source without launching the app. Live DevTools panels also stay open after debugging stops, with live controls disabled and saved comments available. Comment creation still requires a live element selection.
 - **Choose an inspector:** set `winapp.devTools.inspector` to `vscode` (default) or `native`, or override it with `devToolsInspector` in a launch configuration. Native mode does not automatically open a VS Code panel. In VS Code mode, the extension registers as the app's external inspector: toolbar inspection, the comments list, **Open in DevTools**, and committed inspect picks reveal the corresponding view or element in VS Code without opening a duplicate native inspector.
 - Picking reveals the VS Code panel and clears its text filter. An element outside the loaded/authored tree is shown as an additional root so template parts and deeply nested elements remain inspectable.
-- DevTools inspects **XAML**, so it applies to WinUI 3 apps. For other app types set `"useDevTools": false` — otherwise the panel opens and reports that it couldn't connect.
+- DevTools inspects **XAML**, so it applies to WinUI 3 apps. Automatic mode leaves other app types and incompatible launch modes alone; the panel opens only after the CLI reports a successful attachment.
 - **Packaged apps need App execution aliases enabled** in Windows Settings for DevTools to attach.
 - Editing a property changes the running app only. It does not write back to your XAML — rebuild to keep a change.
 - Set `"noOverlay": true` to keep the VS Code panel but stop drawing the toolbar over your app, for example while recording a demo or taking screenshots.

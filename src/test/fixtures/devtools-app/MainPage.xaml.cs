@@ -11,10 +11,12 @@ namespace DevToolsFixtureApp;
 /// </summary>
 public sealed partial class MainPage : Page
 {
+    public string Title { get; } = "Bound fixture";
+
     public MainPage()
     {
         InitializeComponent();
 
-        // TODO: Add your initialization logic here.
+        DataContext = this;
     }
 }

@@ -19,6 +19,7 @@
     <Grid x:Name="FixtureRoot">
         <StackPanel x:Name="FixturePanel" Margin="24" Spacing="12">
             <TextBlock x:Name="FixtureHeading" Text="DevTools Fixture" FontSize="24" />
+            <TextBlock x:Name="FixtureBoundLabel" Text="{Binding Title, Mode=OneWay}" />
             <Button x:Name="FixtureButton" Content="Fixture Button" />
         </StackPanel>
     </Grid>

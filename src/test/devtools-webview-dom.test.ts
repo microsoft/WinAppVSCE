@@ -528,7 +528,7 @@ test('choosing a different KIND stages the change rather than applying it', asyn
     assert.ok(!h.posted.some((m) => m.type === 'setProperty'), 'staging must not write to the app');
 });
 
-test('an applied KIND survives a reload while nothing has been written yet', async () => {
+test('an applied KIND survives a reload while the next edit is pending', async () => {
     const h = loadPanel();
     await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
     h.send({ type: 'capabilities', canEdit: true, canPick: true, canHighlight: true } as ExtensionToWebviewMessage);
@@ -543,7 +543,7 @@ test('an applied KIND survives a reload while nothing has been written yet', asy
     input.dispatchEvent(new h.dom.window.Event('input', { bubbles: true }));
 
     // The bound value ticking in the app reloads the same element.
-    const ticked = { ...AUTHORED_PROPS, props: [{ ...AUTHORED_PROPS.props[0], value: 'bound title 2' }, AUTHORED_PROPS.props[1]] };
+    const ticked = { ...AUTHORED_PROPS, props: [{ ...AUTHORED_PROPS.props[0], value: 'literal', valueSource: 'DevTools' }, AUTHORED_PROPS.props[1]] };
     h.send({ type: 'properties', properties: ticked } as unknown as ExtensionToWebviewMessage);
 
     const after = h.doc.querySelector('#props-viewport input[aria-label="Text"]') as HTMLInputElement | null;
@@ -582,14 +582,14 @@ test('a pending Restore binding confirmation survives a change to another proper
     const props = (o: string) => ({ ...LIVE_PROPS, props: [text, { ...opacity, value: o }] });
     h.send({ type: 'properties', properties: props('1') } as unknown as ExtensionToWebviewMessage);
     h.expandAllProps();
-    h.send({ type: 'bindingRestoreConfirm', name: 'Text', scope: 'MainPage' } as unknown as ExtensionToWebviewMessage);
+    h.send({ type: 'bindingRestoreConfirm', handle: LIVE_PROPS.handle, name: 'Text', scope: 'MainPage' });
 
     h.send({ type: 'properties', properties: props('0.5') } as unknown as ExtensionToWebviewMessage);
     const labels = Array.from(h.doc.querySelectorAll('#props-viewport button')).map(b => b.textContent);
     assert.ok(labels.includes('Restore binding (confirm)'), 'the second press still confirms');
 });
 
-test('writing a value through the staged kind applies it and drops the staged banner', async () => {
+test('a staged value is not written until Apply, even after Enter or blur', async () => {
     const h = loadPanel();
     await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
     h.send({ type: 'capabilities', canEdit: true, canPick: true, canHighlight: true } as ExtensionToWebviewMessage);
@@ -602,8 +602,12 @@ test('writing a value through the staged kind applies it and drops the staged ba
     input.value = 'literal';
     input.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 
-    assert.ok(h.posted.some((m) => m.type === 'setProperty' && m.value === 'literal'));
-    assert.ok(!h.doc.querySelector('#props-viewport .pstaged'), 'the write was the apply');
+    input.dispatchEvent(new h.dom.window.Event('blur'));
+    assert.ok(!h.posted.some(m => m.type === 'setProperty'));
+    const apply = [...h.doc.querySelectorAll<HTMLButtonElement>('.pstaged button')].find(b => b.textContent === 'Apply')!;
+    apply.click();
+    assert.equal(h.posted.filter(m => m.type === 'setProperty' && m.value === 'literal').length, 1);
+    assert.ok(!h.doc.querySelector('#props-viewport .pstaged'));
 });
 
 test('an edit records the original value and says what it was', async () => {
@@ -945,6 +949,7 @@ test('expanding a bound property asks the host to diagnose the binding', async (
 
     h.send({
         type: 'binding',
+        handle: LIVE_PROPS.handle,
         name: 'Text',
         binding: { status: 'broken', ok: false, source: 'MainViewModel', path: 'Title', mode: 'OneWay' },
     } as ExtensionToWebviewMessage);
@@ -974,6 +979,7 @@ test('an unavailable binding agent is explained rather than left blank', async (
     h.expandAllProps();
     h.send({
         type: 'binding',
+        handle: LIVE_PROPS.handle,
         name: 'Text',
         binding: { unavailable: true, message: 'Binding diagnosis needs a managed (.NET) app.' },
     } as ExtensionToWebviewMessage);
@@ -1275,11 +1281,12 @@ test('adding a comment requires a selected element to anchor it', async () => {
     assert.ok(add.disabled, 'the button waits for the host so the note is not sent twice');
     assert.strictEqual(text.value, '  this needs more padding  ', 'the draft is kept until the add succeeds');
 
-    h.send({ type: 'commentError', message: 'Element is stale' } as ExtensionToWebviewMessage);
+    h.send({ type: 'commentError', message: 'Element is stale', requestId: 1 });
     assert.strictEqual(text.value, '  this needs more padding  ', 'a failure must not lose what was typed');
     assert.ok(!add.disabled, 'and the user can try again');
 
-    h.send({ type: 'commentAdded' } as ExtensionToWebviewMessage);
+    add.click();
+    h.send({ type: 'commentAdded', requestId: 2 });
     assert.strictEqual(text.value, '', 'a confirmed add clears the box');
 });
 
@@ -1603,6 +1610,7 @@ test('once Restore binding lands, the panel stops showing the replaced edit', as
     const input = h.doc.querySelector('#props-viewport input[aria-label="Text"]') as HTMLInputElement;
     input.value = 'literal';
     input.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    [...h.doc.querySelectorAll<HTMLButtonElement>('.pstaged button')].find(b => b.textContent === 'Apply')!.click();
     h.send(props({ ...bound, value: 'literal', valueSource: 'DevTools', binding: undefined }));
     assert.ok((h.doc.getElementById('props-viewport')?.textContent ?? '').includes('was Hello'));
 
@@ -1630,6 +1638,7 @@ test('once an x:Bind restore lands, the panel stops showing the replaced edit', 
     const input = h.doc.querySelector('#props-viewport input[aria-label="Text"]') as HTMLInputElement;
     input.value = 'literal';
     input.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    [...h.doc.querySelectorAll<HTMLButtonElement>('.pstaged button')].find(b => b.textContent === 'Apply')!.click();
     h.send(props({ ...bound, value: 'literal', valueSource: 'DevTools' }));
     assert.ok((h.doc.getElementById('props-viewport')?.textContent ?? '').includes('was Hello'));
 
@@ -1658,7 +1667,7 @@ test('only a resource-authored value offers the resource kind, labelled with its
     h.send(props({ name: 'Foreground', value: '#FF0078D4', valueType: 'Brush', editKind: 'text', writeType: 'Brush', valueSource: 'Local', authoredKind: 'staticResource', authoredKey: 'BrandBrush' }));
     h.expandAllProps();
     assert.strictEqual(h.dropValue('Kind of value for Foreground'), 'resource');
-    h.send({ type: 'resource', name: 'Foreground', resource: { key: 'Foreground', resolved: '2587815578744' } } as ExtensionToWebviewMessage);
+    h.send({ type: 'resource', handle: LIVE_PROPS.handle, name: 'Foreground', resource: { key: 'Foreground', resolved: '2587815578744' } });
     assert.ok((h.doc.querySelector('#props-viewport .pexpand')?.textContent ?? '').includes('currently BrandBrush = #FF0078D4'), 'a bare handle is not a value');
 });
 
@@ -1760,6 +1769,7 @@ test('a healthy binding offers no Restore binding, as there is nothing to restor
     h.expandAllProps();
     h.send({
         type: 'binding',
+        handle: LIVE_PROPS.handle,
         name: 'Text',
         binding: { status: 'evaluated', ok: true, source: 'Vm', path: 'Title', mode: 'OneWay' },
     } as ExtensionToWebviewMessage);
@@ -2019,6 +2029,8 @@ async function openColorPicker(): Promise<{ h: Harness; swatch: HTMLInputElement
     h.expandAllProps();
     // The brush comes from a resource, so colour is a deliberate KIND choice.
     h.pickDrop('Kind of value for Background', 'color');
+    [...h.doc.querySelectorAll<HTMLButtonElement>('.prow[data-prop="Background"] .pstaged button')]
+        .find(b => b.textContent === 'Apply')!.click();
     const swatch = h.doc.querySelector('#props-viewport .pswatch') as HTMLInputElement;
     assert.ok(swatch, 'the colour property should render a swatch');
 
@@ -2097,6 +2109,15 @@ test('Escape restores the original colour and writes nothing', async () => {
         before,
         'a cancelled pick must not reach the engine',
     );
+    assert.equal(h.doc.querySelector<HTMLInputElement>('.pcolor .pfield')?.value, '#FF3FBF6F');
+});
+
+test('opening and closing a picker without editing does not write its RGB fallback', async t => {
+    const { h } = await openColorPicker();
+    t.after(() => h.dom.window.close());
+    const before = h.posted.filter(m => m.type === 'setProperty').length;
+    (h.doc.querySelector('.wcp-done') as HTMLButtonElement).click();
+    assert.equal(h.posted.filter(m => m.type === 'setProperty').length, before);
 });
 
 test('typing a hex into the picker drives the swatch', async () => {
@@ -2110,4 +2131,146 @@ test('typing a hex into the picker drives the swatch', async () => {
     hex.value = '#ff8';
     hex.dispatchEvent(new h.dom.window.Event('input', { bubbles: true }));
     assert.strictEqual(swatch.value.toLowerCase(), '#ffff88');
+});
+
+test('Cancel discards staged text after blur without replacing the binding', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    h.send({ type: 'properties', properties: AUTHORED_PROPS });
+    h.expandAllProps();
+    h.pickDrop('Kind of value for Text', 'text');
+    const input = h.doc.querySelector<HTMLInputElement>('input[aria-label="Text"]')!;
+    input.focus();
+    input.value = 'do not write';
+    input.dispatchEvent(new h.dom.window.Event('input'));
+    const cancel = [...h.doc.querySelectorAll<HTMLButtonElement>('.pstaged button')].find(b => b.textContent === 'Cancel')!;
+    cancel.focus();
+    cancel.click();
+    assert.ok(!h.posted.some(m => m.type === 'setProperty'));
+    assert.equal(h.dropValue('Kind of value for Text'), 'xbind');
+    assert.ok(!h.doc.querySelector('.pstaged'));
+});
+
+test('same-element refresh preserves all compound fields and the active field', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    const properties = {
+        ...LIVE_PROPS, props: [
+            { name: 'Margin', value: '1,2,3,4', valueType: 'Thickness', editKind: 'fields', valueSource: 'Local' },
+            { name: 'Text', value: 'tick 1', valueType: 'String', editKind: 'text' },
+        ],
+    };
+    h.send({ type: 'properties', properties });
+    h.expandAllProps();
+    const fields = [...h.doc.querySelectorAll<HTMLInputElement>('.pfields input')];
+    fields[0].value = '77';
+    fields[0].dispatchEvent(new h.dom.window.Event('input'));
+    fields[1].focus();
+    fields[1].value = '88';
+    fields[1].dispatchEvent(new h.dom.window.Event('input'));
+    h.send({ type: 'properties', properties: { ...properties, props: [properties.props[0], { ...properties.props[1], value: 'tick 2' }] } });
+    const refreshed = [...h.doc.querySelectorAll<HTMLInputElement>('.pfields input')];
+    assert.deepEqual(refreshed.map(f => f.value), ['77', '88', '3', '4']);
+    assert.equal(h.doc.activeElement, refreshed[1]);
+    assert.ok(!h.posted.some(m => m.type === 'setProperty'));
+    refreshed[1].dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+    assert.equal(h.posted.filter(m => m.type === 'setProperty').at(-1)?.value, '77,88,3,4');
+});
+
+test('color text and an open picker survive unrelated property refreshes', async t => {
+    const { h } = await openColorPicker();
+    t.after(() => h.dom.window.close());
+    const popup = h.doc.querySelector('.wcp-pop')!;
+    h.send({ type: 'properties', properties: AUTHORED_PROPS });
+    assert.ok(popup.isConnected);
+    h.doc.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    h.pickDrop('Kind of value for Background', 'color');
+    const text = h.doc.querySelector<HTMLInputElement>('.pcolor .pfield')!;
+    text.focus();
+    text.value = '#123456';
+    text.dispatchEvent(new h.dom.window.Event('input'));
+    h.send({ type: 'properties', properties: AUTHORED_PROPS });
+    const after = h.doc.querySelector<HTMLInputElement>('.pcolor .pfield')!;
+    assert.equal(after.value, '#123456');
+    assert.equal(h.doc.activeElement, after);
+});
+
+test('binding and resource replies from another element cannot populate the selected property', t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    const props = { ...AUTHORED_PROPS, handle: 'B', props: AUTHORED_PROPS.props.map(p => ({ ...p, valueSource: 'DevTools' })) };
+    h.send({ type: 'properties', properties: props });
+    h.expandAllProps();
+    h.send({ type: 'bindingRestoreConfirm', handle: 'A', name: 'Text', scope: 'WrongPage' });
+    h.send({ type: 'binding', handle: 'A', name: 'Text', binding: { source: 'WrongSource' } });
+    h.send({ type: 'resource', handle: 'A', name: 'Background', resource: { key: 'WrongResource' } });
+    assert.doesNotMatch(h.doc.getElementById('props-viewport')!.textContent!, /WrongPage|WrongSource|WrongResource|Restore binding \(confirm\)/);
+    h.send({ type: 'bindingRestoreConfirm', handle: 'B', name: 'Text', scope: 'RightPage' });
+    assert.match(h.doc.getElementById('props-viewport')!.textContent!, /RightPage/);
+});
+
+test('pending comments are locked and stale acknowledgments cannot clear a retry', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE });
+    h.send({ type: 'selectHandle', handle: '134218229' });
+    h.send({ type: 'showComments' });
+    const text = h.doc.getElementById('compose-text') as HTMLTextAreaElement;
+    const add = h.doc.getElementById('compose-add') as HTMLButtonElement;
+    text.value = 'first';
+    text.dispatchEvent(new h.dom.window.Event('input'));
+    add.click();
+    assert.ok(text.disabled && add.disabled);
+    text.dispatchEvent(new h.dom.window.Event('input'));
+    assert.ok(add.disabled);
+    h.send({ type: 'commentError', requestId: 1, message: 'retry' });
+    assert.ok(!text.disabled);
+    text.value = 'second';
+    text.dispatchEvent(new h.dom.window.Event('input'));
+    add.click();
+    h.send({ type: 'commentAdded', requestId: 1 });
+    assert.equal(text.value, 'second');
+    assert.ok(text.disabled);
+    h.send({ type: 'commentAdded', requestId: 2 });
+    assert.equal(text.value, '');
+    assert.ok(!text.disabled);
+});
+
+test('returning to a binding or resource KIND cancels the literal stage', t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    h.send({ type: 'properties', properties: AUTHORED_PROPS });
+    h.expandAllProps();
+    for (const [name, literal, original] of [['Text', 'text', 'xbind'], ['Background', 'color', 'resource']]) {
+        h.pickDrop('Kind of value for ' + name, literal);
+        assert.ok(h.doc.querySelector('.prow[data-prop="' + name + '"] .pstaged'));
+        h.pickDrop('Kind of value for ' + name, original);
+        assert.ok(!h.doc.querySelector('.prow[data-prop="' + name + '"] .pstaged'));
+    }
+    assert.ok(!h.posted.some(m => m.type === 'setProperty'));
+});
+
+test('closing a picker flushes a changed property payload even without a prior text draft', async t => {
+    const { h } = await openColorPicker();
+    t.after(() => h.dom.window.close());
+    h.send({ type: 'properties', properties: {
+        ...AUTHORED_PROPS, props: [
+            { ...AUTHORED_PROPS.props[0], value: 'changed while picking' },
+            { ...AUTHORED_PROPS.props[1], valueSource: 'DevTools' },
+        ],
+    } });
+    assert.notEqual(h.doc.querySelector('.prow[data-prop="Text"] .pvalue')?.textContent, 'changed while picking');
+    h.doc.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await h.flush();
+    assert.equal(h.doc.querySelector('.prow[data-prop="Text"] .pvalue')?.textContent, 'changed while picking');
+});
+
+test('comment markup is displayed literally and cannot create executable elements', t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    const text = '<svg onload="globalThis.__winappSecurityProbe=1"></svg>';
+    h.send({ type: 'comments', comments: [{ id: 'probe', text, status: 'open' }] });
+    assert.ok(h.doc.getElementById('comments-host')?.textContent?.includes(text));
+    assert.equal(h.doc.querySelector('#comments-host svg'), null);
+    assert.equal(Reflect.get(h.dom.window, '__winappSecurityProbe'), undefined);
 });

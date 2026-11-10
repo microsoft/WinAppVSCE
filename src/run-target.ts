@@ -8,7 +8,7 @@ import type { WorkspaceRoot } from './workspace';
 export type RunTargetKind = 'project' | 'solution' | 'folder' | 'unknown';
 
 /** Project file extensions the CLI can build in project mode. */
-export const PROJECT_FILE_EXTENSIONS = ['.csproj'] as const;
+export const PROJECT_FILE_EXTENSIONS = ['.csproj', '.vcxproj'] as const;
 
 /**
  * .NET file-based apps run in project mode but are deliberately excluded from

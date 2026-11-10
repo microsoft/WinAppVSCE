@@ -390,6 +390,13 @@ export function parseRunErrorFromJson(output: string): string | undefined {
 	return typeof error === 'string' && error.trim() ? error.trim() : undefined;
 }
 
+/** Successful attachment carries a node count; disabled/fallback launches do not. */
+export function parseDevToolsAttachedFromJson(output: string): boolean {
+	const result = extractJsonObject(output)?.devTools;
+	return !!result && typeof result === 'object' && 'nodeCount' in result
+		&& typeof result.nodeCount === 'number';
+}
+
 /** Keeps a notification message to one line's worth of text. */
 export const PROGRESS_MESSAGE_MAX_LENGTH = 120;
 
@@ -437,4 +444,3 @@ export function createProgressLineReader(): (chunk: string) => string | undefine
 		return message;
 	};
 }
-

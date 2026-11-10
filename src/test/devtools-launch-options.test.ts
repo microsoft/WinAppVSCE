@@ -32,8 +32,10 @@ test('only an explicit false turns DevTools off', () => {
 
 // ───────────────────────────── spawn arguments ─────────────────────────────
 
-test('an unconfigured launch asks the CLI for DevTools on', () => {
-    assert.deepStrictEqual(devToolsSpawnArgs({}), ['--devtools', 'on']);
+test('an unconfigured launch preserves the CLI automatic mode', () => {
+    assert.deepStrictEqual(devToolsSpawnArgs({}), []);
+    assert.deepStrictEqual(devToolsSpawnArgs({ withoutAlias: true }), []);
+    assert.deepStrictEqual(devToolsSpawnArgs({ useDevTools: true }), ['--devtools', 'on']);
 });
 
 test('opting out turns DevTools off explicitly', () => {
@@ -60,13 +62,14 @@ test('off wins over noOverlay', () => {
 });
 
 test('an explicitly false noOverlay keeps the overlay', () => {
-    assert.deepStrictEqual(devToolsSpawnArgs({ noOverlay: false }), ['--devtools', 'on']);
+    assert.deepStrictEqual(devToolsSpawnArgs({ noOverlay: false }), []);
 });
 
 test('the mode is always one the CLI accepts', () => {
     // --devtools is a valued option; a bare flag or an unknown mode fails the launch.
     for (const config of [{}, { useDevTools: true }, { useDevTools: false }, { noOverlay: true }]) {
         const args = devToolsSpawnArgs(config);
+        if (args.length === 0) { continue; }
         assert.strictEqual(args[0], '--devtools', `missing flag for ${JSON.stringify(config)}`);
         assert.ok(
             ['on', 'off', 'headless'].includes(args[1]),
@@ -132,7 +135,7 @@ test('noDebug leaves DevTools fully enabled', () => {
     // would lose the panel it exists to provide.
     const config = { noDebug: true };
     assert.strictEqual(shouldUseDevTools(config), true);
-    assert.deepStrictEqual(devToolsSpawnArgs(config), ['--devtools', 'on']);
+    assert.deepStrictEqual(devToolsSpawnArgs(config), []);
 });
 
 test('noDebug and useDevTools are independent across every combination', () => {

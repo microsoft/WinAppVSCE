@@ -1,15 +1,5 @@
 import { normalizeEnumerateResult, VisualNode, VisualTreeEnumerateResult } from './protocol';
 
-/** How many loaded nodes carry an x:Name; branches not yet enumerated are not counted. */
-export function countNamedNodes(nodes: VisualNode[], name: string): number {
-    let count = 0;
-    for (const node of nodes) {
-        if (node.name === name) { count++; }
-        count += countNamedNodes(node.children ?? [], name);
-    }
-    return count;
-}
-
 export function findTreeNode(nodes: VisualNode[], handle: string): VisualNode | undefined {
     for (const node of nodes) {
         if (node.handle === handle) { return node; }

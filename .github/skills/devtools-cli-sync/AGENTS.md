@@ -18,7 +18,7 @@ anything; several passes depend on facts established by earlier passes.
 
 Upstream coordinates:
 
-- repo `microsoft/winappCli`, branch **`nmetulev-devtools`**, PR **#943**
+- repo `microsoft/winappCli`, branch **`main`**, including merged **#1296**
 - tracking issue for engine gaps that block or inconvenience us:
   **`microsoft/winappCli#1051`**
 - our PR: `microsoft/WinAppVSCE` **#295**
@@ -47,12 +47,13 @@ It needs `gh` authenticated against `microsoft/winappCli`. This is local-only on
 purpose: CI's `GITHUB_TOKEN` cannot read that repository, so automating it would
 mean storing a cross-repo PAT.
 
-**Do not use `scripts/download-cli.ps1`.** It only fetches published GitHub
-*releases*, and there is no DevTools prerelease. Builds come from branch CI.
+`scripts/download-cli.ps1` downloads the build pinned in `cli-version.json`.
+For CI pins it verifies the main push, artifact identity, and archive SHA256.
+Update that pin and `schemas/devtools/pinned-cli.json` together.
 
 ```powershell
 # Latest successful branch build
-gh run list --repo microsoft/winappCli --branch nmetulev-devtools `
+gh run list --repo microsoft/winappCli --branch main `
   --workflow "Build and Package" --limit 5 `
   --json databaseId,conclusion,createdAt `
   -q '.[] | "\(.databaseId)  \(.conclusion)  \(.createdAt)"'
@@ -164,9 +165,9 @@ Current contract, and why each part matters:
 
 - `--devtools` is a **valued** option taking `on | off | headless`. It is not a
   bare switch; if you pass it bare it swallows the next argument.
-- We always pass the mode **explicitly, including `off`**, because the CLI turns
-  DevTools on by default for WinUI projects — omitting the flag would enable it
-  for someone who wrote `useDevTools: false`.
+- Omit the mode for automatic launches so CLI defaults and fail-open behavior apply.
+  Explicit `useDevTools: true` sends `on`; `false` sends `off`; `noOverlay` sends `headless`.
+  Open the panel only when the launch JSON reports a successful attachment.
 - `headless` = engine running, overlay toolbar not drawn. That is what our
   `noOverlay` launch.json property maps to, because the panel is a second client
   and must keep the engine alive.
