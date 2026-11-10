@@ -192,7 +192,7 @@ You can press F5 without creating `launch.json` first: WinApp contributes a defa
 | `args` | string | | Command-line arguments to pass to the application. |
 | `outputAppxDirectory` | string | | Output directory for the loose-layout package. Defaults to an `AppX` folder inside the input folder. |
 | `useDevTools` | boolean | automatic | Override the CLI's [WinUI DevTools](#winui-devtools) choice: `true` requires DevTools; `false` disables it. Omit to use CLI defaults. |
-| `noOverlay` | boolean | `false` | Suppress the in-app DevTools overlay while keeping DevTools inspection available. Requires `useDevTools`. |
+| `noOverlay` | boolean | `false` | Run DevTools headless: inspection and the VS Code panel work, but the in-app toolbar stays hidden. Ignored when `useDevTools` is `false`. |
 | `devToolsInspector` | string | setting | Override `winapp.devTools.inspector`: `vscode` opens the editor panel; `native` leaves inspection to the app toolbar. |
 | `noDebug` | boolean | `false` | Launch the app without attaching a debugger. DevTools still works, and no debugger extension is required. Equivalent to **Run Without Debugging** (Ctrl+F5). |
 
@@ -210,12 +210,12 @@ DevTools has two halves, and you can use either on its own:
 | | |
 |---|---|
 | **Visual tree** | The live element tree. Hovering highlights an element; selecting a row also synchronizes the engine selection. Expand a truncated branch to load its children. |
-| **Filter** | Type to match element types and names; prefix with `#` to search names only. |
+| **Filter** | Type to match element types, names and their on-screen text; prefix with `#` to search names only. The selected element stays visible while filtering. |
 | **Pick element** (Ctrl+Shift+C) | Click an element in the running app to select it in the tree. |
 | **Track keyboard focus** | Follow focus through the app as you tab around it — useful for chasing down accessibility and tab-order bugs. |
 | **Layout adorners** | Draw margin, padding and alignment over the selected element, in the app and as a box model in the panel. |
-| **Just my XAML** | Hide framework-internal elements so the tree matches the markup you wrote. On by default. |
-| **Property grid** | Read and edit properties live. **Computed** shows every property's resolved value; **Set** shows only what was authored, grouped by where it came from. Colours open a themed picker, enums become dropdowns, and a bound property shows its path, mode and why it is or isn't resolving. |
+| **Just my XAML** | Hide framework-internal elements so the tree matches the markup you wrote. On by default. If an app has no XAML source information (DevTools attached after it started), the panel says so and shows the full tree. |
+| **Property grid** | Read and edit properties live. **Computed** shows every property's resolved value; **Set** shows only what was authored, grouped by where it came from. Colors open a themed picker with common presets, enums become dropdowns, and a bound property shows its path, mode and why it is or isn't resolving. |
 | **Go to source** | The properties header names the file and line that declared the selected element — click it to open that XAML in an adjacent editor group. |
 | **Comments** | Leave a note on an element. The engine anchors each one to the element's declaration site and tracks it as open, resolved or stale — so a note survives the element moving, and tells you when it can no longer find what you meant. |
 
@@ -232,13 +232,15 @@ DevTools has two halves, and you can use either on its own:
 
 **Notes and limits:**
 
-- **Attach to an existing app:** run **WinApp: Attach DevTools to Running App** from the Command Palette. Choose a running WinUI app; the extension infers the source root from a matching project in the workspace, or asks you to choose when ambiguous. This attaches DevTools, not a language debugger.
+- **Attach to an existing app:** run **WinApp: Attach DevTools to Running App** from the Command Palette. Choose a running WinUI app; the extension uses the workspace project that built the running exe (or a matching project name), asks when ambiguous, and keeps the project folder an app already reports. This attaches DevTools, not a language debugger.
+- **Reopen a closed panel:** run **WinApp: Show DevTools Panel**. It brings back the panel for an app that still has DevTools attached.
 - **Comments without a running app:** run **WinApp: Open DevTools Comments**. Saved comments can be read, resolved, deleted, and opened in source without launching the app. Live DevTools panels also stay open after debugging stops, with live controls disabled and saved comments available. Comment creation still requires a live element selection.
 - **Choose an inspector:** set `winapp.devTools.inspector` to `vscode` (default) or `native`, or override it with `devToolsInspector` in a launch configuration. Native mode does not automatically open a VS Code panel. In VS Code mode, the extension registers as the app's external inspector: toolbar inspection, the comments list, **Open in DevTools**, and committed inspect picks reveal the corresponding view or element in VS Code without opening a duplicate native inspector.
 - Picking reveals the VS Code panel and clears its text filter. An element outside the loaded/authored tree is shown as an additional root so template parts and deeply nested elements remain inspectable.
 - DevTools inspects **XAML**, so it applies to WinUI 3 apps. Automatic mode leaves other app types and incompatible launch modes alone; the panel opens only after the CLI reports a successful attachment.
 - **Packaged apps need App execution aliases enabled** in Windows Settings for DevTools to attach.
 - Editing a property changes the running app only. It does not write back to your XAML — rebuild to keep a change.
+- The panel shows resource references and bindings read-only. Assigning a different resource key, editing a binding, or switching `x:Bind` to `{Binding}` live is not supported; change the XAML and restart the app.
 - Set `"noOverlay": true` to keep the VS Code panel but stop drawing the toolbar over your app, for example while recording a demo or taking screenshots.
 
 > The `--detach` and `--no-launch` CLI options are deliberately not available in `launch.json`: both leave no running process for the debugger to attach to. Use **WinApp: Run Application With Options...** if you need them. The same applies to `--debug-output` and `--symbols` — `--debug-output` attaches the CLI's own debugger, and only one debugger can attach to a process at a time.

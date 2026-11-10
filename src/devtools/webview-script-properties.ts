@@ -381,7 +381,50 @@ export const PROPERTIES_FRAGMENT = `
             }
         }
         box.appendChild(facts);
+        const why = layoutExplanation(layout, payload);
+        if (why) {
+            const text = document.createElement('div');
+            text.className = 'lay-why';
+            text.textContent = why;
+            box.appendChild(text);
+        }
         return box;
+    }
+
+    function numericProp(payload, name) {
+        const prop = ((payload && payload.props) || []).find(function (p) { return p.name === name; });
+        const value = prop ? Number(String(prop.value).trim()) : NaN;
+        return isFinite(value) ? value : NaN;
+    }
+
+    /** Plain-language reason the element is not the size it asked for, as the native adorner explains it. */
+    function layoutExplanation(layout, payload) {
+        const actual = layout.actual || layout.render;
+        if (!actual) { return ''; }
+        const lines = [];
+        const axes = [
+            { key: 'w', size: 'Width', max: 'MaxWidth', word: 'wide', parent: layout.parent && layout.parent.w },
+            { key: 'h', size: 'Height', max: 'MaxHeight', word: 'tall', parent: layout.parent && layout.parent.h },
+        ];
+        for (const axis of axes) {
+            const got = Number(actual[axis.key]);
+            if (!isFinite(got)) { continue; }
+            const asked = numericProp(payload, axis.size);
+            const cap = numericProp(payload, axis.max);
+            const wanted = layout.desired ? Number(layout.desired[axis.key]) : NaN;
+            if (isFinite(asked) && got < asked - 0.5) {
+                let reason = 'layout gave it less room';
+                if (isFinite(cap) && cap < asked) { reason = axis.max + ' caps it at ' + num(cap); }
+                else if (isFinite(axis.parent) && axis.parent < asked) {
+                    reason = 'the parent ' + shortTypeName(layout.parent.type) + ' is only ' + num(axis.parent) + ' ' + axis.word;
+                }
+                lines.push('Asked for ' + num(asked) + ' ' + axis.word + ', got ' + num(got) + ': ' + reason + '.');
+            } else if (!isFinite(asked) && isFinite(wanted) && wanted > got + 0.5) {
+                lines.push('Its content wants ' + num(wanted) + ' ' + axis.word + ' but only gets ' + num(got)
+                    + ', so it is clipped. Give it more ' + (axis.key === 'w' ? 'width' : 'height') + ' or let the content wrap.');
+            }
+        }
+        return lines.join(' ');
     }
 
     /** One labelled rect of the box model, with its four edge values. */
@@ -592,7 +635,8 @@ export const PROPERTIES_FRAGMENT = `
         line.style.paddingLeft = (4 + depth * INDENT_PX) + 'px';
 
         const open = state.openProps.has(rowKey(prop));
-        const edited = !prop.parent && isEdited(payload.handle, prop.name);
+        // A live write from any client (this panel, the CLI) counts as a change, not only ours.
+        const edited = !prop.parent && (isEdited(payload.handle, prop.name) || prop.valueSource === 'DevTools');
         const toggle = function () { togglePropExpand(prop, payload); };
 
         // Decorative: the value button below is the one keyboard stop and
@@ -702,6 +746,7 @@ export const PROPERTIES_FRAGMENT = `
 
     function clearValue(handle, prop) {
         recordOriginal(handle, prop);
+        state.clearing[editKey(handle, prop.name)] = prop.valueSource || '';
         vscode.postMessage({ type: 'clearProperty', handle: handle, name: prop.name });
         renderProperties();
     }
@@ -775,12 +820,24 @@ export const PROPERTIES_FRAGMENT = `
 
     function togglePropExpand(prop, payload) {
         const key = rowKey(prop);
+        // The header is rebuilt, so keyboard focus is put back on it rather than lost to the page.
+        const hadFocus = el.propsViewport.contains(document.activeElement);
+        const refocus = function () {
+            if (!hadFocus) { return; }
+            const rows = el.propsViewport.querySelectorAll('.prow');
+            for (const row of Array.from(rows)) {
+                if (row.dataset.prop !== key) { continue; }
+                const button = row.querySelector('.pvalue');
+                if (button) { button.focus(); }
+                return;
+            }
+        };
         if (state.openProps.has(key)) {
             state.openProps.delete(key);
         } else {
             state.openProps.add(key);
             // Sub-property rows are read-only; the engine cannot address them by path.
-            if (prop.parent) { renderProperties(); return; }
+            if (prop.parent) { renderProperties(); refocus(); return; }
             // Binding diagnosis is expensive and needs the managed agent, so it
             // is requested only when the card is actually opened.
             if (wantsDiagnosis(prop) && !state.bindings[prop.name]) {
@@ -799,6 +856,23 @@ export const PROPERTIES_FRAGMENT = `
             }
         }
         renderProperties();
+        refocus();
+    }
+
+    /**
+     * A Clear value that put the app back on the value it started with is no
+     * longer a change. Only judged once the clear has landed (the value source
+     * moved), so a poll racing the write cannot drop a real edit's marker.
+     */
+    function dropSettledEdits(handle, props) {
+        for (const prop of props || []) {
+            const key = editKey(handle, prop.name);
+            if (!Object.prototype.hasOwnProperty.call(state.clearing, key)) { continue; }
+            if (prop.valueSource === state.clearing[key]) { continue; }
+            delete state.clearing[key];
+            const record = state.edited[key];
+            if (record && String(prop.value) === String(record.value)) { delete state.edited[key]; }
+        }
     }
 
     /** The kinds the native KIND dropdown can offer for a given property. */
@@ -838,7 +912,7 @@ export const PROPERTIES_FRAGMENT = `
         text: 'Text',
         bool: 'True / False',
         enum: 'One of a set',
-        color: 'Colour',
+        color: 'Color',
         fields: 'Separate fields',
         resource: 'A resource key',
         binding: 'A binding',
@@ -865,7 +939,9 @@ export const PROPERTIES_FRAGMENT = `
     /** What the value is now, as the native window reports it; a live write makes it a literal. */
     function currentKind(prop) {
         const kinds = kindsFor(prop);
-        if (prop.valueSource === 'DevTools') { return kinds[0]; }
+        if (prop.valueSource === 'DevTools') {
+            return kinds.find(function (k) { return k !== 'xbind' && k !== 'binding' && k !== 'resource'; }) || 'text';
+        }
         if (prop.authoredKind === 'xBind') { return 'xbind'; }
         if (prop.binding || prop.valueSource === 'Binding' || prop.authoredKind === 'binding') { return 'binding'; }
         if (isResourceAuthored(prop)) { return 'resource'; }

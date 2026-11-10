@@ -174,7 +174,7 @@ export function ensureFixtureAppBuilt(): string {
  * .vscode/launch.json into a committed fixture would dirty the repo on every
  * run. `inputFolder` is absolute, so the workspace itself can be empty.
  */
-export function createDevToolsWorkspace(inputFolder: string): string {
+export function createDevToolsWorkspace(inputFolder: string, options: { noOverlay?: boolean } = {}): string {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devtools-e2e-'));
     const vscodeDir = path.join(tmpDir, '.vscode');
     fs.mkdirSync(vscodeDir, { recursive: true });
@@ -193,6 +193,7 @@ export function createDevToolsWorkspace(inputFolder: string): string {
                     // spec does not depend on C# Dev Kit being installed.
                     noDebug: true,
                     useDevTools: true,
+                    ...(options.noOverlay ? { noOverlay: true } : {}),
                     unregisterOnExit: true,
                 },
             ],

@@ -34,6 +34,7 @@
     "onLanguage:xml",
     "onDebugResolve:winapp",
     "onCommand:winapp.attachDevTools",
+    "onCommand:winapp.showDevTools",
     "onCommand:winapp.openDevToolsComments",
     "onCommand:winapp.devToolsTogglePick",
     "onCommand:winapp.new",
@@ -100,6 +101,11 @@
       {
         "command": "winapp.attachDevTools",
         "title": "Attach DevTools to Running App",
+        "category": "WinApp"
+      },
+      {
+        "command": "winapp.showDevTools",
+        "title": "Show DevTools Panel",
         "category": "WinApp"
       },
       {
@@ -468,7 +474,7 @@
               "noOverlay": {
                 "type": "boolean",
                 "default": false,
-                "description": "Suppress the in-app DevTools overlay while keeping DevTools inspection available. Requires 'useDevTools'."
+                "description": "Run DevTools headless: inspection and the VS Code panel work, but the in-app toolbar stays hidden. Ignored when 'useDevTools' is false."
               },
               "devToolsInspector": {
                 "type": "string",

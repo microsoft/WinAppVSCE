@@ -11,6 +11,7 @@ import * as crypto from 'crypto';
 import { DevToolsClient, DevToolsError } from './devtools-client';
 import { getDevToolsWebviewContent } from './webview-content';
 import {
+    CommentPayload,
     ExtensionToWebviewMessage,
     PropertiesPayload,
     SourceLocation,
@@ -49,6 +50,21 @@ const TREE_REFRESH_DEBOUNCE_MS = 300;
  * comment added from the overlay reaches the panel.
  */
 const COMMENT_POLL_MS = 1500;
+
+/** The protocol has no comment events, so the badge is refreshed this often while the tree tab is up. */
+const COMMENT_BACKGROUND_POLL_MS = 6000;
+
+/** New windows raise no protocol event, so the window list is re-read this often. */
+const SURFACE_POLL_MS = 3000;
+
+/** Window titles come from a CLI process, so they are re-read at most this often. */
+const WINDOW_TITLE_REFRESH_MS = 10000;
+
+/**
+ * The engine builds a headless app's overlay with the toolbar shown. Builds the
+ * panel causes are re-hidden; this window covers builds the engine attributes to nobody.
+ */
+const HEADLESS_SETTLE_MS = 5000;
 
 /** The engine only emits `Property.changed` for DevTools writes, so app-driven changes are polled. */
 const PROPERTY_POLL_MS = 1000;
@@ -94,12 +110,24 @@ interface SurfaceListResult {
     surfaces?: { name: string; window?: string; active?: boolean }[];
 }
 
+interface OverlayStateEvent {
+    toolbarVisible?: boolean;
+    toolbarOwner?: string;
+    origin?: string | null;
+}
+
+/** Explains a raw-tree fallback; shown instead of an empty tree. */
+const RAW_TREE_NOTICE = 'This app has no XAML source information (DevTools was not on when it started), '
+    + 'so Just my XAML has nothing to match. Showing the full visual tree.';
+
 export class DevToolsPanel {
     private static readonly viewType = 'winapp.devToolsPanel';
 
     /** Panels keyed by process id so a second launch reuses nothing stale. */
     private static readonly open = new Map<number, DevToolsPanel>();
     private static readonly commentPanels = new Map<string, DevToolsPanel>();
+    /** Source roots of apps a panel was opened for, so a closed panel reopens on the same project. */
+    private static readonly sourceRoots = new Map<number, string>();
 
     private readonly disposables: vscode.Disposable[] = [];
     private client: DevToolsClient | undefined;
@@ -125,6 +153,21 @@ export class DevToolsPanel {
     private readonly expanding = new Set<string>();
     private refreshingComments = false;
     private readonly bindingInspections = new Map<string, Promise<ExtensionToWebviewMessage>>();
+    /** True while the authored tree is empty and the raw tree is shown in its place. */
+    private rawFallback = false;
+    private keepToolbarHidden = false;
+    private connectedAt = 0;
+    private surfacePoll: NodeJS.Timeout | undefined;
+    private readonly windowTitles = new Map<string, string>();
+    private windowTitlesAt = 0;
+    private lastSurfacesJson = '';
+    private commentTicks = 0;
+    /** CLI view of each comment (current line, placement reason), keyed by id. */
+    private commentDetails = new Map<string, CommentPayload>();
+    private commentDetailsStale = true;
+    private commentStoreError: string | undefined;
+    private lastLiveCommentsJson = '';
+    private lastLayoutJson = '';
 
     /** Shared across panels so protocol noise lands in one place. */
     private static output: vscode.OutputChannel | undefined;
@@ -154,6 +197,13 @@ export class DevToolsPanel {
             null,
             this.disposables,
         );
+        // Editing XAML moves declarations, so comment lines are re-resolved on the next read.
+        vscode.workspace.onDidSaveTextDocument(document => {
+            if (/\.xaml$/i.test(document.fileName)) {
+                this.commentDetailsStale = true;
+                if (this.commentsVisible) { void this.refreshComments(true).catch(error => this.reportError(error)); }
+            }
+        }, null, this.disposables);
     }
 
     /**
@@ -192,7 +242,23 @@ export class DevToolsPanel {
 
         const instance = new DevToolsPanel(panel, processId, extensionUri, sourceRoot);
         DevToolsPanel.open.set(processId, instance);
+        DevToolsPanel.sourceRoots.set(processId, sourceRoot);
         return instance;
+    }
+
+    static knownSourceRoot(processId: number): string | undefined {
+        return DevToolsPanel.sourceRoots.get(processId);
+    }
+
+    /** Brings a connected panel to the front; false when none is open. */
+    static revealLive(): boolean {
+        for (const instance of DevToolsPanel.open.values()) {
+            if (!instance.disposed && !instance.ended) {
+                instance.panel.reveal(undefined, false);
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Closes the panel for a process, if one is open. */
@@ -321,12 +387,39 @@ export class DevToolsPanel {
                 this.reportError(error);
             }
         }
+        // Read before the event streams start: enabling them can itself build a headless app's overlay.
+        const overlay = await this.client.trySend<OverlayStateEvent>('Overlay.getState', {});
+        this.keepToolbarHidden = overlay?.toolbarVisible === false;
+        this.connectedAt = Date.now();
         await this.client.enableEventStreams();
+        if (this.keepToolbarHidden) {
+            const now = await this.client.trySend<OverlayStateEvent>('Overlay.getState', {});
+            if (now) { this.onOverlayStateChanged(this.client, now); }
+        }
         this.startPropertyPoll();
+        this.startSurfacePoll();
+        this.startCommentPoll();
 
         await this.refreshTree();
         await this.refreshSurfaces();
         await this.refreshComments();
+    }
+
+    /**
+     * Keeps a headless app's toolbar hidden when the panel's own overlay use builds it.
+     * A toolbar the user brings back (Ctrl+Shift+F12) is left alone.
+     */
+    private onOverlayStateChanged(client: DevToolsClient, state: OverlayStateEvent): void {
+        if (!this.keepToolbarHidden || state.toolbarVisible !== true) { return; }
+        // The engine attributes events to its connection id; older builds used the owner token.
+        const self = [client.info?.connectionId, client.ownerToken].filter(Boolean);
+        const ours = self.includes(state.origin ?? '') || self.includes(state.toolbarOwner ?? '');
+        const settling = !state.origin && Date.now() - this.connectedAt < HEADLESS_SETTLE_MS;
+        if (!ours && !settling) {
+            this.keepToolbarHidden = false;
+            return;
+        }
+        void client.trySend('Overlay.hide', { owner: client.ownerToken });
     }
 
     private registerEventHandlers(client: DevToolsClient): void {
@@ -368,6 +461,10 @@ export class DevToolsPanel {
         client.on('Selection.armChanged', (payload) => {
             const armed = (payload as { armed?: boolean })?.armed === true;
             this.post({ type: 'pickStateChanged', armed });
+        });
+
+        client.on('Overlay.stateChanged', (payload) => {
+            this.onOverlayStateChanged(client, (payload ?? {}) as OverlayStateEvent);
         });
 
         client.on('Property.changed', (payload) => {
@@ -421,7 +518,14 @@ export class DevToolsPanel {
     }
 
     private postTree(): void {
-        this.post({ type: 'tree', tree: { nodes: this.lastTree, authored: this.authoredOnly } });
+        this.post({
+            type: 'tree',
+            tree: {
+                nodes: this.lastTree,
+                authored: this.authoredOnly,
+                notice: this.rawFallback ? RAW_TREE_NOTICE : undefined,
+            },
+        });
     }
 
     private async expandNode(handle: string): Promise<void> {
@@ -433,7 +537,7 @@ export class DevToolsPanel {
         this.expanding.add(key);
         try {
             const result = await client.send<VisualTreeEnumerateResult>('VisualTree.enumerate', {
-                rootHandle: handle, authored: this.authoredOnly, depth: DEFAULT_TREE_DEPTH,
+                rootHandle: handle, authored: this.authoredOnly && !this.rawFallback, depth: DEFAULT_TREE_DEPTH,
             });
             if (revision !== this.treeRevision) { return; }
             const replacement = subtreeRoot(result, handle);
@@ -461,19 +565,24 @@ export class DevToolsPanel {
             await client.send('Comment.add', { handle, text });
             return undefined;
         } catch (err) {
-            return err instanceof Error ? err.message : String(err);
+            const message = err instanceof Error ? err.message : String(err);
+            // The engine's failure is generic; the store itself says why (read-only, corrupt).
+            const problem = await this.cli.commentStoreProblem(this.sourceRoot).catch(() => undefined);
+            return problem ? `${problem} The comment was not saved.` : message;
         }
     }
 
     /**
      * The protocol has no `Comment.changed` event, so a comment added from the
-     * overlay would never reach the panel. Polling only runs while the Comments
-     * tab is actually on screen, and only re-posts when the list differs.
+     * overlay would never reach the panel. The list is polled quickly while the
+     * Comments tab is on screen and slowly otherwise, so the tab badge stays current.
      */
     private startCommentPoll(): void {
         if (this.commentPoll) { return; }
+        const slowEvery = Math.max(1, Math.round(COMMENT_BACKGROUND_POLL_MS / COMMENT_POLL_MS));
         this.commentPoll = setInterval(() => {
-            if (!this.commentsVisible || this.disposed || !this.panel.visible) { return; }
+            if (this.disposed || !this.panel.visible) { return; }
+            if (!this.commentsVisible && (++this.commentTicks % slowEvery !== 0 || !this.connected)) { return; }
             void this.refreshComments(false).catch(error => this.reportError(error));
         }, COMMENT_POLL_MS);
     }
@@ -484,8 +593,22 @@ export class DevToolsPanel {
             const handle = this.selectedHandle;
             if (!handle || this.propertyPollBusy || this.disposed || !this.connected || !this.panel.visible) { return; }
             this.propertyPollBusy = true;
-            void this.loadProperties(handle, true).finally(() => { this.propertyPollBusy = false; });
+            void this.loadProperties(handle, true)
+                .then(() => this.refreshLayout(handle))
+                .finally(() => { this.propertyPollBusy = false; });
         }, PROPERTY_POLL_MS);
+    }
+
+    /** A window resize re-lays out the element without any event, so the adorner numbers are polled too. */
+    private async refreshLayout(handle: string): Promise<void> {
+        const client = this.client;
+        if (!this.layoutOn || !client || this.selectedHandle !== handle) { return; }
+        const layout = await client.trySend('Layout.get', { handle });
+        if (!layout || this.selectedHandle !== handle || !this.layoutOn) { return; }
+        const json = JSON.stringify(layout);
+        if (json === this.lastLayoutJson) { return; }
+        this.lastLayoutJson = json;
+        this.post({ type: 'layout', layout: layout as never });
     }
 
     private stopPropertyPoll(): void {
@@ -509,8 +632,10 @@ export class DevToolsPanel {
         if (this.disposed || this.refreshingComments) { return; }
         this.refreshingComments = true;
         try {
-            const comments = client && this.connected
-                ? (await client.send<CommentListResult>('Comment.list', {})).comments?.map(row => ({
+            let comments: CommentPayload[];
+            let storeError: string | undefined;
+            if (client && this.connected) {
+                comments = (await client.send<CommentListResult>('Comment.list', {})).comments?.map(row => ({
                     id: row.id,
                     text: row.text,
                     status: row.status,
@@ -519,18 +644,63 @@ export class DevToolsPanel {
                     file: row.file || row.uri,
                     line: row.line,
                     requiresConfirmation: row.placed === false,
-                })) ?? []
-                : await this.cli.comments(this.sourceRoot);
+                })) ?? [];
+                if (!this.connected) { return; }
+                const changed = JSON.stringify(comments) !== this.lastLiveCommentsJson;
+                this.lastLiveCommentsJson = JSON.stringify(comments);
+                if (force || changed || this.commentDetailsStale) {
+                    storeError = await this.loadCommentDetails();
+                } else {
+                    storeError = this.commentStoreError;
+                }
+                // The engine reports where a comment was made; the CLI knows where that element is now.
+                comments = comments.map(comment => {
+                    const detail = this.commentDetails.get(comment.id);
+                    return detail ? {
+                        ...comment,
+                        file: detail.file ?? comment.file,
+                        line: detail.line ?? comment.line,
+                        diagnostic: comment.requiresConfirmation || detail.requiresConfirmation
+                            ? detail.diagnostic : undefined,
+                    } : comment;
+                });
+            } else {
+                try {
+                    comments = await this.cli.comments(this.sourceRoot);
+                } catch (error) {
+                    comments = [];
+                    storeError = error instanceof Error ? error.message : String(error);
+                }
+            }
             // Ignore a live response that raced the disconnect. The next read
             // must come from disk and must not resurrect process-local handles.
             if (client && !this.connected) { return; }
-            const json = JSON.stringify(comments);
+            if (storeError) { comments = []; }
+            const json = JSON.stringify([comments, storeError]);
             if (!force && json === this.lastCommentsJson) { return; }
             this.lastCommentsJson = json;
-            this.post({ type: 'comments', comments });
+            this.post({ type: 'comments', comments, storeError });
         } finally {
             this.refreshingComments = false;
         }
+    }
+
+    /**
+     * Re-reads the CLI's view of the store. Returns a store error only when the
+     * store itself is unusable; a CLI that cannot run just leaves the live list as is.
+     */
+    private async loadCommentDetails(): Promise<string | undefined> {
+        this.commentDetailsStale = false;
+        try {
+            const details = await this.cli.comments(this.sourceRoot);
+            this.commentDetails = new Map(details.map(detail => [detail.id, detail]));
+            this.commentStoreError = undefined;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.log(`Reading saved comments failed: ${message}`);
+            this.commentStoreError = /comment|store|corrupt|ui-comments/i.test(message) ? message : undefined;
+        }
+        return this.commentStoreError;
     }
 
     /**
@@ -566,15 +736,42 @@ export class DevToolsPanel {
         if (!client || this.disposed) { return; }
 
         const result = await client.trySend('Surface.list', {}) as SurfaceListResult | undefined;
-        if (!result) { return; }
-        this.post({
-            type: 'surfaces',
-            surfaces: (result.surfaces ?? []).map((entry) => ({
-                id: entry.name,
-                title: entry.window || entry.name,
-                active: entry.active,
-            })),
-        });
+        if (!result || this.client !== client) { return; }
+        const surfaces = result.surfaces ?? [];
+        // HWNDs mean nothing to a person; titles only matter once there is a choice to make.
+        const untitled = surfaces.some(entry => entry.window && !this.windowTitles.has(entry.window));
+        if (surfaces.length > 1 && untitled && this.processId !== undefined
+            && Date.now() - this.windowTitlesAt >= WINDOW_TITLE_REFRESH_MS) {
+            this.windowTitlesAt = Date.now();
+            for (const [hwnd, title] of await this.cli.windowTitles(this.processId, this.sourceRoot)) {
+                this.windowTitles.set(hwnd, title);
+            }
+            if (this.client !== client || this.disposed) { return; }
+        }
+        const payload = surfaces.map((entry, index) => ({
+            id: entry.name,
+            title: (entry.window && this.windowTitles.get(entry.window)) || `Window ${index + 1}`,
+            active: entry.active,
+        }));
+        const json = JSON.stringify(payload);
+        if (json === this.lastSurfacesJson) { return; }
+        this.lastSurfacesJson = json;
+        this.post({ type: 'surfaces', surfaces: payload });
+    }
+
+    private startSurfacePoll(): void {
+        if (this.surfacePoll) { return; }
+        this.surfacePoll = setInterval(() => {
+            if (this.disposed || !this.connected || !this.panel.visible) { return; }
+            this.post({ type: 'refreshCaptions' });
+            void this.refreshSurfaces().catch(error => this.log(`Surface.list failed: ${error}`));
+        }, SURFACE_POLL_MS);
+    }
+
+    private stopSurfacePoll(): void {
+        if (!this.surfacePoll) { return; }
+        clearInterval(this.surfacePoll);
+        this.surfacePoll = undefined;
     }
 
     /** Coalesces bursts of tree-change events into a single reload. */    private scheduleTreeRefresh(): void {
@@ -591,15 +788,24 @@ export class DevToolsPanel {
 
         const revision = ++this.treeRevision;
         try {
-            const result = await client.send<VisualTreeEnumerateResult>('VisualTree.enumerate', {
-                authored: this.authoredOnly,
+            const enumerate = (authored: boolean) => client.send<VisualTreeEnumerateResult>('VisualTree.enumerate', {
+                authored,
                 // A filter can only find what was loaded, so filtering loads every level.
                 depth: this.fullTree ? -1 : DEFAULT_TREE_DEPTH,
             });
-            const nodes = normalizeEnumerateResult(result);
+            let nodes = normalizeEnumerateResult(await enumerate(this.authoredOnly));
+            let rawFallback = false;
+            if (this.authoredOnly && nodes.length === 0) {
+                // No source information (attached late) leaves nothing "authored"; an empty tree explains nothing.
+                const raw = normalizeEnumerateResult(await enumerate(false));
+                rawFallback = raw.length > 0;
+                if (rawFallback) { nodes = raw; }
+            }
             if (revision !== this.treeRevision) { return; }
+            this.rawFallback = rawFallback;
             this.lastTree = nodes;
             this.postTree();
+            void this.refreshSurfaces().catch(error => this.log(`Surface.list failed: ${error}`));
             if (this.selectedHandle && !findTreeNode(nodes, this.selectedHandle)) {
                 await this.revealPickedElement(this.selectedHandle, false);
             }
@@ -716,6 +922,19 @@ export class DevToolsPanel {
                 await this.expandNode(message.handle);
                 return;
 
+            case 'revealElement':
+                try {
+                    await this.revealPickedElement(message.handle);
+                } catch (error) {
+                    this.log(`Revealing a commented element failed: ${error}`);
+                    this.post({
+                        type: 'commentError',
+                        message: 'This comment\u2019s element is not in the app right now. '
+                            + 'Open the screen it is on, or check its placement note.',
+                    });
+                }
+                return;
+
             case 'loadFullTree':
                 if (this.fullTree) { return; }
                 this.fullTree = true;
@@ -776,7 +995,6 @@ export class DevToolsPanel {
 
             case 'commentsHidden':
                 this.commentsVisible = false;
-                this.stopCommentPoll();
                 return;
 
             case 'addComment': {
@@ -930,6 +1148,7 @@ export class DevToolsPanel {
 
         this.stopCommentPoll();
         this.stopPropertyPoll();
+        this.stopSurfacePoll();
         if (this.client) {
             const client = this.client;
             this.client = undefined;

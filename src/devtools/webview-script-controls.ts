@@ -70,6 +70,7 @@ export const CONTROLS_FRAGMENT = `
         // the tree, so the native window collapses the whole row with it
         // rather than leave controls acting on nothing.
         el.treeControls.classList.toggle('hidden', !onTree);
+        el.treeNotice.classList.toggle('hidden', !onTree || !el.treeNotice.textContent);
         if (onTree) {
             vscode.postMessage({ type: 'commentsHidden' });
         } else {
@@ -93,6 +94,8 @@ export const CONTROLS_FRAGMENT = `
             rebuildRows();
             el.treeViewport.scrollTop = 0;
             scheduleRender();
+            // Off-screen rows have stale or no captions, and a filter must see current text.
+            refreshLiveCaptions();
         }, 150);
     });
 

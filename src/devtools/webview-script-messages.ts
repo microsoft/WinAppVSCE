@@ -34,6 +34,8 @@ export const MESSAGES_FRAGMENT = `
                     state.selected = null;
                     state.focused = null;
                     state.roots = [];
+                    el.treeNotice.textContent = '';
+                    el.treeNotice.classList.add('hidden');
                     state.properties = null;
                     state.layout = null;
                     state.composePending = null;
@@ -70,6 +72,8 @@ export const MESSAGES_FRAGMENT = `
 
             case 'tree': {
                 state.roots = message.tree.nodes || [];
+                el.treeNotice.textContent = message.tree.notice || '';
+                el.treeNotice.classList.toggle('hidden', !message.tree.notice || state.view !== 'tree');
                 resetPreviews();
                 // First load has nothing expanded; open the first root so the
                 // panel is not an empty box.
@@ -87,6 +91,10 @@ export const MESSAGES_FRAGMENT = `
                 scheduleRender();
                 break;
             }
+
+            case 'refreshCaptions':
+                refreshLiveCaptions();
+                break;
 
             case 'previews': {
                 for (const row of message.previews || []) {
@@ -122,6 +130,7 @@ export const MESSAGES_FRAGMENT = `
                     source: message.properties.source,
                     canEdit: message.properties.canEdit,
                 };
+                dropSettledEdits(message.properties.handle, message.properties.props);
                 if (sameElement) {
                     dropRestoredBindingEdits(message.properties.handle, message.properties.props);
                     refreshOpenDiagnostics(previousProps);
@@ -178,6 +187,7 @@ export const MESSAGES_FRAGMENT = `
 
             case 'comments':
                 state.comments = message.comments || [];
+                state.commentStoreError = message.storeError || '';
                 renderComments();
                 break;
 

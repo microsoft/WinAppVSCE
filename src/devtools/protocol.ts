@@ -293,6 +293,8 @@ export const USED_METHODS = [
     'Source.get',
     'Overlay.highlight',
     'Overlay.enable',
+    'Overlay.getState',
+    'Overlay.hide',
     'Selection.arm',
     'Selection.select',
     'Selection.disarm',

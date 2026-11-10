@@ -34,7 +34,8 @@ export const TREE_FRAGMENT = `    // ──────────────�
 
         function walk(node, ancestors) {
             const branch = ancestors.concat(node.handle);
-            if (nodeMatches(node, needle)) {
+            // The selected row stays visible so filtering never hides what the properties pane shows.
+            if (nodeMatches(node, needle) || node.handle === state.selected) {
                 for (const handle of branch) { keep.add(handle); }
             }
             const children = node.children || [];
@@ -195,6 +196,32 @@ export const TREE_FRAGMENT = `    // ──────────────�
     }
 
     /**
+     * Captions are live text (a ticking counter, a status line), so they are
+     * re-read while the panel is on screen. While filtering, every loaded row is
+     * re-read, because a row whose text now matches is not on screen to be asked about.
+     */
+    function refreshLiveCaptions() {
+        if (document.hidden || state.view !== 'tree' || state.roots.length === 0) { return; }
+        const handles = [];
+        if (state.filter.trim()) {
+            const pending = [].concat(state.roots);
+            while (pending.length && handles.length < MAX_FILTER_PREVIEWS) {
+                const node = pending.pop();
+                handles.push(node.handle);
+                for (const kid of node.children || []) { pending.push(kid); }
+            }
+        } else {
+            const scrollTop = el.treeViewport.scrollTop;
+            const first = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT));
+            const last = Math.min(state.rows.length - 1,
+                Math.ceil((scrollTop + (el.treeViewport.clientHeight || 400)) / ROW_HEIGHT));
+            for (let i = first; i <= last; i++) { handles.push(state.rows[i].node.handle); }
+        }
+        for (const handle of handles) { state.previewsAsked.add(handle); }
+        if (handles.length) { vscode.postMessage({ type: 'requestPreviews', handles: handles }); }
+    }
+
+    /**
      * The row's full caption, in the same order the native DevTools window
      * uses: type, then #name, then the element's own text in quotes.
      */
@@ -295,11 +322,26 @@ export const TREE_FRAGMENT = `    // ──────────────�
         return -1;
     }
 
+    let selectTimer = null;
+
+    /**
+     * Arrow keys move the selection; loading properties and highlighting the
+     * element wait until the user stops, so holding an arrow does not reload
+     * the pane once per row. Enter, Space and clicks select at once.
+     */
     function selectHandle(handle, opts) {
         state.selected = handle;
         state.focused = handle;
+        if (selectTimer) { clearTimeout(selectTimer); selectTimer = null; }
         if (!opts || !opts.silent) {
-            vscode.postMessage({ type: 'selectNode', handle: handle });
+            if (opts && opts.deferred) {
+                selectTimer = setTimeout(function () {
+                    selectTimer = null;
+                    if (state.selected === handle) { vscode.postMessage({ type: 'selectNode', handle: handle }); }
+                }, KEY_SELECT_DELAY_MS);
+            } else {
+                vscode.postMessage({ type: 'selectNode', handle: handle });
+            }
         }
         // The compose box is gated on having a target, so it has to follow the
         // selection rather than wait for the next comment list to arrive.
@@ -449,6 +491,6 @@ export const TREE_FRAGMENT = `    // ──────────────�
     function moveFocus(index) {
         const row = state.rows[index];
         if (!row) { return; }
-        selectHandle(row.node.handle);
+        selectHandle(row.node.handle, { deferred: true });
         revealHandle(row.node.handle);
     }`;

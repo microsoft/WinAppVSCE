@@ -20,6 +20,10 @@ export const CORE_FRAGMENT = `
 
     /** Coalescing window for caption reads while the tree is being scrolled. */
     const PREVIEW_DEBOUNCE_MS = 90;
+    /** Cap on caption re-reads per refresh while filtering a large tree. */
+    const MAX_FILTER_PREVIEWS = 600;
+    /** Pause after the last arrow key before the selection loads its properties. */
+    const KEY_SELECT_DELAY_MS = 250;
     // Cap on remembered pre-edit values; each one is a few bytes of text.
     const MAX_EDITED = 500;
 
@@ -108,11 +112,15 @@ export const CORE_FRAGMENT = `
         applied: Object.create(null),
         /** Original values for session edits, keyed by handle|name. */
         edited: Object.create(null),
+        /** Value source before a pending Clear value, keyed by handle|name. */
+        clearing: Object.create(null),
         /** Binding diagnoses, keyed by property name. */
         bindings: Object.create(null),
         /** Resource-key suggestions, keyed by property name. */
         resources: Object.create(null),
         comments: [],
+        /** Why the saved comment store cannot be read or written, when it cannot. */
+        commentStoreError: '',
         /** Element a non-empty comment draft was started on. */
         composeHandle: null,
         composeRequest: 0,
@@ -136,6 +144,7 @@ export const CORE_FRAGMENT = `
         commentsBadge: document.getElementById('comments-badge'),
         surface: document.getElementById('surface'),
         focusNotice: document.getElementById('focus-notice'),
+        treeNotice: document.getElementById('tree-notice'),
         filter: document.getElementById('filter'),
         treeHeader: document.getElementById('tree-header'),
         treeViewport: document.getElementById('tree-viewport'),

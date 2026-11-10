@@ -494,7 +494,7 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         const swatch = document.createElement('input');
         swatch.type = 'color';
         swatch.className = 'pswatch';
-        swatch.setAttribute('aria-label', prop.name + ' colour');
+        swatch.setAttribute('aria-label', prop.name + ' color');
         if (hex) { swatch.value = hex; }
         host.appendChild(swatch);
 
@@ -525,8 +525,44 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
             delete text.dataset.committed;
             if (state.staged[prop.name]) { state.staged[prop.name].value = text.value; }
         });
+
+        // One-click common values; each goes through commit, so staging still applies.
+        const presets = document.createElement('div');
+        presets.className = 'pcolor-presets';
+        presets.setAttribute('role', 'group');
+        presets.setAttribute('aria-label', prop.name + ' color presets');
+        for (const preset of COLOR_PRESETS) {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            const transparent = preset.value === '#00000000';
+            chip.className = 'pcolor-preset' + (transparent ? ' transparent' : '');
+            chip.style.backgroundColor = transparent ? 'transparent' : '#' + preset.value.slice(3);
+            chip.title = preset.name + ' (' + preset.value + ')';
+            chip.setAttribute('aria-label', 'Set ' + prop.name + ' to ' + preset.name);
+            chip.addEventListener('click', function () {
+                text.value = preset.value;
+                if (preset.value !== '#00000000') { swatch.value = '#' + preset.value.slice(3); }
+                commit(payload.handle, prop, preset.value);
+            });
+            presets.appendChild(chip);
+        }
+        host.appendChild(presets);
         return host;
     }
+
+    /** The Windows default palette, plus the values people reach for when debugging layout. */
+    const COLOR_PRESETS = [
+        { name: 'Transparent', value: '#00000000' },
+        { name: 'Black', value: '#FF000000' },
+        { name: 'White', value: '#FFFFFFFF' },
+        { name: 'Gray', value: '#FF808080' },
+        { name: 'Red', value: '#FFE81123' },
+        { name: 'Orange', value: '#FFF7630C' },
+        { name: 'Yellow', value: '#FFFFB900' },
+        { name: 'Green', value: '#FF107C10' },
+        { name: 'Blue', value: '#FF0078D4' },
+        { name: 'Purple', value: '#FF881798' },
+    ];
 
     /** Accepts #RGB, #RRGGBB and #AARRGGBB; the picker only understands the middle one. */
     function normalizeHex(value) {
@@ -624,7 +660,9 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         const mode = document.createElement('div');
         mode.className = 'pwit-text';
         mode.setAttribute('aria-label', prop.name + ' binding mode');
-        mode.textContent = authoredMode(prop) || 'Default';
+        // Markup often omits Mode; the live binding then reports the effective one, so both views agree.
+        const live = state.bindings[prop.name];
+        mode.textContent = authoredMode(prop) || (live && live.mode && live.mode !== 'Default' ? live.mode : '') || 'Default';
         host.appendChild(mode);
 
         host.appendChild(note('Live binding changes are not supported. Change the binding in XAML and restart the app.'));

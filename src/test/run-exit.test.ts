@@ -41,4 +41,20 @@ describe('classifyRunExit', () => {
 		assert.ok(error instanceof WinAppRunFailure);
 		assert.match(error.message, /before reporting a process ID/);
 	});
+
+	it('shows the CLI reason instead of the exit code when one was reported', () => {
+		const error = classifyRunExit({
+			code: 1, cancelled: false,
+			detail: "DevTools requires WinUI 3; 'BBWpf.csproj' is a WPF-only project.\n Run with --devtools off.",
+		});
+		assert.ok(error instanceof WinAppRunFailure);
+		assert.strictEqual(error.message,
+			"DevTools requires WinUI 3; 'BBWpf.csproj' is a WPF-only project. Run with --devtools off.");
+	});
+
+	it('truncates a long CLI reason to fit a toast', () => {
+		const error = classifyRunExit({ code: 1, cancelled: false, detail: 'x'.repeat(1000) });
+		assert.ok(error.message.length <= 300);
+		assert.ok(error.message.endsWith('\u2026'));
+	});
 });

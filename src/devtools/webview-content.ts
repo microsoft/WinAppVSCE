@@ -50,6 +50,7 @@ ${getDevToolsStyles(nonce)}
             <div id="surface" class="surface hidden"></div>
 
             <div id="focus-notice" class="focus-notice hidden" role="status" aria-live="polite"></div>
+            <div id="tree-notice" class="focus-notice hidden" role="note"></div>
             <div id="status" class="status hidden" role="status" aria-live="polite"></div>
 
             <div id="tree-viewport" class="tree-viewport"             role="tree" aria-label="UI elements" tabindex="0">
@@ -70,7 +71,7 @@ ${getDevToolsStyles(nonce)}
             </div>
         </div>
 
-        <div class="pane" id="props-pane">
+        <div class="pane" id="props-pane" role="region" aria-label="Properties">
             <div id="props-header" class="props-header"></div>
 
             <div id="props-controls" class="props-controls hidden">

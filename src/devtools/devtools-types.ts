@@ -15,6 +15,8 @@ export interface TreePayload {
     /** True when the tree was filtered to app-authored elements. */
     authored: boolean;
     truncated?: boolean;
+    /** Why the tree differs from what the toggles ask for, e.g. a raw-tree fallback. */
+    notice?: string;
 }
 
 export interface SourceLocation {
@@ -54,6 +56,8 @@ export interface CommentPayload {
     line?: number;
     /** True when the engine matched the element weakly and wants a human check. */
     requiresConfirmation?: boolean;
+    /** Why the comment could not be placed on one live element, in the CLI's words. */
+    diagnostic?: string;
 }
 
 /** A one-line caption for a tree row, read live from the element. */
@@ -123,8 +127,10 @@ export type ExtensionToWebviewMessage =
     | { type: 'togglePick' }
     | { type: 'pickStateChanged'; armed: boolean }
     | { type: 'treeInvalidated'; reason?: string }
-    | { type: 'comments'; comments: CommentPayload[] }
+    | { type: 'comments'; comments: CommentPayload[]; storeError?: string }
     | { type: 'previews'; previews: PreviewPayload[] }
+    /** Captions are live text with no change event, so the host asks for them to be re-read. */
+    | { type: 'refreshCaptions' }
     | { type: 'commentError'; message: string; requestId?: number }
     | { type: 'binding'; handle: string; name: string; binding: BindingPayload }
     | { type: 'bindingRestoreConfirm'; handle: string; name: string; scope?: string }
@@ -142,6 +148,7 @@ export type WebviewToExtensionMessage =
     | { type: 'selectNode'; handle: string }
     | { type: 'hoverNode'; handle: string | undefined }
     | { type: 'expandNode'; handle: string }
+    | { type: 'revealElement'; handle: string }
     | { type: 'loadFullTree' }
     | { type: 'requestPreviews'; handles: string[] }
     | { type: 'togglePick'; armed: boolean }

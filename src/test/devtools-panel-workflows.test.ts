@@ -39,6 +39,7 @@ const stub = {
         workspaceFolders: [], fs: { stat: async () => ({}) },
         findFiles: async () => projects,
         getConfiguration: () => ({ get: () => inspector }),
+        onDidSaveTextDocument: () => disposable,
     },
     commands: {
         registerCommand: (name: string, handler: () => Promise<void>) => { registered.set(name, handler); return disposable; },
@@ -73,6 +74,10 @@ try {
 }
 const { DevToolsPanel } = panelModule;
 const extensionUri = uri(process.cwd()) as vscode.Uri;
+// The panel enriches live comments from the CLI; tests that care mock these per test.
+DevToolsCli.prototype.comments = async () => [];
+DevToolsCli.prototype.windowTitles = async () => new Map();
+DevToolsCli.prototype.commentStoreProblem = async () => undefined;
 
 async function until(predicate: () => boolean): Promise<void> {
     const deadline = Date.now() + 5000;
@@ -302,6 +307,111 @@ test('attach discovers apps and passes the matching workspace project as source 
         'devtools', 'attach', '--pid', '123', '--source-root', root, '--show-window',
     ], root]);
     inspector = 'vscode';
+});
+
+test('attach keeps the project folder an app already reports instead of failing', async t => {
+    projects = [uri(path.resolve('workspace', 'Gallery', 'Gallery.csproj'))];
+    const run = t.mock.method(DevToolsCli.prototype, 'run', async (args: string[]) => {
+        if (args[1] === 'list') { return { apps: [{ processId: 124, processName: 'Gallery', attached: false }] }; }
+        if (args.includes('--source-root')) { throw new Error('This app already uses the project folder C:\\src\\winui-app.'); }
+        return { ok: true };
+    });
+    t.after(() => DevToolsPanel.disposeAll());
+    commandsModule.registerDevToolsCommands({
+        extensionPath: process.cwd(), extensionUri, subscriptions: [],
+    } as never);
+    await registered.get('winapp.attachDevTools')!();
+    assert.deepEqual(run.mock.calls[2].arguments, [['devtools', 'attach', '--pid', '124', '--overlay'], 'C:\\src\\winui-app']);
+    assert.equal(DevToolsPanel.knownSourceRoot(124), 'C:\\src\\winui-app');
+});
+
+test('a headless app keeps its toolbar hidden when the panel builds the overlay', async t => {
+    const pid = 870100 + process.pid;
+    // Mirrors the live engine: subscribing to overlay events builds the overlay, toolbar shown.
+    let toolbarVisible = false;
+    const engine = await FakeDevToolsEngine.start(pid, {
+        methods: [...USED_METHODS],
+        handlers: {
+            'Overlay.getState': () => ({ toolbarVisible, toolbarOwner: toolbarVisible ? 'fake-connection' : '' }),
+            'Overlay.enable': () => { toolbarVisible = true; return { ok: true }; },
+            'Overlay.hide': () => { toolbarVisible = false; return null as never; },
+        },
+    });
+    t.after(async () => { DevToolsPanel.disposeAll(); await engine.stop(); });
+    await DevToolsPanel.show(pid, extensionUri);
+    const panel = panels.at(-1)!;
+    panel.receive({ type: 'ready' });
+    await until(() => panel.messages.some(m => m.type === 'comments'));
+    assert.deepEqual(engine.received.find(m => m.method === 'Overlay.hide')?.params, { owner: 'fake-owner-token' },
+        'the toolbar the subscription built is hidden again');
+
+    // Later overlay use by the panel is re-hidden too; the engine names it by connection id.
+    engine.emit('Overlay.stateChanged', { toolbarVisible: true, origin: 'fake-connection' });
+    await until(() => engine.received.filter(m => m.method === 'Overlay.hide').length === 2);
+
+    // A toolbar someone else shows (the user's Ctrl+Shift+F12) is theirs to keep.
+    engine.emit('Overlay.stateChanged', { toolbarVisible: true, origin: 'another-client' });
+    engine.emit('Overlay.stateChanged', { toolbarVisible: true, origin: 'fake-connection' });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(engine.received.filter(m => m.method === 'Overlay.hide').length, 2);
+});
+
+test('an app with no XAML source shows the raw tree with an explanation, not an empty tree', async t => {
+    const pid = 870200 + process.pid;
+    const raw = { handle: 'raw', type: 'Microsoft.UI.Xaml.Controls.Grid', name: '', childCount: 0, children: [] };
+    const engine = await FakeDevToolsEngine.start(pid, {
+        methods: [...USED_METHODS],
+        handlers: { 'VisualTree.enumerate': params => ({ nodes: params.authored ? [] : [raw] }) },
+    });
+    t.after(async () => { DevToolsPanel.disposeAll(); await engine.stop(); });
+    await DevToolsPanel.show(pid, extensionUri);
+    const panel = panels.at(-1)!;
+    panel.receive({ type: 'ready' });
+    await until(() => panel.messages.some(m => m.type === 'tree'));
+    const tree = panel.messages.find(m => m.type === 'tree');
+    assert.ok(tree?.type === 'tree');
+    assert.equal(tree.tree.nodes[0].handle, 'raw');
+    assert.match(tree.tree.notice ?? '', /no XAML source information/);
+});
+
+test('the window picker names windows by title and adds windows opened later', async t => {
+    const pid = 870300 + process.pid;
+    let surfaces = [{ name: 'main', window: '11', active: true }];
+    const engine = await FakeDevToolsEngine.start(pid, {
+        methods: [...USED_METHODS],
+        handlers: { 'Surface.list': () => ({ surfaces }) },
+    });
+    t.mock.method(DevToolsCli.prototype, 'windowTitles', async () => new Map([['11', 'BBFixture'], ['22', 'BBFixture 2']]));
+    t.after(async () => { DevToolsPanel.disposeAll(); await engine.stop(); });
+    await DevToolsPanel.show(pid, extensionUri);
+    const panel = panels.at(-1)!;
+    panel.visible = true;
+    panel.receive({ type: 'ready' });
+    await until(() => panel.messages.some(m => m.type === 'surfaces'));
+    surfaces = [...surfaces, { name: 'second', window: '22', active: false }];
+    await until(() => panel.messages.some(m => m.type === 'surfaces' && m.surfaces.length === 2));
+    const latest = panel.messages.filter(m => m.type === 'surfaces').at(-1);
+    assert.ok(latest?.type === 'surfaces');
+    assert.deepEqual(latest.surfaces.map(s => s.title), ['BBFixture', 'BBFixture 2']);
+});
+
+test('a failed comment add explains a read-only store instead of a generic failure', async t => {
+    const pid = 870400 + process.pid;
+    const engine = await FakeDevToolsEngine.start(pid, {
+        methods: [...USED_METHODS],
+        handlers: { 'Comment.add': () => { throw new Error('winapp devtools comments add failed'); } },
+    });
+    t.mock.method(DevToolsCli.prototype, 'commentStoreProblem', async () => 'The comment store C:\\a\\.winapp\\ui-comments.json is read-only.');
+    t.after(async () => { DevToolsPanel.disposeAll(); await engine.stop(); });
+    await DevToolsPanel.show(pid, extensionUri);
+    const panel = panels.at(-1)!;
+    panel.receive({ type: 'ready' });
+    await until(() => panel.messages.some(m => m.type === 'comments'));
+    panel.receive({ type: 'addComment', handle: 'h-title', text: 'note', requestId: 1 });
+    await until(() => panel.messages.some(m => m.type === 'commentError'));
+    const error = panel.messages.find(m => m.type === 'commentError');
+    assert.ok(error?.type === 'commentError');
+    assert.match(error.message, /is read-only\. The comment was not saved\./);
 });
 
 test('the engine echoing the panel\'s own selection does not steal keyboard focus', async t => {

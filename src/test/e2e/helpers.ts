@@ -150,17 +150,36 @@ export async function launchVSCode(
  * "Make It Yours"), which is modal and blocks the command palette. Dismiss it.
  */
 async function dismissStartupDialogs(page: Page): Promise<void> {
-    for (let i = 0; i < 5; i++) {
+    // The onboarding overlay can arrive seconds after the window settles, so keep looking briefly.
+    const deadline = Date.now() + 12_000;
+    let dismissed = 0;
+    while (Date.now() < deadline && dismissed < 5) {
         const close = page.getByRole('button', { name: /^Close$/i }).first();
         const skipSignIn = page.getByRole('button', { name: /Continue without Signing In/i }).first();
-        if (await close.isVisible({ timeout: 2_000 }).catch(() => false)) {
+        const onboarding = page.locator('.onboarding-a-overlay.visible, [role="dialog"][aria-label^="Welcome to Visual Studio Code"]').first();
+        if (await close.isVisible({ timeout: 500 }).catch(() => false)) {
             await close.click();
-        } else if (await skipSignIn.isVisible({ timeout: 1_000 }).catch(() => false)) {
+        } else if (await skipSignIn.isVisible({ timeout: 500 }).catch(() => false)) {
             await skipSignIn.click();
+        } else if (await onboarding.isVisible({ timeout: 500 }).catch(() => false)) {
+            await page.keyboard.press('Escape');
         } else {
-            return;
+            await page.waitForTimeout(1_000);
+            continue;
         }
+        dismissed++;
         await page.waitForTimeout(1_500);
+    }
+}
+
+/** Dismisses first-run dialogs that appeared after launch, before a test points at the page. */
+export async function dismissLateStartupDialogs(page: Page): Promise<void> {
+    const onboarding = page.locator('.onboarding-a-overlay.visible').first();
+    for (let i = 0; i < 3 && await onboarding.isVisible({ timeout: 500 }).catch(() => false); i++) {
+        const close = onboarding.getByRole('button', { name: /^(Close|Skip|Continue without Signing In)$/i }).first();
+        if (await close.isVisible({ timeout: 500 }).catch(() => false)) { await close.click(); }
+        else { await page.keyboard.press('Escape'); }
+        await page.waitForTimeout(1_000);
     }
 }
 

@@ -9,8 +9,19 @@
 
 import * as path from 'path';
 
-/** Prefer the project matching the app name, then a single unambiguous project. */
-export function matchSourceRoot(projects: string[], processName?: string): string | undefined {
+/** Prefer the project that built the running exe, then the project matching the app name, then a single project. */
+export function matchSourceRoot(projects: string[], processName?: string, exePath?: string): string | undefined {
+    if (exePath) {
+        const exe = path.resolve(exePath).toLowerCase();
+        const owners = projects
+            .map(project => path.dirname(path.resolve(project)))
+            .filter(folder => exe.startsWith(folder.toLowerCase() + path.sep));
+        if (owners.length > 0) {
+            const deepest = Math.max(...owners.map(folder => folder.length));
+            const best = [...new Set(owners.filter(folder => folder.length === deepest).map(f => f.toLowerCase()))];
+            if (best.length === 1) { return owners.find(folder => folder.toLowerCase() === best[0]); }
+        }
+    }
     const matching = processName
         ? projects.filter(project => path.basename(project, path.extname(project)).toLowerCase()
             === processName.toLowerCase())
@@ -18,6 +29,12 @@ export function matchSourceRoot(projects: string[], processName?: string): strin
     if (matching.length === 1) { return path.dirname(matching[0]); }
     if (projects.length === 1) { return path.dirname(projects[0]); }
     return undefined;
+}
+
+/** The folder the engine already reports for an app, from its "already uses the project folder" refusal. */
+export function existingSourceRoot(message: string): string | undefined {
+    const match = /already uses the project folder (.+?)\.?\s*$/i.exec(message.trim());
+    return match?.[1]?.trim() || undefined;
 }
 
 /** Strips the packaging scheme from a DevTools source reference. */

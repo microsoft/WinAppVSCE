@@ -555,9 +555,24 @@ select.pfield { font-family: var(--vscode-font-family); }
 .pbtn { padding: 4px 10px; }
 .prow-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 
-/* Colour editor: swatch + hex field + optional preset list. */
-.pcolor { display: grid; grid-template-columns: auto 1fr; column-gap: 7px; align-items: center; }
+/* Color editor: swatch + hex field + preset row. */
+.pcolor { display: grid; grid-template-columns: auto 1fr; column-gap: 7px; row-gap: 6px; align-items: center; }
 /* .pswatch sizing and border come from the shared controls module. */
+.pcolor-presets { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+.pcolor-preset {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--vscode-contrastBorder, var(--vscode-widget-border, var(--vscode-input-border, transparent)));
+    border-radius: 3px;
+    cursor: pointer;
+    forced-color-adjust: none;
+}
+.pcolor-preset:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+/* Transparent shows as a diagonal so it reads as "no color", not as the panel background. */
+.pcolor-preset.transparent {
+    background-image: linear-gradient(135deg, transparent 45%, var(--vscode-errorForeground) 45%, var(--vscode-errorForeground) 55%, transparent 55%);
+}
 
 /* Value picker built on the shared dropdown. The trigger is styled as a
    field (see fieldSelectors) so it matches the inputs it sits beside. */
@@ -680,6 +695,16 @@ select.pfield { font-family: var(--vscode-font-family); }
 .comment-el { font-family: Consolas, 'Cascadia Mono', monospace; font-size: 11px; color: var(--vscode-descriptionForeground); }
 .comment-text { margin: 4px 0; white-space: pre-wrap; font-size: 12px; }
 .comment-meta { font-size: 10px; color: var(--vscode-descriptionForeground); }
+.comment-diagnostic {
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground));
+}
+.comment-store-error {
+    margin: 8px;
+    font-size: 12px;
+    color: var(--vscode-errorForeground);
+}
 .comment-source {
     margin-top: 4px;
     padding: 0;
@@ -770,6 +795,7 @@ select.pfield { font-family: var(--vscode-font-family); }
 .lay-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin-top: 8px; font-size: 11px; }
 .lay-facts dt { color: var(--vscode-descriptionForeground); }
 .lay-facts dd { margin: 0; font-family: Consolas, 'Cascadia Mono', monospace; }
+.lay-why { margin-top: 6px; font-size: 11px; color: var(--vscode-foreground); }
 
 /* Identity header: what the selection is, then how you got to it. */
 .props-identity { margin-bottom: 6px; }

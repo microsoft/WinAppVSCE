@@ -18,6 +18,7 @@ import * as path from 'path';
 import {
     launchVSCode,
     getWebviewFrameWaitingFor,
+    dismissLateStartupDialogs,
     teardown,
     type VSCodeTestContext,
 } from './helpers';
@@ -136,7 +137,9 @@ async function devToolsFrame(timeout = 180_000) {
     if (!ctx) {
         throw new Error('VS Code was not launched');
     }
-    return getWebviewFrameWaitingFor(ctx.page, TREE_VIEWPORT, timeout);
+    const frame = await getWebviewFrameWaitingFor(ctx.page, TREE_VIEWPORT, timeout);
+    await dismissLateStartupDialogs(ctx.page);
+    return frame;
 }
 
 /**

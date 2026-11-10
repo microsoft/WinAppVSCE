@@ -106,7 +106,7 @@ export async function launchRunProcess(
 
 			child.on('close', (code) => {
 				if (resolved) { return; }
-				settle(() => reject(classifyRunExit({ code, cancelled })));
+				settle(() => reject(classifyRunExit({ code, cancelled, detail: parseRunErrorFromJson(stdout) })));
 			});
 		});
 	});

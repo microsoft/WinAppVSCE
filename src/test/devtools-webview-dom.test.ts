@@ -2274,3 +2274,155 @@ test('comment markup is displayed literally and cannot create executable element
     assert.equal(h.doc.querySelector('#comments-host svg'), null);
     assert.equal(Reflect.get(h.dom.window, '__winappSecurityProbe'), undefined);
 });
+
+test('arrow keys move the selection at once but load properties only after a pause', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: { ...LIVE_TREE, nodes: LIVE_TREE.nodes } } as ExtensionToWebviewMessage);
+    h.send({ type: 'selectHandle', handle: '117441013' });
+    const viewport = h.doc.getElementById('tree-viewport') as HTMLElement;
+    h.posted.length = 0;
+    const key = (k: string) => viewport.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: k, bubbles: true }));
+    key('ArrowDown');
+    key('ArrowDown');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(!h.posted.some(m => m.type === 'selectNode'), 'no reload per arrow press');
+    await new Promise(resolve => setTimeout(resolve, 320));
+    const selects = h.posted.filter(m => m.type === 'selectNode');
+    assert.equal(selects.length, 1, 'one load for where the user stopped');
+    assert.equal(selects[0].handle, '150995445');
+    h.posted.length = 0;
+    key('Enter');
+    assert.ok(h.posted.some(m => m.type === 'selectNode'), 'Enter selects immediately');
+});
+
+test('a filter keeps the selected row visible and re-reads captions for every loaded row', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    await h.sendAndFlush({ type: 'selectHandle', handle: '134218229' });
+    h.posted.length = 0;
+    const filter = h.doc.getElementById('filter') as HTMLInputElement;
+    filter.value = 'zzzz';
+    filter.dispatchEvent(new h.dom.window.Event('input'));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise<void>(resolve => h.dom.window.requestAnimationFrame(() => setTimeout(resolve, 0)));
+    assert.ok(h.doc.querySelector('[data-handle="134218229"]'), 'the selected row survives a non-matching filter');
+    const asked = h.posted.filter(m => m.type === 'requestPreviews').flatMap(m => m.handles as string[]);
+    assert.ok(asked.includes('234881525'), 'off-screen and unmatched rows are re-read so new text can match');
+});
+
+test('captions are re-read when the host asks, so live text does not go stale', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.posted.length = 0;
+    h.send({ type: 'refreshCaptions' });
+    assert.ok(h.posted.some(m => m.type === 'requestPreviews' && (m.handles as string[]).includes('117441013')));
+});
+
+test('a tree notice explains a raw-tree fallback and clears on the next normal tree', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    const notice = h.doc.getElementById('tree-notice') as HTMLElement;
+    await h.sendAndFlush({ type: 'tree', tree: { ...LIVE_TREE, notice: 'No XAML source information.' } } as ExtensionToWebviewMessage);
+    assert.equal(notice.textContent, 'No XAML source information.');
+    assert.ok(!notice.classList.contains('hidden'));
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    assert.ok(notice.classList.contains('hidden'));
+});
+
+test('expanding a property header from the keyboard keeps focus on that header', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+    const value = () => h.doc.querySelector('#props-viewport [data-prop="Opacity"] .pvalue') as HTMLElement;
+    value().focus();
+    value().click();
+    assert.equal(h.doc.activeElement, value(), 'focus returns to the rebuilt header');
+    assert.equal(value().getAttribute('aria-expanded'), 'true');
+    value().click();
+    assert.equal(h.doc.activeElement, value());
+    assert.equal(value().getAttribute('aria-expanded'), 'false');
+    assert.equal(h.doc.getElementById('props-pane')?.getAttribute('aria-label'), 'Properties');
+});
+
+test('Clear value that returns the app to its starting value drops the changed marker', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    const margin = (value: string, valueSource: string) => ({
+        type: 'properties', properties: { ...LIVE_PROPS, props: [
+            { name: 'Margin', value, valueType: 'Thickness', editKind: 'fields', writeType: 'Thickness', valueSource },
+        ] },
+    } as unknown as ExtensionToWebviewMessage);
+    const marker = () => !h.doc.querySelector('#props-viewport [data-prop="Margin"] .pdot')?.classList.contains('hidden');
+    h.send(margin('0,0,0,0', 'Default'));
+    h.expandAllProps();
+    const left = h.doc.querySelector('#props-viewport input[aria-label="Margin Left"]') as HTMLInputElement;
+    left.value = '8';
+    left.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    h.send(margin('8,0,0,0', 'DevTools'));
+    assert.ok(marker(), 'a live edit is marked');
+    (h.doc.querySelector('#props-viewport button[aria-label="Clear value of Margin"]') as HTMLElement).click();
+    h.send(margin('8,0,0,0', 'DevTools'));
+    assert.ok(marker(), 'a poll racing the clear keeps the marker');
+    h.send(margin('0,0,0,0', 'Default'));
+    assert.ok(!marker(), 'back on the starting value, the marker is gone');
+});
+
+test('a color property offers presets that write through the normal edit path', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: { ...LIVE_PROPS, props: [{
+        name: 'Background', value: '#FF00AA00', valueType: 'Brush', editKind: 'color', writeType: 'SolidColorBrush', valueSource: 'Local',
+    }] } } as unknown as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    assert.ok(h.dropOptions('Kind of value for Background').length > 0);
+    assert.ok((h.doc.querySelector('#props-viewport')?.textContent ?? '').indexOf('Colour') === -1);
+    h.posted.length = 0;
+    (h.doc.querySelector('button[aria-label="Set Background to Blue"]') as HTMLElement).click();
+    assert.deepEqual(h.posted.find(m => m.type === 'setProperty'), {
+        type: 'setProperty', handle: '234881525', name: 'Background', value: '#FF0078D4', writeType: 'SolidColorBrush',
+    });
+});
+
+test('the comments view shows placement reasons and a store error instead of a stale list', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'showComments' });
+    h.send({ type: 'comments', comments: [{
+        id: 'c1', text: 'Fix spacing', status: 'open', requiresConfirmation: true,
+        diagnostic: 'No current source match. The source may be unavailable, or the element was renamed or removed.',
+    }] });
+    assert.match(h.doc.querySelector('.comment-diagnostic')?.textContent ?? '', /renamed or removed/);
+    h.send({ type: 'comments', comments: [], storeError: 'UI comments store is corrupt (invalid JSON).' });
+    assert.match(h.doc.querySelector('.comment-store-error')?.textContent ?? '', /corrupt/);
+    assert.equal(h.doc.querySelectorAll('.comment').length, 0);
+});
+
+test('Show in tree asks the host for an element that is not loaded', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'showComments' });
+    h.send({ type: 'comments', comments: [{ id: 'c2', text: 'Template part', status: 'open', handle: 'not-loaded', element: 'Root' }] });
+    h.posted.length = 0;
+    (h.doc.querySelector('button[aria-label="Show Root in tree"]') as HTMLElement).click();
+    assert.deepEqual(h.posted.find(m => m.type === 'revealElement'), { type: 'revealElement', handle: 'not-loaded' });
+});
+
+test('a live edit made outside the panel is still marked as changed', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: { ...LIVE_PROPS, props: [
+        { name: 'Width', value: '300', valueType: 'Double', editKind: 'number', writeType: 'Double', valueSource: 'DevTools' },
+    ] } } as unknown as ExtensionToWebviewMessage);
+    const value = h.doc.querySelector('#props-viewport [data-prop="Width"] .pvalue') as HTMLElement;
+    assert.match(value.getAttribute('aria-label') ?? '', /, changed$/);
+    assert.ok(!h.doc.querySelector('#props-viewport [data-prop="Width"] .pdot')?.classList.contains('hidden'));
+});

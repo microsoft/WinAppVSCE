@@ -390,7 +390,7 @@ export function getSharedColorPickerScript(): string {
             const root = document.createElement('div');
             root.className = 'wcp-pop';
             root.setAttribute('role', 'dialog');
-            root.setAttribute('aria-label', 'Colour picker');
+            root.setAttribute('aria-label', 'Color picker');
 
             const sv = document.createElement('div');
             sv.className = 'wcp-sv';

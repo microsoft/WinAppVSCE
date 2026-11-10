@@ -20,6 +20,16 @@ export const COMMENTS_FRAGMENT = `
         // Hidden at zero so "no comments" reads as absence, not as a zero score.
         el.commentsBadge.classList.toggle('hidden', open === 0);
 
+        if (state.commentStoreError) {
+            const problem = document.createElement('div');
+            problem.className = 'comment-store-error';
+            problem.setAttribute('role', 'alert');
+            problem.textContent = 'Saved comments cannot be read: ' + state.commentStoreError;
+            el.commentsHost.appendChild(problem);
+            if (keep) { el.tabComments.focus(); }
+            return;
+        }
+
         if (state.comments.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'props-empty';
@@ -80,6 +90,14 @@ export const COMMENTS_FRAGMENT = `
         meta.textContent = bits.join(' \\u00B7 ');
         box.appendChild(meta);
 
+        if (comment.diagnostic) {
+            // The reason a comment is unplaced is the thing to fix, so it is shown, not just flagged.
+            const note = document.createElement('div');
+            note.className = 'comment-diagnostic';
+            note.textContent = comment.diagnostic;
+            box.appendChild(note);
+        }
+
         if (comment.file) {
             // The native window prints this as plain text. In an editor it can
             // be the thing you actually wanted: the declaration, open.
@@ -103,9 +121,15 @@ export const COMMENTS_FRAGMENT = `
             const reveal = commentButton(comment, 'reveal', 'Show in tree', subject);
             reveal.setAttribute('aria-label', 'Show ' + subject + ' in tree');
             reveal.addEventListener('click', function () {
-                setView('tree');
-                selectHandle(comment.handle);
-                revealHandle(comment.handle);
+                showComposeError('');
+                if (nodeForHandle(comment.handle)) {
+                    setView('tree');
+                    selectHandle(comment.handle);
+                    revealHandle(comment.handle);
+                } else {
+                    // Not loaded (outside Just my XAML, or deeper than the first read); the host fetches it.
+                    vscode.postMessage({ type: 'revealElement', handle: comment.handle });
+                }
             });
             actions.appendChild(reveal);
         }

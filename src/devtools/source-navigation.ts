@@ -7,7 +7,7 @@
  */
 
 import * as vscode from 'vscode';
-import { isAbsoluteLocalPath, sourceCandidates, toZeroBasedPosition } from './source-resolver';
+import { isAbsoluteLocalPath, sourceCandidates, stripSourceScheme, toZeroBasedPosition } from './source-resolver';
 
 /**
  * Reveals a reported declaration site, warning the user when it cannot be
@@ -22,7 +22,7 @@ export async function openSourceLocation(
 ): Promise<void> {
     const target = await findSourceFile(reference, sourceRoot);
     if (!target) {
-        await offerSourceRecovery(reference, `Could not find "${reference}" in this workspace.`);
+        await offerSourceRecovery(reference, `Could not find "${stripSourceScheme(reference)}" in this workspace.`);
         return;
     }
 
@@ -48,7 +48,7 @@ async function offerSourceRecovery(reference: string, message: string): Promise<
 export async function revealSourceLocation(reference: string, sourceRoot?: string): Promise<void> {
     const target = await findSourceFile(reference, sourceRoot);
     if (!target) {
-        await offerSourceRecovery(reference, `Could not find "${reference}" to reveal.`);
+        await offerSourceRecovery(reference, `Could not find "${stripSourceScheme(reference)}" to reveal.`);
         return;
     }
     await vscode.commands.executeCommand('revealFileInOS', target);
