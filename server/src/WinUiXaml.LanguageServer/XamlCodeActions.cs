@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
+using Microsoft.CodeAnalysis;
 using WinUiXaml.LanguageServer.Lsp;
 using WinUiXaml.Workspace;
 using WinUiXaml.Xaml;
+using Diagnostic = WinUiXaml.LanguageServer.Lsp.Diagnostic;
 
 namespace WinUiXaml.LanguageServer;
 
@@ -104,6 +107,11 @@ internal static class XamlCodeActions
                     continue;
                 }
 
+                if (AddAttributeReplacementFixes(actions, doc, diagnostic, typeSystem))
+                {
+                    continue;
+                }
+
                 bool preferredImportAdded = false;
                 if (string.Equals(diagnostic.Code, XamlValidator.UnknownTypeCode, StringComparison.Ordinal))
                 {
@@ -185,6 +193,150 @@ internal static class XamlCodeActions
         }
 
         return actions;
+    }
+
+    private static bool AddAttributeReplacementFixes(
+        List<CodeAction> actions,
+        TextDocument? doc,
+        Diagnostic diagnostic,
+        XamlTypeSystem? typeSystem)
+    {
+        if (diagnostic.Code != XamlValidator.UnknownAttributeCode || doc is null || typeSystem is null)
+        {
+            return false;
+        }
+
+        var attribute = FindAncestor<XamlAttribute>(
+            doc.Parsed.FindNode(doc.OffsetAt(diagnostic.Range.Start)));
+        var (bad, _) = ReadSuggestions(diagnostic.Data);
+        if (attribute is null ||
+            attribute.IsNamespaceDeclaration || attribute.Name.HasPrefix || attribute.Name.IsDotted ||
+            (attribute.Value is { Quote: { } quote } quoted &&
+                (quoted.Span.Length < 2 || doc.Text[quoted.Span.End - 1] != quote)) ||
+            !DiagnosticTargetsSpan(doc, diagnostic.Range, attribute.Name.LocalNameSpan) ||
+            (bad.Length > 0 && bad != attribute.Name.LocalName) ||
+            attribute.Parent is not XamlElement element ||
+            XamlSemanticFacts.ResolveElementType(element, typeSystem) is not { } elementType ||
+            typeSystem.FindAttributeMember(elementType, attribute.Name.LocalName) is not null)
+        {
+            return true;
+        }
+
+        var members = typeSystem.GetAttributeMembers(elementType).ToDictionary(member => member.Name);
+        var nearby = XamlSuggestions.Nearest(attribute.Name.LocalName, members.Keys);
+        var candidates = XamlSuggestions.AttributeNames(attribute.Name.LocalName, members.Keys)
+            .Where(name => !element.Attributes.Any(other =>
+                !ReferenceEquals(other, attribute) && !other.Name.HasPrefix && other.Name.FullName == name))
+            .Where(name => !element.Content.OfType<XamlElement>().Any(child =>
+                child.IsPropertyElement && child.Name!.LocalName.EndsWith("." + name, StringComparison.Ordinal)))
+            .Where(name => nearby.Contains(name) ||
+                members[name] is { Kind: XamlMemberKind.Property, Type: { } type } &&
+                XamlValueConverter.UnwrapNullable(type).TypeKind == TypeKind.Enum &&
+                attribute.Value is { IsMarkupExtension: false, Quote: not null })
+            .ToArray();
+        int initialCount = actions.Count;
+        foreach (var name in candidates)
+        {
+            var member = members[name];
+            var values = member.Kind == XamlMemberKind.Property && member.Type is { } memberType &&
+                attribute.Value is { IsMarkupExtension: false, Quote: not null } value
+                    ? AttributeReplacementValues(value.Text, memberType, typeSystem)
+                    : new[] { attribute.Value?.Text ?? string.Empty };
+            if (values.Count == 0 && nearby.Contains(name))
+            {
+                // Keep the plain rename; the value keeps its own diagnostic and fix.
+                values = new[] { attribute.Value?.Text ?? string.Empty };
+            }
+            foreach (var replacement in values.Take(3 - (actions.Count - initialCount)))
+            {
+                bool valueChanged = attribute.Value is { } currentValue && replacement != currentValue.Text;
+                bool preferred = candidates.Length == 1 && values.Count == 1 && nearby.Contains(name);
+                string title = valueChanged
+                    ? $"Replace with {name}=\"{replacement}\""
+                    : $"Change '{attribute.Name.LocalName}' to '{name}'";
+                if (!valueChanged && nearby.Contains(name))
+                {
+                    actions.Add(new CodeAction
+                    {
+                        Title = title,
+                        Kind = "quickfix",
+                        Diagnostics = new List<Diagnostic> { diagnostic },
+                        IsPreferred = preferred ? true : null,
+                        Edit = new WorkspaceEdit
+                        {
+                            Changes = new Dictionary<string, List<TextEdit>>(StringComparer.Ordinal)
+                            {
+                                [doc.Uri] = new() { new() { Range = doc.RangeOf(attribute.Name.Span), NewText = name } },
+                            },
+                        },
+                    });
+                    continue;
+                }
+
+                var replacementText = RangeText(doc, doc.RangeOf(attribute.Span));
+                if (attribute.Value is { } oldValue && replacement != oldValue.Text)
+                {
+                    int valueStart = oldValue.InnerSpan.Start - attribute.Span.Start;
+                    replacementText = replacementText.Substring(0, valueStart) + replacement +
+                        replacementText.Substring(valueStart + oldValue.InnerSpan.Length);
+                }
+                replacementText = name + replacementText.Substring(attribute.Name.Span.Length);
+                var edits = new List<TextEdit>
+                {
+                    new() { Range = doc.RangeOf(attribute.Span), NewText = replacementText },
+                };
+                AddGuardedEditAction(
+                    actions, doc, diagnostic, title, edits, isPreferred: preferred);
+            }
+        }
+
+        return true;
+    }
+
+    private static IReadOnlyList<string> AttributeReplacementValues(
+        string text, ITypeSymbol memberType, XamlTypeSystem typeSystem)
+    {
+        var type = XamlValueConverter.UnwrapNullable(memberType);
+        if (type.TypeKind == TypeKind.Enum)
+        {
+            var fields = type.GetMembers().OfType<IFieldSymbol>()
+                .Where(field => field.HasConstantValue)
+                .ToArray();
+            if (decimal.TryParse(text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var number))
+            {
+                var matches = fields.Where(field =>
+                    Convert.ToDecimal(field.ConstantValue, CultureInfo.InvariantCulture) == number)
+                    .Select(field => field.Name)
+                    .Take(3)
+                    .ToArray();
+                if (matches.Length > 0)
+                {
+                    return matches;
+                }
+            }
+
+            if (XamlValueConverter.TryValidate(text, type, typeSystem, out bool valid) && valid)
+            {
+                return new[] { text };
+            }
+
+            var names = fields.Select(field => field.Name).ToArray();
+            var nearest = XamlSuggestions.Nearest(text.Trim(), names);
+            return nearest.Count > 0 ? nearest : names.Length <= 3 ? names : Array.Empty<string>();
+        }
+
+        if (XamlValueConverter.TryValidate(text, type, typeSystem, out bool isValid) && !isValid)
+        {
+            if (type.SpecialType != SpecialType.System_Boolean)
+            {
+                return Array.Empty<string>();
+            }
+
+            var nearest = XamlSuggestions.Nearest(text.Trim(), new[] { "True", "False" });
+            return nearest.Count > 0 ? nearest : new[] { "True", "False" };
+        }
+
+        return new[] { text };
     }
 
     /// <summary>LSP kind gate: a <c>quickfix</c> is offered when the client sends no <c>only</c> filter, or an entry that equals <c>quickfix</c> or is one of its parent kinds.</summary>
@@ -699,6 +851,11 @@ internal static class XamlCodeActions
 
             case XamlValidator.InvalidAttributeValueCode:
             {
+                if (ReadSuggestions(diagnostic.Data).Suggestions.Count > 0)
+                {
+                    return false;
+                }
+
                 var attribute = FindAncestor<XamlAttribute>(doc.Parsed.FindNode(offset));
                 var element = attribute?.Parent as XamlElement;
                 var elementType = element is null || typeSystem is null
@@ -877,14 +1034,15 @@ internal static class XamlCodeActions
         TextDocument doc,
         Diagnostic diagnostic,
         string title,
-        List<TextEdit> edits)
+        List<TextEdit> edits,
+        bool isPreferred = true)
     {
         actions.Add(new CodeAction
         {
             Title = title,
             Kind = "quickfix",
             Diagnostics = new List<Diagnostic> { diagnostic },
-            IsPreferred = true,
+            IsPreferred = isPreferred ? true : null,
             Edit = new WorkspaceEdit
             {
                 Changes = new Dictionary<string, List<TextEdit>>(StringComparer.Ordinal)

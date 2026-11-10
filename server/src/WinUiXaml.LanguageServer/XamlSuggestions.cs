@@ -47,7 +47,33 @@ internal static class XamlSuggestions
     private static bool SharesFirstLetter(string a, string b) =>
         a.Length > 0 && b.Length > 0 && char.ToLowerInvariant(a[0]) == char.ToLowerInvariant(b[0]);
 
-    /// <summary>Case-insensitive Levenshtein distance, bailing out early (returning threshold + 1) once every cell in a row exceeds the threshold — the caller only cares about near matches.</summary>
+    public static IReadOnlyList<string> AttributeNames(string target, IEnumerable<string> candidates)
+    {
+        var names = candidates.ToArray();
+        var nearest = Nearest(target, names);
+        if (nearest.Count > 0 || string.IsNullOrEmpty(target))
+        {
+            return nearest;
+        }
+
+        // A count-shaped name can refer to a single-item property, but only match its exact stem.
+        if (target.EndsWith("Count", StringComparison.Ordinal))
+        {
+            string stem = target.Substring(0, target.Length - "Count".Length);
+            return stem.Length >= 6
+                ? names.Where(name => string.Equals(name, stem, StringComparison.Ordinal)).Take(1).ToArray()
+                : Array.Empty<string>();
+        }
+
+        // A truncated name may be completed, but only when exactly one property extends it.
+        var extensions = target.Length >= 5
+            ? names.Where(name => name.Length > target.Length && name.StartsWith(target, StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal).Take(2).ToArray()
+            : Array.Empty<string>();
+        return extensions.Length == 1 ? extensions : Array.Empty<string>();
+    }
+
+    /// <summary>Case-insensitive edit distance, counting adjacent transpositions as one typo.</summary>
     private static int Distance(string a, string b, int threshold)
     {
         int n = a.Length;
@@ -65,6 +91,7 @@ internal static class XamlSuggestions
             return n;
         }
 
+        var beforePrev = new int[m + 1];
         var prev = new int[m + 1];
         var cur = new int[m + 1];
         for (int j = 0; j <= m; j++)
@@ -81,6 +108,12 @@ internal static class XamlSuggestions
             {
                 int cost = ai == char.ToLowerInvariant(b[j - 1]) ? 0 : 1;
                 cur[j] = Math.Min(Math.Min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+                if (i > 1 && j > 1 &&
+                    ai == char.ToLowerInvariant(b[j - 2]) &&
+                    char.ToLowerInvariant(a[i - 2]) == char.ToLowerInvariant(b[j - 1]))
+                {
+                    cur[j] = Math.Min(cur[j], beforePrev[j - 2] + 1);
+                }
                 if (cur[j] < rowMin)
                 {
                     rowMin = cur[j];
@@ -92,7 +125,7 @@ internal static class XamlSuggestions
                 return threshold + 1;
             }
 
-            (prev, cur) = (cur, prev);
+            (beforePrev, prev, cur) = (prev, cur, beforePrev);
         }
 
         return prev[m];

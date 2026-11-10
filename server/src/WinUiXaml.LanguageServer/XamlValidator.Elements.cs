@@ -330,13 +330,15 @@ internal static partial class XamlValidator
             SeverityError,
             InvalidAttributeValueCode,
             $"'{value.Text}' is not a valid value for '{attribute.Name.FullName}' ({targetType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}).",
-            targetType.TypeKind == TypeKind.Enum
-                ? SuggestData(
-                    value.Text,
-                    targetType.GetMembers().OfType<IFieldSymbol>()
-                        .Where(field => field.HasConstantValue)
-                        .Select(field => field.Name))
-                : null));
+            targetType.SpecialType == SpecialType.System_Boolean
+                ? SuggestData(value.Text.Trim(), ["True", "False"])
+                : targetType.TypeKind == TypeKind.Enum
+                    ? SuggestData(
+                        value.Text,
+                        targetType.GetMembers().OfType<IFieldSymbol>()
+                            .Where(field => field.HasConstantValue)
+                            .Select(field => field.Name))
+                    : null));
     }
 
     /// <summary>Validates an Owner.Member attached-property attribute: resolves the owner type through the attribute's namespace and checks it actually exposes the member.</summary>

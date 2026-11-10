@@ -21,6 +21,50 @@ public class XamlSuggestionsTests
         Assert.Equal("Button", result[0]);
     }
 
+    [Theory]
+    [InlineData("Gird", "Grid")]
+    [InlineData("gIrd", "Grid")]
+    [InlineData("Txet", "Text")]
+    [InlineData("Ture", "True")]
+    [InlineData("On", "No")]
+    public void AdjacentTransposition_CountsAsOneTypo(string bad, string expected)
+    {
+        Assert.Equal(expected, Assert.Single(XamlSuggestions.Nearest(bad, [expected])));
+    }
+
+    [Theory]
+    [InlineData("abcd", "badc")]
+    [InlineData("abcd", "dbca")]
+    [InlineData("abcd", "wxyz")]
+    public void MultipleEdits_StillRespectShortNameThreshold(string bad, string candidate)
+    {
+        Assert.Empty(XamlSuggestions.Nearest(bad, [candidate]));
+    }
+
+    [Fact]
+    public void AttributeNames_RecognizesExactCountStemWithoutBroadeningGeneralSpelling()
+    {
+        Assert.Empty(XamlSuggestions.Nearest("FrozenEdgeCount", ["FrozenEdge"]));
+        Assert.Equal("FrozenEdge", Assert.Single(
+            XamlSuggestions.AttributeNames("FrozenEdgeCount", ["FrozenEdge", "Frozen", "Unrelated"])));
+        Assert.Empty(XamlSuggestions.AttributeNames("FrozenEdgeCount", ["frozenEdge", "Frozen", "Leading"]));
+        Assert.Empty(XamlSuggestions.AttributeNames("FrozenEdgeTotal", ["FrozenEdge"]));
+        Assert.Empty(XamlSuggestions.AttributeNames("FrozenEdgeCount", ["FrozenEdgeMode"]));
+        Assert.Equal("FrozenEdgeCounts", Assert.Single(
+            XamlSuggestions.AttributeNames("FrozenEdgeCount", ["FrozenEdge", "FrozenEdgeCounts"])));
+    }
+
+    [Fact]
+    public void AttributeNames_CompletesOnlyUniqueTruncatedNames()
+    {
+        Assert.Equal("FrozenEdge", Assert.Single(
+            XamlSuggestions.AttributeNames("Frozen", ["FrozenEdge", "Header", "Width"])));
+        Assert.Empty(XamlSuggestions.AttributeNames("Frozen", ["FrozenEdge", "FrozenEdgeMode"]));
+        Assert.Empty(XamlSuggestions.AttributeNames("frozen", ["FrozenEdge"]));
+        Assert.Empty(XamlSuggestions.AttributeNames("Font", ["FontFamily"]));
+        Assert.Empty(XamlSuggestions.AttributeNames("Horizontal", ["HorizontalAlignment", "HorizontalContentAlignment"]));
+    }
+
     [Fact]
     public void CasingOnlySlip_ScoresBestAndRanksFirst()
     {

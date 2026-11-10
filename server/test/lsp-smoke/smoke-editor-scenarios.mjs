@@ -524,7 +524,109 @@ export async function runEditorScenarios(ctx) {
   }
   console.log(`[ok] code actions: <Buton> -> "Change 'Buton' to 'Button'" quickfix replacing exactly the flagged span (${caActions.length} action(s))`);
 
-  // 21b) code action for a misspelled property element whose intended target is a GET-ONLY collection property (Grid.RowDefinitions has no setter). Regression guard: the suggestion candidate source must mirror property-element VALIDITY (HasProperty, get-only included), not the setter-only GetMembers — otherwise a real fix like RowDefinitionz -> RowDefinitions would be silently missing.
+  // Exercise transposed controls, properties, and literal values through real SDK diagnostics.
+  const spellingCases = [
+    { body: "<Gird></Gird>", bad: "Gird", good: "Grid", code: "WXAML0002", count: 2 },
+    { body: '<TextBlock Txet="unchanged" />', bad: "Txet", good: "Text", code: "WXAML0003", count: 1 },
+    { body: '<Button IsEnabled="Ture" />', bad: "Ture", good: "True", code: "WXAML0012", count: 1 },
+    { body: '<Button IsEnabled="Flase" />', bad: "Flase", good: "False", code: "WXAML0012", count: 1 },
+    { body: '<Button HorizontalAlignment="Strech" />', bad: "Strech", good: "Stretch", code: "WXAML0012", count: 1 },
+  ];
+  for (const [index, scenario] of spellingCases.entries()) {
+    const text = pageCls(scenario.body);
+    const diagnostics = await validateDoc(
+      text,
+      (items) => items.some((item) => item.code === scenario.code && item.message.includes(scenario.bad)),
+      `spelling ${scenario.bad}`,
+    );
+    const diagnostic = diagnostics.find((item) => item.code === scenario.code && item.message.includes(scenario.bad));
+    const actions = await codeActionWith(920100 + index, diagnostic, `spelling ${scenario.bad}`);
+    const action = actions.find((item) => item.title === `Change '${scenario.bad}' to '${scenario.good}'`);
+    const edits = action?.edit?.changes?.[xamlUri];
+    if (action?.kind !== "quickfix" || action.isPreferred !== true || action.command ||
+        edits?.length !== scenario.count) {
+      fail(`spelling ${scenario.bad}: expected a preferred direct replacement, got ${JSON.stringify(actions)}`);
+    }
+
+    let fixed = text;
+    for (const edit of [...edits].sort((a, b) =>
+      positionToOffset(text, b.range.start) - positionToOffset(text, a.range.start))) {
+      const start = positionToOffset(text, edit.range.start);
+      const end = positionToOffset(text, edit.range.end);
+      if (text.slice(start, end) !== scenario.bad || edit.newText !== scenario.good) {
+        fail(`spelling ${scenario.bad}: incorrect replacement span or text: ${JSON.stringify(edit)}`);
+      }
+      fixed = fixed.slice(0, start) + edit.newText + fixed.slice(end);
+    }
+    if (fixed !== text.replaceAll(scenario.bad, scenario.good)) {
+      fail(`spelling ${scenario.bad}: replacement changed unrelated markup`);
+    }
+    await validateDoc(fixed, (items) => items.length === 0, `fixed spelling ${scenario.bad}`);
+    console.log(`[ok] spelling quick fix: ${scenario.bad} -> ${scenario.good}, exact edits clear diagnostics`);
+  }
+
+  // Combined property/value replacements use SDK metadata and guarded, atomic edits.
+  const propertyValueCases = [
+    { attribute: 'HorizontalAlignmentCount="1"', property: "HorizontalAlignment", values: ["Center"] },
+    { attribute: 'VisibilityCount="unknown"', property: "Visibility", values: ["Visible", "Collapsed"] },
+    { attribute: 'IsEnabld="1"', property: "IsEnabled", values: ["True", "False"] },
+    { attribute: 'Visib="Hidden"', property: "Visibility", values: ["Visible", "Collapsed"] },
+  ];
+  for (const [index, scenario] of propertyValueCases.entries()) {
+    const text = pageCls(`<Button ${scenario.attribute} />`);
+    const diagnostics = await validateDoc(
+      text,
+      (items) => items.some((item) => item.code === "WXAML0003"),
+      `property/value ${scenario.attribute}`,
+    );
+    const diagnostic = diagnostics.find((item) => item.code === "WXAML0003");
+    const actions = await codeActionWith(920200 + index, diagnostic, "property/value replacement");
+    if (actions.length !== scenario.values.length || actions.some((action) => action.isPreferred === true)) {
+      fail(`property/value: expected explicit, non-preferred choices: ${JSON.stringify(actions)}`);
+    }
+
+    for (const value of scenario.values) {
+      const replacement = `${scenario.property}="${value}"`;
+      const action = actions.find((item) => item.title === `Replace with ${replacement}`);
+      const args = action?.command?.arguments?.[0];
+      if (action?.kind !== "quickfix" || action.edit ||
+          action?.command?.command !== "winapp.xaml.applyGuardedTextEdits" ||
+          args?.documentUri !== xamlUri || !Number.isInteger(args?.expectedVersion) ||
+          args?.edits?.length !== 1) {
+        fail(`property/value ${replacement}: missing guarded command: ${JSON.stringify(actions)}`);
+      }
+
+      const edit = args.edits[0];
+      const start = positionToOffset(text, edit.range.start);
+      const end = positionToOffset(text, edit.range.end);
+      if (edit.expectedText !== scenario.attribute || text.slice(start, end) !== edit.expectedText ||
+          edit.newText !== replacement) {
+        fail(`property/value ${replacement}: incorrect whole-attribute replacement: ${JSON.stringify(edit)}`);
+      }
+      const fixed = text.slice(0, start) + edit.newText + text.slice(end);
+      if (fixed !== text.replace(scenario.attribute, replacement)) {
+        fail(`property/value ${replacement}: changed unrelated markup`);
+      }
+      await validateDoc(fixed, (items) => items.length === 0, `fixed property/value ${replacement}`);
+    }
+    console.log(`[ok] property/value quick fix: ${scenario.attribute}, ${actions.length} metadata-backed choice(s)`);
+  }
+
+  const duplicatePropertyText = pageCls('<Button VisibilityCount="unknown" Visibility="Visible" />');
+  const duplicatePropertyDiagnostics = await validateDoc(
+    duplicatePropertyText,
+    (items) => items.some((item) => item.code === "WXAML0003"),
+    "duplicate property correction",
+  );
+  const duplicatePropertyActions = await codeActionWith(
+    920210, duplicatePropertyDiagnostics.find((item) => item.code === "WXAML0003"), "duplicate property correction",
+  );
+  if (duplicatePropertyActions.length !== 0) {
+    fail(`property/value: must not introduce a duplicate attribute: ${JSON.stringify(duplicatePropertyActions)}`);
+  }
+  console.log("[ok] property/value quick fix: existing target attribute prevents duplicate replacement");
+
+  // Property-element spelling fixes include get-only collection properties.
   const caPe = `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <Grid>\n    <Grid.RowDefinitionz><RowDefinition /></Grid.RowDefinitionz>\n  </Grid>\n</Page>`;
   const caPeDiags = await validateDoc(
     caPe,

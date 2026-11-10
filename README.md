@@ -248,7 +248,7 @@ When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer 
 | **Find All References / Rename** | For `x:Name` declarations and resource keys. Rename declines ambiguous external-dictionary references and theme variants rather than making partial edits. |
 | **Formatting** | Whole-document and range formatting. |
 | **Semantic tokens** | Type-aware colorization layered on top of the TextMate grammar. |
-| **Code actions** | Press **Ctrl+.** to import and qualify unresolved types, add namespace declarations, insert `x:DataType`, repair bindings, names, and Setter properties, or generate event handlers. |
+| **Code actions** | Press **Ctrl+.** for spelling replacements and combined property/value fixes, plus imports, namespace declarations, binding repairs, and event-handler generation. Fixes use your project's types and members, and ambiguous cases offer up to three choices. |
 
 The server starts automatically when you open a `.xaml` file. It ships as a self-contained native executable, so it runs whether or not .NET is installed — .NET is a requirement of the *project-aware* features, not of the editor.
 

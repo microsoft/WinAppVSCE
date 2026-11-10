@@ -529,6 +529,23 @@ public class XamlValidatorTests
         Assert.Contains("OneWay", data.Suggestions);
     }
 
+    [Theory]
+    [InlineData("""IsEnabled="not-bool" """, true)]
+    [InlineData("""Width="abc" """, true)]
+    [InlineData("""Text="Ture" """, false)]
+    [InlineData("""IsEnabled="True" """, false)]
+    [InlineData("""IsEnabled="false" """, false)]
+    [InlineData("""IsEnabled="{x:Bind Child}" """, false)]
+    public void LiteralSuggestions_DoNotGuessUnrelatedOrValidValues(string attribute, bool invalid)
+    {
+        var diagnostics = Validate(Page(attribute));
+
+        Assert.Equal(invalid, diagnostics.Any(item => item.Code == XamlValidator.InvalidAttributeValueCode));
+        Assert.All(
+            diagnostics.Where(item => item.Code == XamlValidator.InvalidAttributeValueCode),
+            item => Assert.Null(item.Data));
+    }
+
     [Fact]
     public void MisspelledKnownThemeResource_IsReportedWithSuggestion()
     {
