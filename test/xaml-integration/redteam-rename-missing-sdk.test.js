@@ -89,6 +89,23 @@ describe("WinUI XAML — rename without SDK metadata", function () {
         contentChanges: [{ text }],
       }, true);
     };
+    const assertAfterProjectLoad = async (request, expected) => {
+      const deadline = Date.now() + 30000;
+      while (true) {
+        try {
+          await request();
+          assert.fail("Expected the language server request to fail");
+        } catch (error) {
+          const message = String(error);
+          if (expected.test(message)) return;
+          if (!/requires a fully resolved project.*project loading/i.test(message) ||
+              Date.now() >= deadline) {
+            throw error;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    };
 
     try {
       await send("initialize", {
@@ -106,8 +123,8 @@ describe("WinUI XAML — rename without SDK metadata", function () {
         },
       }, true);
 
-      await assert.rejects(
-        send("textDocument/prepareRename", {
+      await assertAfterProjectLoad(
+        () => send("textDocument/prepareRename", {
           textDocument: { uri },
           position: { line: 0, character: 16 },
         }),
