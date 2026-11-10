@@ -40,7 +40,8 @@ internal static partial class CompletionProvider
         Action<string, string>? themeTypeResolutionObserver)
     {
         var ctx = Classify(doc.Text, offset);
-        if (ctx.Kind == ContextKind.None)
+        if (ctx.Kind == ContextKind.None ||
+            (ctx.Kind == ContextKind.ElementName && IsAfterClosedRoot(doc, ctx.ReplaceStart - 1)))
         {
             return new CompletionList();
         }
@@ -67,6 +68,12 @@ internal static partial class CompletionProvider
             _ => CompleteAttributeName(doc, offset, ctx, scope, typeSystem, replaceRange),
         };
     }
+
+    /// <summary>A document has a single root element, so nothing can follow its end tag.</summary>
+    private static bool IsAfterClosedRoot(TextDocument doc, int lt) =>
+        doc.Parsed.Root is { IsClosed: true } root &&
+        root.Span.Start < lt &&
+        lt >= root.Span.End;
 
     /// <summary>Quotes unquoted completions and replaces the entire value token.</summary>
     private static CompletionList MaybeQuoteUnquotedValues(CompletionList list, TextDocument doc, int offset, Context ctx)

@@ -809,6 +809,27 @@ internal static class XamlSemanticFacts
             .FirstOrDefault(candidate => string.Equals(candidate.Name, name, StringComparison.Ordinal))
             .Element;
 
+    /// <summary>Resolves a classic Binding ElementName. At runtime the lookup walks out of template namescopes.</summary>
+    internal static XamlElement? FindElementNameBindingTarget(
+        TextDocument document,
+        XamlNode? context,
+        string name,
+        XamlTypeSystem typeSystem)
+    {
+        var found = FindNamedElementInScope(document, context, name, typeSystem);
+        for (var node = context; found is null && node is not null; node = node.Parent)
+        {
+            if (node is XamlElement element &&
+                IsNameScopeBoundary(element, typeSystem) &&
+                IsWithinElementContent(context, element))
+            {
+                found = FindNamedElementInScope(document, element, name, typeSystem);
+            }
+        }
+
+        return found;
+    }
+
     internal static INamedTypeSymbol? ResolveNamedElementTypeInScope(
         TextDocument document,
         XamlNode? context,

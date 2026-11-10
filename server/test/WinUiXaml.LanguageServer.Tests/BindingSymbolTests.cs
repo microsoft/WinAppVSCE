@@ -28,6 +28,9 @@ public sealed class BindingSymbolTests
     [InlineData("(local:ViewModel)Hid|den", null)]
     [InlineData("(local:ViewModel)Te|xt", "Text")]
     [InlineData("ViewModel.For|mat", "Format")]
+    [InlineData("local:Statics.Ti|tle", "Title")]
+    [InlineData("local:Statics.Jo|in('a', 'b')", "Join")]
+    [InlineData("ViewModel.Format(local:Statics.Ti|tle)", "Title")]
     public void BindingNavigationUsesReadableAccessibleMembersAndCallableOverloads(
         string path, string? expectedName)
     {
@@ -94,6 +97,11 @@ public sealed class BindingSymbolTests
                     public string Format(string first, string second) => first;
                     public string Optional(string value = "") => value;
                     public string Variadic(params string[] values) => "";
+                }
+                public static class Statics
+                {
+                    public static string Title { get; } = "";
+                    public static string Join(string first, string second) => first;
                 }
             }
             """;

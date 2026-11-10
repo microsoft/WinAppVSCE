@@ -52,7 +52,7 @@ internal static partial class XamlValidator
                 argument.Value is { Length: > 0 } rawElementName &&
                 argument.ValueSpan is { } elementNameSpan &&
                 rawElementName.Trim() is { Length: > 0 } elementName &&
-                XamlSemanticFacts.FindNamedElementInScope(
+                XamlSemanticFacts.FindElementNameBindingTarget(
                     doc, attribute.Parent, elementName, typeSystem) is null)
             {
                 diagnostics.Add(Diag(doc, elementNameSpan, SeverityError, UnknownBindingElementNameCode,
@@ -614,12 +614,8 @@ internal static partial class XamlValidator
             return true;
         }
 
-        if (source.SpecialType == SpecialType.System_String &&
-            (target.Name == "Uri" &&
-             target.ContainingNamespace?.ToDisplayString() == "System" ||
-             target.Name == "ImageSource" &&
-             target.ContainingNamespace?.ToDisplayString() is
-                 "Microsoft.UI.Xaml.Media" or "Windows.UI.Xaml.Media"))
+        // The XAML compiler converts string sources with XamlBindingHelper.ConvertValue.
+        if (source.SpecialType == SpecialType.System_String)
         {
             return true;
         }

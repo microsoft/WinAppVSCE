@@ -41,6 +41,7 @@ namespace WinUiXaml.Workspace
 
         // Cache project and referenced controls because walking assembly namespaces is expensive.
         private IReadOnlyList<INamedTypeSymbol>? _sourceElementTypes;
+        private IReadOnlyList<INamedTypeSymbol>? _sourceTypes;
         private IReadOnlyList<INamedTypeSymbol>? _referencedElementTypes;
         private readonly ConcurrentDictionary<string, IReadOnlyList<INamedTypeSymbol>> _markupExtensionTypes =
             new(StringComparer.Ordinal);
@@ -413,6 +414,54 @@ namespace WinUiXaml.Workspace
             }
         }
 
+        /// <summary>True when the XAML compiler can create the type as an object element: a concrete, non-generic class with a public parameterless constructor.</summary>
+        public static bool IsXamlConstructible(INamedTypeSymbol type) =>
+            type.TypeKind == TypeKind.Class &&
+            !type.IsAbstract &&
+            !type.IsStatic &&
+            type.Arity == 0 &&
+            type.InstanceConstructors.Any(ctor =>
+                ctor.Parameters.Length == 0 && ctor.DeclaredAccessibility == Accessibility.Public);
+
+        /// <summary>Every accessible, non-generic top-level type declared in the project's own source.</summary>
+        public IReadOnlyList<INamedTypeSymbol> GetSourceTypes()
+        {
+            if (_sourceTypes is not null)
+            {
+                return _sourceTypes;
+            }
+
+            var result = new List<INamedTypeSymbol>();
+            CollectSourceTypes(_compilation.Assembly.GlobalNamespace, result);
+            return _sourceTypes = result;
+        }
+
+        private void CollectSourceTypes(INamespaceSymbol root, List<INamedTypeSymbol> result)
+        {
+            foreach (var type in root.GetTypeMembers())
+            {
+                if (type.Arity == 0 && !type.IsImplicitlyDeclared && IsUsableType(type) &&
+                    type.Locations.Any(location => location.IsInSource && !IsGeneratedSourcePath(location.SourceTree?.FilePath)) &&
+                    !type.GetAttributes().Any(attribute =>
+                        attribute.AttributeClass?.Name == "GeneratedCodeAttribute"))
+                {
+                    result.Add(type);
+                }
+            }
+
+            foreach (var child in root.GetNamespaceMembers())
+            {
+                CollectSourceTypes(child, result);
+            }
+        }
+
+        private static bool IsGeneratedSourcePath(string? path) =>
+            !string.IsNullOrEmpty(path) &&
+            (path.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase) ||
+             path.EndsWith(".g.i.cs", StringComparison.OrdinalIgnoreCase) ||
+             path.Contains($"{System.IO.Path.DirectorySeparatorChar}obj{System.IO.Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) ||
+             path.Contains($"{System.IO.Path.DirectorySeparatorChar}packages{System.IO.Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
+
         /// <summary>Finds public, concrete WinUI element types with the given simple name in the project and its references.</summary>
         public IReadOnlyList<INamedTypeSymbol> FindElementTypesByName(string simpleName)
         {
@@ -428,8 +477,10 @@ namespace WinUiXaml.Workspace
                          .GetSymbolsWithName(simpleName, SymbolFilter.Type)
                          .OfType<INamedTypeSymbol>())
             {
+                // Project classes (converters, view models) are valid resource elements without deriving from DependencyObject.
                 if (IsUsableClass(type) && !type.IsAbstract &&
-                    IsAssignableTo(type, dependencyObject) && seen.Add(type))
+                    (IsAssignableTo(type, dependencyObject) || IsXamlConstructible(type)) &&
+                    seen.Add(type))
                 {
                     result.Add(type);
                 }
@@ -1209,7 +1260,11 @@ namespace WinUiXaml.Workspace
         }
 
         /// <summary>Gets the declared type of the SDK-described XAML content property, before collection unwrapping.</summary>
-        public ITypeSymbol? GetContentPropertyDeclaredType(INamedTypeSymbol type)
+        public ITypeSymbol? GetContentPropertyDeclaredType(INamedTypeSymbol type) =>
+            GetContentPropertyName(type) is { } propertyName ? GetPropertyType(type, propertyName) : null;
+
+        /// <summary>Gets the name declared by the most-derived [ContentProperty] attribute, or null.</summary>
+        public string? GetContentPropertyName(INamedTypeSymbol type)
         {
             if (type is null || Capabilities.ContentPropertyAttribute is not { } contentPropertyAttribute)
             {
@@ -1241,18 +1296,7 @@ namespace WinUiXaml.Workspace
                         propertyName = cs;
                     }
 
-                    if (string.IsNullOrEmpty(propertyName))
-                    {
-                        return null;
-                    }
-
-                    var propertyType = GetPropertyType(type, propertyName!);
-                    if (propertyType is null)
-                    {
-                        return null;
-                    }
-
-                    return propertyType;
+                    return string.IsNullOrEmpty(propertyName) ? null : propertyName;
                 }
             }
 

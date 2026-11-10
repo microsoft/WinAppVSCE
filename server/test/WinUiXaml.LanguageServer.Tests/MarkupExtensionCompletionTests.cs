@@ -119,6 +119,22 @@ public sealed class MarkupExtensionCompletionTests
     }
 
     [Fact]
+    public void XBindStaticTypeCompletionOffersTypesWithStaticMembers()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:local="using:App"
+                  Tag="{x:Bind local:|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("local:BindStatics", labels);
+        Assert.DoesNotContain("local:ViewModel", labels);
+    }
+
+    [Fact]
     public void XBindStaticPathOffersAccessibleStaticMembers()
     {
         var labels = Complete(
@@ -375,11 +391,11 @@ public sealed class MarkupExtensionCompletionTests
             CreateTypeSystem(includeMarkupExtensionBase: true));
 
         Assert.DoesNotContain("ThemeResource", labels);
-        Assert.Contains("x:Type", Complete(
+        Assert.Contains("x:Null", Complete(
             """
             <Page xmlns="using:App.Extensions"
                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                  Tag="{x:T|}" />
+                  Tag="{x:N|}" />
             """,
             CreateTypeSystem(includeMarkupExtensionBase: true)));
     }
@@ -415,12 +431,13 @@ public sealed class MarkupExtensionCompletionTests
             """
             <Page xmlns="using:Microsoft.UI.Xaml"
                   xmlns:lang="http://schemas.microsoft.com/winfx/2006/xaml"
-                  Tag="{lang:T|}" />
+                  Tag="{lang:N|}" />
             """,
             CreateTypeSystem(includeMarkupExtensionBase: true));
 
-        Assert.Contains("lang:Type", labels);
-        Assert.DoesNotContain("x:Type", labels);
+        Assert.Contains("lang:Null", labels);
+        Assert.DoesNotContain("x:Null", labels);
+        Assert.DoesNotContain("lang:Type", labels);
     }
 
     [Fact]

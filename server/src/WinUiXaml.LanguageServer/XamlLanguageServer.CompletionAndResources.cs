@@ -678,7 +678,18 @@ internal sealed partial class XamlLanguageServer
         }
 
         int firstSegment = 0;
+        bool staticRoot = false;
         if (target.CastType is null && target.Preceding.Length > 0 &&
+            target.Preceding[0].IndexOf(':') > 0 &&
+            NearestEnclosingElement(doc, offset)?.NamespaceScope is { } staticScope &&
+            XamlSemanticFacts.ResolveTypeName(target.Preceding[0], staticScope, typeSystem) is { } staticType)
+        {
+            currentType = staticType;
+            includeRootNonPublic = false;
+            staticRoot = true;
+            firstSegment = 1;
+        }
+        else if (target.CastType is null && target.Preceding.Length > 0 &&
             XamlSemanticFacts.ResolveNamedElementTypeInScope(
                 doc, doc.Parsed.FindNode(offset), target.Preceding[0], typeSystem) is { } namedType)
         {
@@ -690,19 +701,31 @@ internal sealed partial class XamlLanguageServer
         {
             var next = includeRejected
                 ? ResolveAnySegmentType(currentType, target.Preceding[i])
-                : CompletionProvider.ResolveBindSegmentType(
-                    typeSystem, currentType, target.Preceding[i], includeRootNonPublic, pageClass);
+                : staticRoot
+                    ? CompletionProvider.ResolveStaticBindSegmentType(
+                        typeSystem, currentType, target.Preceding[i], pageClass)
+                    : CompletionProvider.ResolveBindSegmentType(
+                        typeSystem, currentType, target.Preceding[i], includeRootNonPublic, pageClass);
             if (next is null)
             {
                 return null;
             }
             currentType = next;
             includeRootNonPublic = false;
+            staticRoot = false;
         }
 
         if (includeRejected)
         {
             return currentType is INamedTypeSymbol named ? FindMember(named, target.Name) : null;
+        }
+
+        if (staticRoot)
+        {
+            return typeSystem.GetBindableStaticMembers(currentType, pageClass)
+                .FirstOrDefault(member => member.Name == target.Name &&
+                    (target.ArgumentCount is not { } staticArgumentCount ||
+                     member is IMethodSymbol method && XamlValidator.AcceptsArgumentCount(method, staticArgumentCount)));
         }
 
         if (target.ArgumentCount is { } argumentCount)
@@ -1042,7 +1065,7 @@ internal sealed partial class XamlLanguageServer
     }
 
     private static bool IsBindPathChar(char c) =>
-        char.IsLetterOrDigit(c) || c == '_' || c == '.' || c == '[' || c == ']';
+        char.IsLetterOrDigit(c) || c == '_' || c == '.' || c == '[' || c == ']' || c == ':';
 
     private static ISymbol? FindMember(INamedTypeSymbol type, string name)
     {

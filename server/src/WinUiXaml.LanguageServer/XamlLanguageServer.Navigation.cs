@@ -738,7 +738,7 @@ internal sealed partial class XamlLanguageServer
         }
 
         var (name, referenceSpan) = reference.Value;
-        var declarationElement = XamlSemanticFacts.FindNamedElementInScope(
+        var declarationElement = XamlSemanticFacts.FindElementNameBindingTarget(
             doc,
             doc.Parsed.FindNode(referenceSpan.Start),
             name,

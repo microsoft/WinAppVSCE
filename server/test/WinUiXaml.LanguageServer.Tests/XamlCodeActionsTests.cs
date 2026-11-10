@@ -959,17 +959,25 @@ public class XamlCodeActionsTests
             edit => edit.NewText == " xmlns:controls=\"using:Contoso.Controls\"");
     }
 
+    // Regression #358: plain CLR classes such as converters are valid resource elements.
     [Fact]
-    public void UnknownUnprefixedType_NonWinUiClass_ProducesNoImportAction()
+    public void UnknownUnprefixedType_PlainClrClass_OffersImport()
     {
-        var ts = BuildWinUiTypeSystem("namespace SampleApp.Controls { public class InfoCard { } }");
-        var xaml = "<Page xmlns=\"P\"><InfoCard /></Page>";
+        var ts = BuildWinUiTypeSystem(
+            "namespace SampleApp.Controls { public class InfoCard { } public abstract class AbstractCard { } }");
+        var xaml = "<Page xmlns=\"P\"><InfoCard /><AbstractCard /></Page>";
         var doc = new TextDocument(Uri, xaml);
         int nameAt = xaml.IndexOf("InfoCard");
         var diagnostic = Diag(
             XamlValidator.UnknownTypeCode, R(0, nameAt, nameAt + "InfoCard".Length), Data("InfoCard"));
 
-        Assert.Empty(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), ts));
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), ts));
+        Assert.Equal("Import 'InfoCard' from 'SampleApp.Controls'", action.Title);
+
+        int abstractAt = xaml.IndexOf("AbstractCard");
+        var abstractDiagnostic = Diag(
+            XamlValidator.UnknownTypeCode, R(0, abstractAt, abstractAt + "AbstractCard".Length), Data("AbstractCard"));
+        Assert.Empty(XamlCodeActions.Compute(Uri, doc, Context(abstractDiagnostic), ts));
     }
 
     [Fact]

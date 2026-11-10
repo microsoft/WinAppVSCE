@@ -16,8 +16,6 @@ internal static partial class CompletionProvider
         ("StaticResource", "Resource reference resolved once at load time"),
         ("ThemeResource", "Resource reference re-evaluated when the theme changes"),
         ("TemplateBinding", "Binds to a property on the templated parent"),
-        ("x:Static", "References a static field, property, or constant"),
-        ("x:Type", "A System.Type reference for the named type"),
         ("x:Null", "The null value"),
     };
 
@@ -806,14 +804,51 @@ internal static partial class CompletionProvider
                 replaceRange);
         }
 
+        // {x:Bind local:Ty|} names a type whose static members root the path.
+        if (!ctx.IsClassicBinding &&
+            string.IsNullOrEmpty(ctx.BindPrefixPath) &&
+            string.IsNullOrEmpty(ctx.BindCastType) &&
+            ctx.Partial.IndexOf(':') > 0)
+        {
+            SplitQualified(ctx.Partial, out var typePrefix, out var typeLocal);
+            if (scope.TryResolvePrefix(typePrefix, out var typeUri))
+            {
+                foreach (var type in typeSystem.GetAllTypes(typeUri))
+                {
+                    var label = typePrefix + ":" + type.Name;
+                    if (!StartsWith(type.Name, typeLocal) ||
+                        !typeSystem.GetBindableStaticMembers(type, pageClass).Any() ||
+                        !seen.Add(label))
+                    {
+                        continue;
+                    }
+
+                    items.Add(new CompletionItem
+                    {
+                        Label = label,
+                        Kind = TypeCompletionKind(type),
+                        Documentation = CompletionDoc(type),
+                        Detail = type.ContainingNamespace?.ToDisplayString(),
+                        TextEdit = new TextEdit { Range = replaceRange, NewText = label },
+                        FilterText = label,
+                        SortText = label,
+                    });
+                }
+            }
+
+            return Finish(items);
+        }
+
         var root = string.IsNullOrEmpty(ctx.BindCastType)
             ? (string.IsNullOrEmpty(ctx.BindElementName)
                 ? ResolveBindRoot(doc, offset, scope, typeSystem, pageClass, ctx.IsClassicBinding)
-                : XamlSemanticFacts.ResolveNamedElementTypeInScope(
+                : XamlSemanticFacts.FindElementNameBindingTarget(
                     doc,
                     doc.Parsed.FindNode(Math.Max(0, offset - 1)),
                     ctx.BindElementName!,
-                    typeSystem))
+                    typeSystem) is { } namedElement
+                    ? XamlSemanticFacts.ResolveElementType(namedElement, typeSystem)
+                    : null)
             : ResolveElementType(ParseQualified(ctx.BindCastType!), scope, typeSystem);
         var prefixPath = ctx.BindPrefixPath ?? string.Empty;
         bool staticRoot = false;

@@ -96,6 +96,32 @@ internal static partial class XamlValidator
     public const string InvalidStyleTargetTypeCode = "WXAML0034";
     /// <summary>An <c>x:Bind</c> expression uses syntax unsupported by the WinUI XAML compiler.</summary>
     public const string InvalidBindSyntaxCode = "WXAML0035";
+    /// <summary>An entry in a ResourceDictionary has no x:Key and cannot be implicitly keyed.</summary>
+    public const string MissingResourceKeyCode = "WXAML0036";
+    /// <summary>A WPF-only markup extension that WinUI XAML does not support.</summary>
+    public const string UnsupportedMarkupExtensionCode = "WXAML0037";
+    /// <summary>An object element names an abstract type or one without a public constructor.</summary>
+    public const string NonConstructibleElementCode = "WXAML0038";
+    /// <summary>An element sets both x:Name and Name.</summary>
+    public const string ConflictingNameCode = "WXAML0039";
+    /// <summary>Text content where the content property cannot accept text.</summary>
+    public const string InvalidTextContentCode = "WXAML0040";
+    /// <summary>A property is assigned more than once on the same element.</summary>
+    public const string DuplicatePropertyAssignmentCode = "WXAML0041";
+    /// <summary>x:Load or x:DeferLoadStrategy is used without x:Name.</summary>
+    public const string LoadRequiresNameCode = "WXAML0042";
+    /// <summary>An event attribute has an empty handler name.</summary>
+    public const string EmptyEventHandlerCode = "WXAML0043";
+    /// <summary>A TwoWay x:Bind targets a source member that cannot be written.</summary>
+    public const string ReadOnlyTwoWayBindCode = "WXAML0044";
+    /// <summary>A ResourceDictionary Source points at a project file that does not exist.</summary>
+    public const string MissingResourceDictionarySourceCode = "WXAML0045";
+    /// <summary>A Style.BasedOn is self-referencing, cyclic, or has an incompatible TargetType.</summary>
+    public const string InvalidBasedOnCode = "WXAML0046";
+    /// <summary>A StaticResource value is not assignable to the target property type.</summary>
+    public const string InvalidResourceTypeCode = "WXAML0047";
+    /// <summary>An x:Bind to a property names a method without calling it.</summary>
+    public const string BindMethodWithoutCallCode = "WXAML0048";
     /// <summary>Classic Binding in an untyped DataTemplate is not safe for Native AOT.</summary>
     public const string BindingDataTypeRecommendedCode = "WMC1510";
 
@@ -110,7 +136,8 @@ internal static partial class XamlValidator
         TextDocument doc,
         XamlTypeSystem typeSystem,
         IReadOnlyCollection<string>? projectResourceKeys = null,
-        bool resourceCatalogIsAuthoritative = true)
+        bool resourceCatalogIsAuthoritative = true,
+        XamlFileSystemContext? fileSystem = null)
     {
         var diagnostics = new List<Diagnostic>();
         if (doc.Parsed.Root is { } root)
@@ -133,6 +160,7 @@ internal static partial class XamlValidator
 
             ValidateUniqueNames(root, doc, typeSystem, diagnostics);
             ValidateUniqueResourceKeys(root, doc, typeSystem, diagnostics);
+            ValidateStructure(root, doc, typeSystem, resourceIndex, fileSystem, diagnostics);
         }
 
         return diagnostics;
