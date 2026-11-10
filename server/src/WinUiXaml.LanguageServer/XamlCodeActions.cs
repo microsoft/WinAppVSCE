@@ -211,8 +211,6 @@ internal static class XamlCodeActions
         var (bad, _) = ReadSuggestions(diagnostic.Data);
         if (attribute is null ||
             attribute.IsNamespaceDeclaration || attribute.Name.HasPrefix || attribute.Name.IsDotted ||
-            (attribute.Value is { Quote: { } quote } quoted &&
-                (quoted.Span.Length < 2 || doc.Text[quoted.Span.End - 1] != quote)) ||
             !DiagnosticTargetsSpan(doc, diagnostic.Range, attribute.Name.LocalNameSpan) ||
             (bad.Length > 0 && bad != attribute.Name.LocalName) ||
             attribute.Parent is not XamlElement element ||
@@ -222,9 +220,12 @@ internal static class XamlCodeActions
             return true;
         }
 
-        // A '<' in the value means a missing quote swallowed later markup; only rename the name.
-        bool reliableValue = attribute.Value is not { } parsedValue ||
-            doc.Text.IndexOf('<', parsedValue.Span.Start, parsedValue.Span.Length) < 0;
+        // A missing closing quote makes the value swallow later markup; then only the name is safe to edit.
+        bool reliableValue = attribute.Value is not { Quote: { } quote } parsedValue ||
+            parsedValue.Span.Length >= 2 && doc.Text[parsedValue.Span.End - 1] == quote &&
+            doc.Text.IndexOf('<', parsedValue.Span.Start, parsedValue.Span.Length) < 0 &&
+            (parsedValue.Span.End == doc.Text.Length || char.IsWhiteSpace(doc.Text[parsedValue.Span.End]) ||
+                doc.Text[parsedValue.Span.End] is '/' or '>');
         var members = typeSystem.GetAttributeMembers(elementType).ToDictionary(member => member.Name);
         var nearby = XamlSuggestions.Nearest(attribute.Name.LocalName, members.Keys);
         var candidates = XamlSuggestions.AttributeNames(attribute.Name.LocalName, members.Keys)
@@ -248,9 +249,10 @@ internal static class XamlCodeActions
                 attribute.Value is { IsMarkupExtension: false, Quote: not null } value
                     ? AttributeReplacementValues(value.Text, memberType, typeSystem)
                     : new[] { attribute.Value?.Text ?? string.Empty };
-            if (values.Count == 0 && nearby.Contains(name))
+            if (values.Count == 0 && nearby.Contains(name) || values.Count > 1 && candidates.Length > 1)
             {
-                // Keep the plain rename; the value keeps its own diagnostic and fix.
+                // Keep the plain rename; the value keeps its own diagnostic and fix. With several
+                // close property names, one rename each keeps every name visible under the cap.
                 values = new[] { attribute.Value?.Text ?? string.Empty };
             }
             foreach (var replacement in values.Take(3 - (actions.Count - initialCount)))
@@ -331,6 +333,13 @@ internal static class XamlCodeActions
                 if (matches.Length > 0)
                 {
                     return matches;
+                }
+
+                // An unnamed number on a non-flags enum is almost always a misplaced count; offer names instead.
+                if (!type.GetAttributes().Any(attribute =>
+                    attribute.AttributeClass?.ToDisplayString() == "System.FlagsAttribute"))
+                {
+                    return fields.Length <= 3 ? fields.Select(field => field.Name).ToArray() : Array.Empty<string>();
                 }
             }
 
@@ -876,25 +885,19 @@ internal static class XamlCodeActions
                     ? null
                     : XamlSemanticFacts.ResolveElementType(element, typeSystem);
                 var suggestions = ReadSuggestions(diagnostic.Data).Suggestions;
-                if (suggestions.Count > 0 && typeSystem is not null)
+                var memberType = attribute is null || elementType is null
+                    ? null
+                    : XamlValidator.ResolveAttributeValueType(attribute, elementType, element!.NamespaceScope, typeSystem!);
+                if (suggestions.Count > 0)
                 {
                     // A diagnostic can outlive a property rename; spell-fix only if the current member still rejects the value.
-                    var currentType = attribute is null || elementType is null
-                        ? null
-                        : XamlValidator.ResolveAttributeValueType(attribute, elementType, element!.NamespaceScope, typeSystem);
-                    return currentType is null ||
+                    return typeSystem is not null &&
+                        (memberType is null ||
                         attribute!.Value is not { IsMarkupExtension: false } currentValue ||
-                        IsValidLiteral(currentValue.Text, currentType, typeSystem) != false ||
-                        suggestions.Any(suggestion => IsValidLiteral(suggestion, currentType, typeSystem) != true);
-                }
-                else if (suggestions.Count > 0)
-                {
-                    return false;
+                        IsValidLiteral(currentValue.Text, memberType, typeSystem) != false ||
+                        suggestions.Any(suggestion => IsValidLiteral(suggestion, memberType, typeSystem) != true));
                 }
 
-                var memberType = elementType is null || attribute is null
-                    ? null
-                    : typeSystem!.FindAttributeMember(elementType, attribute.Name.LocalName)?.Type;
                 string? replacement = memberType is null
                     ? null
                     : XamlValueConverter.GetDefaultLiteral(memberType);
@@ -912,13 +915,20 @@ internal static class XamlCodeActions
                     return false;
                 }
 
-                AddEditAction(
-                    actions,
-                    doc,
-                    diagnostic,
-                    $"Replace with '{replacement}'",
-                    doc.RangeOf(attribute.Value.InnerSpan),
-                    replacement);
+                // Either Boolean is a guess, so offer both without preferring one.
+                bool isBoolean = XamlValueConverter.UnwrapNullable(memberType!).SpecialType == SpecialType.System_Boolean;
+                foreach (var literal in isBoolean ? new[] { "True", "False" } : new[] { replacement })
+                {
+                    AddEditAction(
+                        actions,
+                        doc,
+                        diagnostic,
+                        $"Replace with '{literal}'",
+                        doc.RangeOf(attribute.Value.InnerSpan),
+                        literal,
+                        isPreferred: !isBoolean);
+                }
+
                 return true;
             }
 
@@ -1035,14 +1045,15 @@ internal static class XamlCodeActions
         Diagnostic diagnostic,
         string title,
         Lsp.Range range,
-        string newText)
+        string newText,
+        bool isPreferred = true)
     {
         actions.Add(new CodeAction
         {
             Title = title,
             Kind = "quickfix",
             Diagnostics = new List<Diagnostic> { diagnostic },
-            IsPreferred = true,
+            IsPreferred = isPreferred ? true : null,
             Edit = new WorkspaceEdit
             {
                 Changes = new Dictionary<string, List<TextEdit>>(StringComparer.Ordinal)

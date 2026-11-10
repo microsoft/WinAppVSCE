@@ -334,14 +334,14 @@ internal static partial class XamlValidator
                 ? SuggestData(value.Text.Trim(), ["True", "False"])
                 : targetType.TypeKind == TypeKind.Enum
                     ? SuggestData(
-                        value.Text,
+                        value.Text.Trim(),
                         targetType.GetMembers().OfType<IFieldSymbol>()
                             .Where(field => field.HasConstantValue)
                             .Select(field => field.Name))
                     : null));
     }
 
-    /// <summary>The type a literal value of this attribute is validated against, mirroring the member paths above; null when unresolved.</summary>
+    /// <summary>The type a literal value of this attribute is validated against; the validator and quick fixes share it. Null when unresolved.</summary>
     internal static ITypeSymbol? ResolveAttributeValueType(
         XamlAttribute attribute,
         INamedTypeSymbol elementType,
@@ -360,6 +360,8 @@ internal static partial class XamlValidator
         int dot = name.LocalName.LastIndexOf('.');
         if (dot <= 0 || dot >= name.LocalName.Length - 1 ||
             !scope.TryResolvePrefix(name.Prefix, out var uri) ||
+            uri == XamlTypeSystem.XamlLanguageNamespace ||
+            !typeSystem.IsKnownNamespace(uri) ||
             typeSystem.ResolveType(uri, name.LocalName.Substring(0, dot)) is not { } owner)
         {
             return null;
@@ -413,19 +415,8 @@ internal static partial class XamlValidator
             return;
         }
 
-        // Owner.Property is also legal for an ordinary property when Owner is the
-        // element's own type (or one of its bases), for example Grid.ColumnDefinitions.
-        if (XamlTypeSystem.IsAssignableTo(elementType, owner) &&
-            typeSystem.FindAttributeMember(elementType, memberName) is { Kind: XamlMemberKind.Property, Type: { } ordinaryType })
-        {
-            ValidateLiteralAttributeValue(attribute, ordinaryType, typeSystem, doc, diagnostics);
-            return;
-        }
-
-        var memberType = typeSystem.GetAttachedMemberType(
-            owner,
-            memberName,
-            elementType);
+        // Owner.Property may also name the element's own ordinary property, for example Grid.ColumnDefinitions.
+        var memberType = ResolveAttributeValueType(attribute, elementType, scope, typeSystem);
         if (memberType is not null)
         {
             ValidateLiteralAttributeValue(attribute, memberType, typeSystem, doc, diagnostics);

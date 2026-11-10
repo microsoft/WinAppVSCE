@@ -279,7 +279,6 @@ public class XamlCodeActionsTests
 
     [Theory]
     [InlineData("FrozenEdgeCount=\"  Trailing  \"", "FrozenEdge=\"  Trailing  \"")]
-    [InlineData("FrozenEdgeCount=\"99\"", "FrozenEdge=\"99\"")]
     [InlineData("FrozenEdgeCount=\"Leading, Trailing\"", "FrozenEdge=\"Leading, Trailing\"")]
     public void UnknownProperty_PreservesAlreadyValidValues(string attributes, string expected)
     {
@@ -289,6 +288,18 @@ public class XamlCodeActionsTests
 
         Assert.Equal(expected, edit.NewText);
         Assert.NotEqual(true, action.IsPreferred);
+    }
+
+    [Fact]
+    public void UnnamedNumber_OnNonFlagsEnum_OffersNamedChoicesInsteadOfKeepingTheNumber()
+    {
+        var doc = ColumnDocument("FrozenEdgeCount=\"99\"");
+        var actions = AttributeActions(doc, ColumnTypeSystem());
+
+        Assert.Equal(
+            new[] { "Replace with FrozenEdge=\"None\"", "Replace with FrozenEdge=\"Leading\"", "Replace with FrozenEdge=\"Trailing\"" },
+            actions.Select(action => action.Title));
+        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
     }
 
     [Fact]
@@ -325,7 +336,9 @@ public class XamlCodeActionsTests
             actions.Select(action => action.Title));
         Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
 
-        Assert.Equal(3, AttributeActions(ColumnDocument("Moe=\"unknown\""), typeSystem).Count);
+        var tied = AttributeActions(ColumnDocument("Moe=\"unknown\""), typeSystem);
+        Assert.Equal(new[] { "Change 'Moe' to 'Mode'", "Change 'Moe' to 'More'" }, tied.Select(action => action.Title));
+        Assert.All(tied, action => Assert.NotEqual(true, action.IsPreferred));
     }
 
     [Theory]
@@ -342,14 +355,17 @@ public class XamlCodeActionsTests
     }
 
     [Theory]
-    [InlineData("FrozenEdgeCount", null)]
-    [InlineData("FrozenEdg", "FrozenEdge")]
-    public void MissingClosingQuoteBeforeNextElement_NeverRewritesFollowingMarkup(string bad, string? good)
+    [InlineData("FrozenEdgeCount", "1 />", "<tabular:TableViewTemplateColumn FrozenEdge=\"keep\" />", null)]
+    [InlineData("FrozenEdg", "1 />", "<tabular:TableViewTemplateColumn FrozenEdge=\"keep\" />", "FrozenEdge")]
+    [InlineData("FrozenEdgeCount", "1\n    ", "Label=\"keep\" />", null)]
+    [InlineData("FrozenEdg", "Leadin\n    ", "Label=\"keep\" />", "FrozenEdge")]
+    [InlineData("IsEnabld", "Tru\n    ", "Label=\"keep\" />", "IsEnabled")]
+    [InlineData("Labl", "x", "", "Label")]
+    public void MissingClosingQuote_OnlyOffersNameRename(string bad, string value, string rest, string? good)
     {
         var typeSystem = ColumnTypeSystem();
-        var doc = new TextDocument(Uri,
-            $"<tabular:TableViewTemplateColumn xmlns:tabular=\"using:TestControls\" {bad}=\"1 />" +
-            "<tabular:TableViewTemplateColumn FrozenEdge=\"keep\" />", version: 17);
+        var text = $"<tabular:TableViewTemplateColumn xmlns:tabular=\"using:TestControls\" {bad}=\"{value}{rest}";
+        var doc = new TextDocument(Uri, text, version: 17);
         var diagnostic = Assert.Single(XamlValidator.Validate(doc, typeSystem),
             item => item.Code == XamlValidator.UnknownAttributeCode && RangeText(doc, item.Range) == bad);
         var actions = XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem)
@@ -366,7 +382,7 @@ public class XamlCodeActionsTests
         Assert.Equal($"Change '{bad}' to '{good}'", action.Title);
         var edit = Assert.Single(action.Edit!.Changes[Uri]);
         Assert.Equal(bad, RangeText(doc, edit.Range));
-        Assert.Contains("<tabular:TableViewTemplateColumn FrozenEdge=\"keep\" />", ApplyEdit(doc, edit));
+        Assert.Equal(text.Replace($" {bad}=", $" {good}="), ApplyEdit(doc, edit));
     }
 
     [Fact]
@@ -499,6 +515,8 @@ public class XamlCodeActionsTests
             public static void SetLabel(object target, string value) { }
             public static Edge GetEdge(object target) => Edge.None;
             public static void SetEdge(object target, Edge value) { }
+            public static int GetRow(object target) => 0;
+            public static void SetRow(object target, int value) { }
         }
         """;
 
@@ -558,6 +576,45 @@ public class XamlCodeActionsTests
         var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem),
             item => item.Kind == "quickfix" && item.IsPreferred == true);
         Assert.Equal("Change 'Leadng' to 'Leading'", action.Title);
+    }
+
+    private static List<CodeAction> InvalidValueActions(TextDocument doc, XamlTypeSystem typeSystem)
+    {
+        var diagnostic = Assert.Single(XamlValidator.Validate(doc, typeSystem),
+            item => item.Code == XamlValidator.InvalidAttributeValueCode);
+        return XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem)
+            .Where(item => item.Kind == "quickfix").ToList();
+    }
+
+    [Fact]
+    public void InvalidBooleanLiteral_OffersBothValuesWithoutPreference()
+    {
+        var actions = InvalidValueActions(ColumnDocument("IsEnabled=\"1\""), ColumnTypeSystem());
+
+        Assert.Equal(new[] { "Replace with 'True'", "Replace with 'False'" }, actions.Select(action => action.Title));
+        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
+    }
+
+    [Fact]
+    public void InvalidAttachedNumericValue_OffersDefaultLiteral()
+    {
+        var doc = ColumnDocument("tabular:Tags.Row=\"abc\"");
+        var action = Assert.Single(InvalidValueActions(doc, ColumnTypeSystem(enumPrefix: TagsOwner)));
+
+        Assert.Equal("Replace with '0'", action.Title);
+        Assert.True(action.IsPreferred);
+    }
+
+    [Fact]
+    public void PaddedInvalidEnumValue_ReplacesOnlyTheMisspelledToken()
+    {
+        var doc = ColumnDocument("FrozenEdge=\" Leadng \"");
+        var action = Assert.Single(InvalidValueActions(doc, ColumnTypeSystem()), item => item.IsPreferred == true);
+        var edit = Assert.Single(action.Edit!.Changes[Uri]);
+
+        Assert.Equal("Change 'Leadng' to 'Leading'", action.Title);
+        Assert.Equal("Leadng", RangeText(doc, edit.Range));
+        Assert.Contains("FrozenEdge=\" Leading \"", ApplyEdit(doc, edit));
     }
     private static XamlTypeSystem ColumnTypeSystem(
         string members = "None = 0, Leading = 1, Trailing = 2",
@@ -1841,15 +1898,17 @@ public class XamlCodeActionsTests
         Assert.Equal("<Page xmlns=\"using:TestApp\" Width=\"0\"/>", ApplyEdit(doc, edit));
     }
 
-    [Fact]
-    public void InvalidBooleanLiteral_ReplacesWithFalse()
+    [Theory]
+    [InlineData("bool")]
+    [InlineData("bool?")]
+    public void InvalidBooleanLiteral_OffersTrueAndFalseWithoutPreference(string propertyType)
     {
-        var typeSystem = BuildWinUiTypeSystem("""
+        var typeSystem = BuildWinUiTypeSystem($$"""
             namespace TestApp
             {
                 public class Page : Microsoft.UI.Xaml.DependencyObject
                 {
-                    public bool IsEnabled { get; set; }
+                    public {{propertyType}} IsEnabled { get; set; }
                 }
             }
             """);
@@ -1861,11 +1920,10 @@ public class XamlCodeActionsTests
             R(0, valueAt, valueAt + "maybe".Length),
             null);
 
-        var edit = Assert.Single(
-            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem))
-                .Edit!.Changes[Uri]);
-
-        Assert.Equal("False", edit.NewText);
+        var actions = XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem);
+        Assert.Equal(new[] { "Replace with 'True'", "Replace with 'False'" }, actions.Select(action => action.Title));
+        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
+        var edit = Assert.Single(actions[1].Edit!.Changes[Uri]);
         Assert.Equal(valueAt, doc.OffsetAt(edit.Range.Start));
         Assert.Equal("<Page xmlns=\"using:TestApp\" IsEnabled=\"False\"/>", ApplyEdit(doc, edit));
     }
@@ -1882,7 +1940,6 @@ public class XamlCodeActionsTests
     [InlineData("float", "0")]
     [InlineData("double?", "0")]
     [InlineData("decimal?", "0")]
-    [InlineData("bool?", "False")]
     public void InvalidPrimitiveLiteral_UsesTypeDefault(string propertyType, string expected)
     {
         var typeSystem = BuildWinUiTypeSystem($$"""
