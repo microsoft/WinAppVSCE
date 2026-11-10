@@ -186,22 +186,37 @@ internal sealed class JsonRpcConnection
 
         var capturedResult = result;
         var capturedError = error;
-        await WriteMessageAsync(writer =>
+        ReadOnlyMemory<byte> frame;
+        try
+        {
+            frame = BuildResponse(id, capturedResult, capturedError);
+        }
+        catch (Exception ex) when (capturedError == null)
+        {
+            // Serialization runs after the handler's try block; without this the request is never answered.
+            Log($"request '{method}' result could not be serialized: {ex}");
+            frame = BuildResponse(id, null, new ResponseError(-32603, $"The result of '{method}' could not be serialized: {ex.Message}"));
+        }
+
+        await WriteFrameAsync(frame).ConfigureAwait(false);
+    }
+
+    private static ReadOnlyMemory<byte> BuildResponse(JsonElement id, object? result, ResponseError? error) =>
+        BuildMessage(writer =>
         {
             writer.WritePropertyName("id");
             id.WriteTo(writer);
-            if (capturedError != null)
+            if (error != null)
             {
                 writer.WritePropertyName("error");
-                WriteValue(writer, capturedError);
+                WriteValue(writer, error);
             }
             else
             {
                 writer.WritePropertyName("result");
-                WriteValue(writer, capturedResult);
+                WriteValue(writer, result);
             }
-        }).ConfigureAwait(false);
-    }
+        });
 
     private void CancelRequest(JsonElement? @params)
     {
@@ -343,7 +358,10 @@ internal sealed class JsonRpcConnection
     }
 
     /// <summary>Writes a JSON-RPC frame, resolving payload runtime types through LspJsonContext instead of reflection fallback.</summary>
-    private async Task WriteMessageAsync(Action<Utf8JsonWriter> writeBody)
+    private Task WriteMessageAsync(Action<Utf8JsonWriter> writeBody) =>
+        WriteFrameAsync(BuildMessage(writeBody));
+
+    private static ReadOnlyMemory<byte> BuildMessage(Action<Utf8JsonWriter> writeBody)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer))
@@ -354,7 +372,11 @@ internal sealed class JsonRpcConnection
             writer.WriteEndObject();
         }
 
-        var json = buffer.WrittenMemory;
+        return buffer.WrittenMemory;
+    }
+
+    private async Task WriteFrameAsync(ReadOnlyMemory<byte> json)
+    {
         var header = Encoding.ASCII.GetBytes($"Content-Length: {json.Length}\r\n\r\n");
 
         await _writeLock.WaitAsync().ConfigureAwait(false);

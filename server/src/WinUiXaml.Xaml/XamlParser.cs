@@ -6,7 +6,8 @@ namespace WinUiXaml.Xaml
     /// <summary>A tolerant, non-throwing recursive-descent parser for XAML.</summary>
     public sealed class XamlParser
     {
-        private const int MaxDepth = 500;
+        // Recursive descent uses roughly 1 KB of stack per level; 1024 overflowed a 1 MB thread.
+        private const int MaxDepth = 512;
         private const int MaxMarkupDepth = 128;
 
         private readonly string _text;
@@ -34,12 +35,33 @@ namespace WinUiXaml.Xaml
             XamlElement? root = null;
             for (int i = 0; i < contents.Count; i++)
             {
-                if (contents[i] is XamlElement el)
+                switch (contents[i])
                 {
-                    root = el;
-                    break;
+                    case XamlElement el when root == null:
+                        root = el;
+                        break;
+                    case XamlElement extra:
+                        AddDiagnostic(
+                            XamlDiagnosticIds.MultipleRootElements,
+                            "A XAML document can have only one root element.",
+                            extra.Name?.Span ?? extra.OpenTagSpan);
+                        break;
+                    case XamlText text when !text.IsWhitespace:
+                        AddDiagnostic(
+                            XamlDiagnosticIds.TextOutsideRoot,
+                            "Text is not allowed outside the root element.",
+                            TrimSpan(text.Span));
+                        break;
+                    case XamlCData cdata:
+                        AddDiagnostic(
+                            XamlDiagnosticIds.TextOutsideRoot,
+                            "CDATA is not allowed outside the root element.",
+                            cdata.Span);
+                        break;
                 }
             }
+
+            ReportInvalidCharacters();
 
             var span = TextSpan.FromBounds(0, _text.Length);
             var doc = new XamlDocument(_text, contents, root, _diagnostics, span);
@@ -118,6 +140,7 @@ namespace WinUiXaml.Xaml
                 _pos++;
             }
 
+            ValidateEntityReferences(start, _pos);
             return new XamlText(_text.Substring(start, _pos - start), TextSpan.FromBounds(start, _pos));
         }
 
@@ -125,9 +148,21 @@ namespace WinUiXaml.Xaml
         {
             int start = _pos;
             _pos++; // consume '<'
-            SkipWhitespace();
+            if (IsWhitespace(Peek(0)))
+            {
+                int whitespaceStart = _pos;
+                SkipWhitespace();
+                AddDiagnostic(
+                    XamlDiagnosticIds.InvalidTagName,
+                    "Whitespace is not allowed between '<' and the element name.",
+                    TextSpan.FromBounds(whitespaceStart, _pos));
+            }
 
             XamlName? name = TryParseName();
+            if (name == null)
+            {
+                AddDiagnostic(XamlDiagnosticIds.InvalidTagName, "Expected an element name.", TextSpan.Empty(_pos));
+            }
 
             var attributes = new List<XamlAttribute>();
             ParseAttributes(attributes);
@@ -171,6 +206,14 @@ namespace WinUiXaml.Xaml
             List<XamlNode> content;
             if (_depth >= MaxDepth)
             {
+                // Skip the subtree in one flat pass so nesting cannot exhaust the stack or cascade
+                // missing-end-tag diagnostics; the matching end tag is still read below.
+                AddDiagnostic(
+                    XamlDiagnosticIds.ElementTooDeep,
+                    $"Element nesting exceeds the supported depth of {MaxDepth}; nested content is not analyzed.",
+                    name?.Span ?? openTagSpan,
+                    XamlDiagnosticSeverity.Warning);
+                SkipNestedContent();
                 content = new List<XamlNode>();
             }
             else
@@ -302,6 +345,7 @@ namespace WinUiXaml.Xaml
                 if (terminated)
                 {
                     _pos++; // consume closing quote
+                    ValidateAttributeValueCharacters(innerStart, innerEnd);
                 }
                 else
                 {
@@ -356,7 +400,17 @@ namespace WinUiXaml.Xaml
 
             int limit = innerStart + inner.Length;
             int p = innerStart;
-            return ParseMarkupExtension(ref p, limit);
+            var markup = ParseMarkupExtension(ref p, limit);
+            SkipWhitespace(ref p, limit);
+            if (markup.IsClosed && p < limit)
+            {
+                AddDiagnostic(
+                    XamlDiagnosticIds.MalformedMarkupExtension,
+                    "Unexpected text after the end of the markup extension.",
+                    TextSpan.FromBounds(p, TrimEnd(p, limit)));
+            }
+
+            return markup;
         }
 
         private XamlMarkupExtension ParseMarkupExtension(ref int p, int limit, int depth = 0)
@@ -396,9 +450,17 @@ namespace WinUiXaml.Xaml
             p++; // consume '{'
             SkipWhitespace(ref p, limit);
             XamlName? name = ParseNameBounded(ref p, limit);
+            if (name == null && p < limit)
+            {
+                AddDiagnostic(
+                    XamlDiagnosticIds.MalformedMarkupExtension,
+                    "Expected a markup extension name after '{'.",
+                    TextSpan.Empty(p));
+            }
 
             var args = new List<XamlMarkupExtensionArgument>();
             bool closed = false;
+            bool sawNamed = false;
 
             while (p < limit)
             {
@@ -429,6 +491,18 @@ namespace WinUiXaml.Xaml
                 }
                 else
                 {
+                    if (arg.IsNamed)
+                    {
+                        sawNamed = true;
+                    }
+                    else if (sawNamed)
+                    {
+                        AddDiagnostic(
+                            XamlDiagnosticIds.MalformedMarkupExtension,
+                            "Positional arguments must come before named arguments.",
+                            arg.Span);
+                    }
+
                     args.Add(arg);
                 }
             }
@@ -483,33 +557,7 @@ namespace WinUiXaml.Xaml
                 }
 
                 int valStart = p;
-                int valParenDepth = 0;
-                while (p < limit)
-                {
-                    char vc = _text[p];
-                    if (vc == '}')
-                    {
-                        break;
-                    }
-
-                    if (vc == '(')
-                    {
-                        valParenDepth++;
-                    }
-                    else if (vc == ')')
-                    {
-                        if (valParenDepth > 0)
-                        {
-                            valParenDepth--;
-                        }
-                    }
-                    else if (vc == ',' && valParenDepth == 0)
-                    {
-                        break;
-                    }
-
-                    p++;
-                }
+                ScanMarkupValue(ref p, limit, stopAtOpenBrace: false);
 
                 int valEnd = TrimEnd(valStart, p);
                 string val = _text.Substring(valStart, valEnd - valStart);
@@ -519,37 +567,133 @@ namespace WinUiXaml.Xaml
             // Positional scalar argument: everything up to ',', '}', or a nested '{'. A comma inside parentheses is kept, so a function binding (Method(a, b)) is one positional path argument.
             p = start;
             int posStart = p;
-            int posParenDepth = 0;
+            if (_text[p] == '=')
+            {
+                AddDiagnostic(
+                    XamlDiagnosticIds.MalformedMarkupExtension,
+                    "Expected a property name before '='.",
+                    new TextSpan(p, p + 1));
+            }
+
+            ScanMarkupValue(ref p, limit, stopAtOpenBrace: true);
+
+            int posEnd = TrimEnd(posStart, p);
+            string positional = _text.Substring(posStart, posEnd - posStart);
+            return new XamlMarkupExtensionArgument(null, null, positional, TextSpan.FromBounds(posStart, posEnd), null, TextSpan.FromBounds(posStart, p));
+        }
+
+        /// <summary>Advances to the ',' or '}' ending a markup value, skipping parenthesized commas, escapes, and quoted text.</summary>
+        private void ScanMarkupValue(ref int p, int limit, bool stopAtOpenBrace)
+        {
+            int valueStart = p;
+            int parenDepth = 0;
             while (p < limit)
             {
-                char pc = _text[p];
-                if (pc == '}' || pc == '{')
+                char c = _text[p];
+                if (c == '\\')
+                {
+                    p = Math.Min(p + 2, limit);
+                    continue;
+                }
+
+                // Quotes delimit a value only at its start, or as x:Bind function string arguments.
+                // The text is still XML-escaped, so any spelling of the quote character counts.
+                if ((p == valueStart || parenDepth > 0) && TryReadQuote(p, limit, out char quote, out int openLength))
+                {
+                    int close = p + openLength;
+                    int closeLength = 0;
+                    while (close < limit &&
+                           !(TryReadQuote(close, limit, out char closing, out closeLength) && closing == quote))
+                    {
+                        close += _text[close] == '\\' ? 2 : 1;
+                    }
+
+                    p = close < limit ? close + closeLength : p + 1;
+                    continue;
+                }
+
+                if (c == '}' || (stopAtOpenBrace && c == '{'))
                 {
                     break;
                 }
 
-                if (pc == '(')
+                if (c == '(')
                 {
-                    posParenDepth++;
+                    parenDepth++;
                 }
-                else if (pc == ')')
+                else if (c == ')')
                 {
-                    if (posParenDepth > 0)
+                    if (parenDepth > 0)
                     {
-                        posParenDepth--;
+                        parenDepth--;
                     }
                 }
-                else if (pc == ',' && posParenDepth == 0)
+                else if (c == ',' && parenDepth == 0)
                 {
                     break;
                 }
 
                 p++;
             }
+        }
 
-            int posEnd = TrimEnd(posStart, p);
-            string positional = _text.Substring(posStart, posEnd - posStart);
-            return new XamlMarkupExtensionArgument(null, null, positional, TextSpan.FromBounds(posStart, posEnd), null, TextSpan.FromBounds(posStart, p));
+        private bool StartsWithAt(int p, int limit, string s) =>
+            p + s.Length <= limit && string.CompareOrdinal(_text, p, s, 0, s.Length) == 0;
+
+        /// <summary>Reads a quote written literally, as &amp;apos;/&amp;quot;, or as a decimal or hex character reference.</summary>
+        private bool TryReadQuote(int p, int limit, out char quote, out int length)
+        {
+            quote = '\0';
+            length = 0;
+            char c = _text[p];
+            if (c == '\'' || c == '"')
+            {
+                quote = c;
+                length = 1;
+                return true;
+            }
+
+            if (c != '&')
+            {
+                return false;
+            }
+
+            if (StartsWithAt(p, limit, "&apos;") || StartsWithAt(p, limit, "&quot;"))
+            {
+                quote = _text[p + 1] == 'a' ? '\'' : '"';
+                length = 6;
+                return true;
+            }
+
+            if (!StartsWithAt(p, limit, "&#"))
+            {
+                return false;
+            }
+
+            int i = p + 2;
+            bool hex = i < limit && (_text[i] == 'x' || _text[i] == 'X');
+            if (hex)
+            {
+                i++;
+            }
+
+            int digitsStart = i;
+            int value = 0;
+            while (i < limit && i - digitsStart < 8 &&
+                   (hex ? Uri.IsHexDigit(_text[i]) : _text[i] >= '0' && _text[i] <= '9'))
+            {
+                value = (value * (hex ? 16 : 10)) + (hex ? Uri.FromHex(_text[i]) : _text[i] - '0');
+                i++;
+            }
+
+            if (i == digitsStart || i >= limit || _text[i] != ';' || (value != '\'' && value != '"'))
+            {
+                return false;
+            }
+
+            quote = (char)value;
+            length = i + 1 - p;
+            return true;
         }
 
         // ---- comments / cdata / pi --------------------------------------------------
@@ -602,6 +746,7 @@ namespace WinUiXaml.Xaml
             {
                 innerEnd = _text.Length;
                 _pos = _text.Length;
+                AddDiagnostic(XamlDiagnosticIds.InvalidXmlDeclaration, "Unterminated processing instruction; expected '?>'.", TextSpan.FromBounds(start, _pos));
             }
             else
             {
@@ -609,8 +754,173 @@ namespace WinUiXaml.Xaml
                 _pos = idx + 2;
             }
 
+            ValidateProcessingInstruction(start, innerStart, innerEnd);
             return new XamlProcessingInstruction(_text.Substring(innerStart, innerEnd - innerStart), TextSpan.FromBounds(start, _pos));
         }
+
+        private static readonly string[] XmlDeclarationAttributeOrder = { "version", "encoding", "standalone" };
+
+        /// <summary>Reports a missing or reserved target and validates an XML declaration's placement and pseudo-attributes.</summary>
+        private void ValidateProcessingInstruction(int start, int innerStart, int innerEnd)
+        {
+            int p = innerStart;
+            while (p < innerEnd && !IsWhitespace(_text[p]))
+            {
+                p++;
+            }
+
+            string target = _text.Substring(innerStart, p - innerStart);
+            var targetSpan = TextSpan.FromBounds(innerStart, p);
+            if (target.Length == 0)
+            {
+                AddDiagnostic(XamlDiagnosticIds.InvalidXmlDeclaration, "Expected a processing instruction target after '<?'.", TextSpan.Empty(innerStart));
+                return;
+            }
+
+            if (!string.Equals(target, "xml", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (!string.Equals(target, "xml", StringComparison.Ordinal))
+            {
+                AddDiagnostic(XamlDiagnosticIds.InvalidXmlDeclaration, $"The processing instruction target '{target}' is reserved.", targetSpan);
+                return;
+            }
+
+            if (start != 0)
+            {
+                AddDiagnostic(XamlDiagnosticIds.InvalidXmlDeclaration, "The XML declaration must be at the very beginning of the document.", targetSpan);
+                return;
+            }
+
+            int nextAttribute = 0;
+            bool sawVersion = false;
+            while (true)
+            {
+                int beforeWhitespace = p;
+                SkipWhitespace(ref p, innerEnd);
+                if (p >= innerEnd)
+                {
+                    break;
+                }
+
+                int nameStart = p;
+                while (p < innerEnd && (IsNameChar(_text[p]) || _text[p] == ':'))
+                {
+                    p++;
+                }
+
+                string name = _text.Substring(nameStart, p - nameStart);
+                if (name.Length == 0 || p == beforeWhitespace)
+                {
+                    AddDiagnostic(XamlDiagnosticIds.InvalidXmlDeclaration, "Malformed XML declaration.", TextSpan.FromBounds(nameStart, innerEnd));
+                    return;
+                }
+
+                var nameSpan = TextSpan.FromBounds(nameStart, p);
+                SkipWhitespace(ref p, innerEnd);
+                if (p < innerEnd && _text[p] == '=')
+                {
+                    p++;
+                    SkipWhitespace(ref p, innerEnd);
+                }
+                else
+                {
+                    p = innerEnd;
+                }
+
+                char quote = p < innerEnd ? _text[p] : '\0';
+                if (quote != '"' && quote != '\'')
+                {
+                    AddDiagnostic(XamlDiagnosticIds.InvalidXmlDeclaration, $"Expected a quoted value for '{name}'.", nameSpan);
+                    return;
+                }
+
+                int valueStart = p + 1;
+                int valueEnd = _text.IndexOf(quote, valueStart, innerEnd - valueStart);
+                if (valueEnd < 0)
+                {
+                    AddDiagnostic(XamlDiagnosticIds.InvalidXmlDeclaration, $"Unterminated value for '{name}'.", TextSpan.FromBounds(nameStart, innerEnd));
+                    return;
+                }
+
+                p = valueEnd + 1;
+                string value = _text.Substring(valueStart, valueEnd - valueStart);
+                var valueSpan = TextSpan.FromBounds(valueStart, valueEnd);
+                int order = Array.IndexOf(XmlDeclarationAttributeOrder, name);
+                if (order < nextAttribute)
+                {
+                    AddDiagnostic(
+                        XamlDiagnosticIds.InvalidXmlDeclaration,
+                        order < 0
+                            ? $"'{name}' is not allowed in the XML declaration; expected version, encoding, or standalone."
+                            : $"'{name}' is duplicated or out of order in the XML declaration.",
+                        nameSpan);
+                    return;
+                }
+
+                nextAttribute = order + 1;
+                string? error = name switch
+                {
+                    "version" when !IsXmlVersion(value) => "The XML version must be '1.0'.",
+                    "encoding" when !IsEncodingName(value) => $"'{value}' is not a valid encoding name.",
+                    "standalone" when value != "yes" && value != "no" => "The standalone value must be 'yes' or 'no'.",
+                    _ => null,
+                };
+                if (error != null)
+                {
+                    AddDiagnostic(XamlDiagnosticIds.InvalidXmlDeclaration, error, valueSpan);
+                    return;
+                }
+
+                sawVersion |= order == 0;
+            }
+
+            if (!sawVersion)
+            {
+                AddDiagnostic(XamlDiagnosticIds.InvalidXmlDeclaration, "The XML declaration must specify a version.", targetSpan);
+            }
+        }
+
+        private static bool IsXmlVersion(string value)
+        {
+            if (value.Length < 3 || value[0] != '1' || value[1] != '.')
+            {
+                return false;
+            }
+
+            for (int i = 2; i < value.Length; i++)
+            {
+                if (value[i] < '0' || value[i] > '9')
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool IsEncodingName(string value)
+        {
+            if (value.Length == 0 || !IsAsciiLetter(value[0]))
+            {
+                return false;
+            }
+
+            for (int i = 1; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (!IsAsciiLetter(c) && (c < '0' || c > '9') && c != '.' && c != '_' && c != '-')
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool IsAsciiLetter(char c) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 
         private XamlProcessingInstruction ParseBangDeclaration()
         {
@@ -635,7 +945,16 @@ namespace WinUiXaml.Xaml
         {
             int start = _pos;
             _pos += 2; // consume "</"
-            SkipWhitespace();
+            if (IsWhitespace(Peek(0)))
+            {
+                int whitespaceStart = _pos;
+                SkipWhitespace();
+                AddDiagnostic(
+                    XamlDiagnosticIds.InvalidTagName,
+                    "Whitespace is not allowed between '</' and the element name.",
+                    TextSpan.FromBounds(whitespaceStart, _pos));
+            }
+
             var name = TryParseName();
             SkipWhitespace();
             if (Peek(0) == '>')
@@ -780,6 +1099,247 @@ namespace WinUiXaml.Xaml
                     AssignScopes(children[i], inherited);
                 }
             }
+        }
+
+        // ---- well-formedness checks ---------------------------------------------------
+
+        /// <summary>Consumes content nested past <see cref="MaxDepth"/>, stopping before the end tag that closes the current element.</summary>
+        private void SkipNestedContent()
+        {
+            int level = 0;
+            while (_pos < _text.Length)
+            {
+                int lt = _text.IndexOf('<', _pos);
+                if (lt < 0)
+                {
+                    _pos = _text.Length;
+                    return;
+                }
+
+                _pos = lt;
+                if (StartsWith("<!--"))
+                {
+                    _pos = IndexAfter("-->");
+                }
+                else if (StartsWith("<![CDATA["))
+                {
+                    _pos = IndexAfter("]]>");
+                }
+                else if (StartsWith("<?"))
+                {
+                    _pos = IndexAfter("?>");
+                }
+                else if (StartsWith("</"))
+                {
+                    if (level == 0)
+                    {
+                        return;
+                    }
+
+                    level--;
+                    _pos += 2;
+                    SkipPastTagEnd();
+                }
+                else
+                {
+                    bool bang = lt + 1 < _text.Length && _text[lt + 1] == '!';
+                    _pos++;
+                    if (!SkipPastTagEnd() && !bang)
+                    {
+                        level++;
+                    }
+                }
+            }
+        }
+
+        /// <summary>Advances past the '>' ending a tag, ignoring quoted text; returns true for "/>".</summary>
+        private bool SkipPastTagEnd()
+        {
+            char quote = '\0';
+            while (_pos < _text.Length)
+            {
+                char c = _text[_pos];
+                if (quote != '\0')
+                {
+                    if (c == quote)
+                    {
+                        quote = '\0';
+                    }
+                }
+                else if (c == '"' || c == '\'')
+                {
+                    quote = c;
+                }
+                else if (c == '<')
+                {
+                    return false; // malformed: a new tag began before this one closed
+                }
+                else if (c == '>')
+                {
+                    _pos++;
+                    return _text[_pos - 2] == '/';
+                }
+
+                _pos++;
+            }
+
+            return false;
+        }
+
+        private int IndexAfter(string terminator)
+        {
+            int idx = _text.IndexOf(terminator, _pos, StringComparison.Ordinal);
+            return idx < 0 ? _text.Length : idx + terminator.Length;
+        }
+
+        /// <summary>Reports a raw '&lt;' and malformed entity references in a quoted attribute value.</summary>
+        private void ValidateAttributeValueCharacters(int start, int end)
+        {
+            for (int i = start; i < end; i++)
+            {
+                if (_text[i] == '<')
+                {
+                    AddDiagnostic(
+                        XamlDiagnosticIds.InvalidAttributeValueCharacter,
+                        "'<' is not allowed in an attribute value; use '&lt;'.",
+                        new TextSpan(i, i + 1));
+                }
+            }
+
+            ValidateEntityReferences(start, end);
+        }
+
+        /// <summary>Reports each '&amp;' that does not begin a predefined entity or a valid character reference.</summary>
+        private void ValidateEntityReferences(int start, int end)
+        {
+            for (int i = start; i < end; i++)
+            {
+                if (_text[i] != '&')
+                {
+                    continue;
+                }
+
+                int j = i + 1;
+                bool valid;
+                string? message = null;
+                if (j < end && _text[j] == '#')
+                {
+                    j++;
+                    bool hex = j < end && _text[j] == 'x';
+                    if (hex)
+                    {
+                        j++;
+                    }
+
+                    int digitsStart = j;
+                    long value = 0;
+                    while (j < end && (hex ? Uri.IsHexDigit(_text[j]) : _text[j] >= '0' && _text[j] <= '9'))
+                    {
+                        value = Math.Min(value * (hex ? 16 : 10) + (hex ? Uri.FromHex(_text[j]) : _text[j] - '0'), 0x110000);
+                        j++;
+                    }
+
+                    valid = j > digitsStart && j < end && _text[j] == ';';
+                    if (valid && !IsXmlCharValue(value))
+                    {
+                        valid = false;
+                        message = $"Character reference '{_text.Substring(i, j + 1 - i)}' is not a valid XML character.";
+                    }
+                }
+                else
+                {
+                    while (j < end && IsNameChar(_text[j]))
+                    {
+                        j++;
+                    }
+
+                    valid = j > i + 1 && j < end && _text[j] == ';';
+                    if (valid)
+                    {
+                        string entity = _text.Substring(i + 1, j - i - 1);
+                        if (entity != "lt" && entity != "gt" && entity != "amp" && entity != "apos" && entity != "quot")
+                        {
+                            valid = false;
+                            message = $"Unknown entity '&{entity};'. XAML supports only &lt; &gt; &amp; &apos; &quot; and character references.";
+                        }
+                    }
+                }
+
+                if (valid)
+                {
+                    i = j;
+                    continue;
+                }
+
+                if (message != null)
+                {
+                    AddDiagnostic(XamlDiagnosticIds.InvalidEntityReference, message, TextSpan.FromBounds(i, j + 1));
+                    i = j;
+                }
+                else
+                {
+                    AddDiagnostic(
+                        XamlDiagnosticIds.InvalidEntityReference,
+                        "'&' must be escaped as '&amp;'.",
+                        new TextSpan(i, i + 1));
+                }
+            }
+        }
+
+        /// <summary>Reports each run of characters outside the XML 1.0 Char production, including unpaired surrogates.</summary>
+        private void ReportInvalidCharacters()
+        {
+            int runStart = -1;
+            int i = 0;
+            while (i <= _text.Length)
+            {
+                int width = 1;
+                bool invalid = false;
+                if (i < _text.Length)
+                {
+                    char c = _text[i];
+                    if (char.IsHighSurrogate(c) && i + 1 < _text.Length && char.IsLowSurrogate(_text[i + 1]))
+                    {
+                        width = 2;
+                    }
+                    else
+                    {
+                        invalid = !IsXmlCharValue(c);
+                    }
+                }
+
+                if (invalid && runStart < 0)
+                {
+                    runStart = i;
+                }
+                else if (!invalid && runStart >= 0)
+                {
+                    AddDiagnostic(
+                        XamlDiagnosticIds.InvalidCharacter,
+                        $"Character U+{(int)_text[runStart]:X4} is not allowed in XML.",
+                        TextSpan.FromBounds(runStart, i));
+                    runStart = -1;
+                }
+
+                i += width;
+            }
+        }
+
+        private static bool IsXmlCharValue(long value) =>
+            value == 0x9 || value == 0xA || value == 0xD ||
+            (value >= 0x20 && value <= 0xD7FF) ||
+            (value >= 0xE000 && value <= 0xFFFD) ||
+            (value >= 0x10000 && value <= 0x10FFFF);
+
+        private TextSpan TrimSpan(TextSpan span)
+        {
+            int start = span.Start;
+            while (start < span.End && IsWhitespace(_text[start]))
+            {
+                start++;
+            }
+
+            return TextSpan.FromBounds(start, TrimEnd(start, span.End));
         }
 
         // ---- primitives -------------------------------------------------------------

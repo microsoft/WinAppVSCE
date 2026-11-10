@@ -272,7 +272,7 @@ Other statuses appear only when something needs attention — unrestored package
 |---------|---------|-------------|
 | `winapp.xaml.intelliSense.enable` | `true` | Starts the XAML language server when XAML files are opened. Disabling it keeps syntax highlighting active. |
 | `winapp.xaml.diagnostics.level` | `all` | Controls XAML diagnostics: `all`, `errorsOnly`, or `off`. Changes apply immediately to open XAML documents. |
-| `winapp.xaml.formatting.provider` | `auto` | Avoids competing formatters by using the C# extension's XAML formatter when its XAML tools are enabled. Set to `winapp` to opt into WinApp formatting, or `disabled` to register neither WinApp formatter. |
+| `winapp.xaml.formatting.provider` | `auto` | Avoids competing formatters by deferring to C# Dev Kit's XAML formatter when C# Dev Kit is installed and its XAML tools are enabled. Set to `winapp` to opt into WinApp formatting, or `disabled` to register neither WinApp formatter. |
 
 #### C# code-behind IntelliSense
 

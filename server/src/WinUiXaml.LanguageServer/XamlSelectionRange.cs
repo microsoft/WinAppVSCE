@@ -116,6 +116,15 @@ internal static class XamlSelectionRange
             chain.Add(new TextSpan(0, doc.Text.Length));
         }
 
+        // Keep the innermost levels and the whole document so the linked response stays serializable.
+        int max = LspJsonContextLimits.MaxResultNesting;
+        if (chain.Count > max)
+        {
+            var outermost = chain[chain.Count - 1];
+            chain.RemoveRange(max - 1, chain.Count - max + 1);
+            chain.Add(outermost);
+        }
+
         return chain;
     }
 }

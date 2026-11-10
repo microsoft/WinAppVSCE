@@ -43,5 +43,14 @@ namespace WinUiXaml.Xaml
         public const string UnquotedAttributeValue = "XAML0008";
         public const string MissingAttributeValue = "XAML0009";
         public const string MarkupExtensionTooDeep = "XAML0010";
+        public const string ElementTooDeep = "XAML0011";
+        public const string MultipleRootElements = "XAML0012";
+        public const string TextOutsideRoot = "XAML0013";
+        public const string InvalidCharacter = "XAML0014";
+        public const string InvalidEntityReference = "XAML0015";
+        public const string InvalidAttributeValueCharacter = "XAML0016";
+        public const string InvalidXmlDeclaration = "XAML0017";
+        public const string InvalidTagName = "XAML0018";
+        public const string MalformedMarkupExtension = "XAML0019";
     }
 }

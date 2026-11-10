@@ -12,19 +12,27 @@ internal sealed partial class XamlLanguageServer
     // --- Document symbols (outline) -----------------------------------------
 
     /// <summary>Builds the hierarchical outline (Outline view, breadcrumbs, Go to Symbol) from the parsed tree.</summary>
-    private object DocumentSymbols(DocumentSymbolParams p)
+    private object DocumentSymbols(DocumentSymbolParams p) =>
+        _documents.TryGetValue(p.TextDocument.Uri, out var doc)
+            ? BuildOutline(doc)
+            : new List<DocumentSymbol>();
+
+    internal static List<DocumentSymbol> BuildOutline(TextDocument doc)
     {
         var result = new List<DocumentSymbol>();
-        if (_documents.TryGetValue(p.TextDocument.Uri, out var doc) && doc.Parsed.Root is { } root)
+        if (doc.Parsed.Root is { } root)
         {
-            AddOutlineSymbol(doc, root, result);
+            AddOutlineSymbol(doc, root, result, depth: 1);
         }
 
         return result;
     }
 
-    private static void AddOutlineSymbol(TextDocument doc, XamlElement element, List<DocumentSymbol> siblings)
+    /// <summary>Adds element's symbol at depth; past MaxResultNesting, descendants are listed as siblings so the response stays serializable.</summary>
+    private static void AddOutlineSymbol(TextDocument doc, XamlElement element, List<DocumentSymbol> siblings, int depth)
     {
+        bool flatten = depth >= LspJsonContextLimits.MaxResultNesting;
+
         // A malformed element with no name still contributes its children to the outline.
         if (element.Name is not { LocalName.Length: > 0 } name)
         {
@@ -32,7 +40,7 @@ internal sealed partial class XamlLanguageServer
             {
                 if (child is XamlElement childElement)
                 {
-                    AddOutlineSymbol(doc, childElement, siblings);
+                    AddOutlineSymbol(doc, childElement, siblings, depth);
                 }
             }
 
@@ -40,24 +48,33 @@ internal sealed partial class XamlLanguageServer
         }
 
         var xName = GetXName(element);
-        var children = new List<DocumentSymbol>();
-        foreach (var child in element.Content)
-        {
-            if (child is XamlElement childElement)
-            {
-                AddOutlineSymbol(doc, childElement, children);
-            }
-        }
-
-        siblings.Add(new DocumentSymbol
+        var children = flatten ? siblings : new List<DocumentSymbol>();
+        var symbol = new DocumentSymbol
         {
             Name = xName != null ? $"{name.FullName} ({xName})" : name.FullName,
             Detail = xName,
             Kind = element.IsPropertyElement ? SymbolKind.Property : SymbolKind.Class,
             Range = doc.RangeOf(element.Span),
             SelectionRange = doc.RangeOf(name.Span),
-            Children = children.Count > 0 ? children : null,
-        });
+        };
+        if (flatten)
+        {
+            siblings.Add(symbol);
+        }
+
+        foreach (var child in element.Content)
+        {
+            if (child is XamlElement childElement)
+            {
+                AddOutlineSymbol(doc, childElement, children, flatten ? depth : depth + 1);
+            }
+        }
+
+        if (!flatten)
+        {
+            symbol.Children = children.Count > 0 ? children : null;
+            siblings.Add(symbol);
+        }
     }
 
     /// <summary>Returns the element's <c>x:Name</c> (or <c>Name</c>) value, or null if unset.</summary>
@@ -1229,7 +1246,7 @@ internal sealed partial class XamlLanguageServer
             afterMember = false;
         }
 
-        string nl = source.Contains("\r\n") ? "\r\n" : "\n";
+        string nl = LineBreaks.Detect(source);
         string lead = afterMember ? nl + nl : nl;
         string stub = $"{lead}{indent}private void {handlerName}({parameters}){nl}{indent}{{{nl}{indent}}}";
 
@@ -1275,7 +1292,7 @@ internal sealed partial class XamlLanguageServer
     /// <summary>The leading whitespace run of the line containing offset, or null when non-whitespace precedes the offset on that line (so the caller can fall back to a default indent).</summary>
     private static string? LeadingIndent(string source, int offset)
     {
-        int lineStart = source.LastIndexOf('\n', Math.Max(0, offset - 1)) + 1;
+        int lineStart = LineBreaks.LineStart(source, offset);
         int i = lineStart;
         while (i < offset && (source[i] == ' ' || source[i] == '\t'))
         {

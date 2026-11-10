@@ -52,6 +52,17 @@ export const SHOW_XAML_OUTPUT_HINT =
 /** The install action lives in Show XAML Language Server Status, so this state sends the click there instead. */
 export const SHOW_XAML_INFO_HINT = "Click for install and restart actions.";
 
+export const SERVER_STOPPED_MESSAGE =
+  "The language server stopped and will not restart automatically. XAML is syntax-only until it is restarted.";
+
+/** Replaces any project status once the client gives up restarting, so no spinner outlives the server. */
+export const SERVER_STOPPED_STATUS_PRESENTATION: ProjectContextStatusPresentation = {
+  text: "$(error) WinApp: XAML Language Server Stopped",
+  tooltip: `${SERVER_STOPPED_MESSAGE} Click to restart it.`,
+  transient: false,
+  command: XAML_COMMANDS.restartServer,
+};
+
 export interface ProjectContextStatus {
   uri: string;
   state: ProjectContextState;

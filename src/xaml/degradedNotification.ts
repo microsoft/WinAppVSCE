@@ -9,7 +9,7 @@ import {
 } from "./xamlConstants";
 
 /** Why the language server is not running. The server is self-contained, so .NET is not a cause. */
-export type DegradedCause = "untrusted" | "server";
+export type DegradedCause = "untrusted" | "server" | "stopped";
 
 /** Settings query for the degraded-state action. */
 export const SERVER_SETTINGS_QUERY = XAML_SETTINGS_SECTION;
@@ -53,6 +53,20 @@ export function buildDegradedNotification(
           command: EXTERNAL_COMMANDS.manageTrust,
           fallbackCommand: EXTERNAL_COMMANDS.manageTrustLegacy,
         },
+      ],
+    };
+  }
+
+  // The client gave up restarting (for example after repeated crashes); only a manual restart helps.
+  if (cause === "stopped") {
+    return {
+      message:
+        "WinApp XAML IntelliSense: the language server stopped and will not restart automatically. " +
+        "XAML is syntax-only until you restart it." +
+        (detail ? ` ${detail}` : ""),
+      actions: [
+        { label: "Restart Language Server", command: XAML_COMMANDS.restartServer },
+        { label: "Show Output", showOutput: true },
       ],
     };
   }
