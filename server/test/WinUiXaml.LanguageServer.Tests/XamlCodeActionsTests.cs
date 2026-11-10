@@ -358,6 +358,7 @@ public class XamlCodeActionsTests
     [InlineData("FrozenEdg", "Leadin\n    ", "Label=\"keep\" />", "FrozenEdge")]
     [InlineData("IsEnabld", "Tru\n    ", "Label=\"keep\" />", "IsEnabled")]
     [InlineData("IsEnabld", "Tru ", "Label=\" keep\" />", "IsEnabled")]
+    [InlineData("FrozenEdg", "Middle>Say ", "\" hi</tabular:TableViewTemplateColumn>", "FrozenEdge")]
     [InlineData("Labl", "x", "", "Label")]
     public void MissingClosingQuote_OnlyOffersNameRename(string bad, string value, string rest, string? good)
     {
@@ -587,22 +588,13 @@ public class XamlCodeActionsTests
     }
 
     [Fact]
-    public void InvalidBooleanLiteral_OffersBothValuesWithoutPreference()
-    {
-        var actions = InvalidValueActions(ColumnDocument("IsEnabled=\"1\""), ColumnTypeSystem());
-
-        Assert.Equal(new[] { "Replace with 'True'", "Replace with 'False'" }, actions.Select(action => action.Title));
-        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
-    }
-
-    [Fact]
     public void InvalidAttachedNumericValue_OffersDefaultLiteral()
     {
         var doc = ColumnDocument("tabular:Tags.Row=\"abc\"");
         var action = Assert.Single(InvalidValueActions(doc, ColumnTypeSystem(enumPrefix: TagsOwner)));
 
         Assert.Equal("Replace with '0'", action.Title);
-        Assert.NotEqual(true, action.IsPreferred);
+        Assert.True(action.IsPreferred);
     }
 
     [Fact]
@@ -621,20 +613,10 @@ public class XamlCodeActionsTests
     [InlineData("IsEnabled=\"Tru\n    Label=\"keep\"")]
     [InlineData("Number=\"10 Label=\"keep\"")]
     [InlineData("Number=\"10 Label=\" keep\"")]
-    public void InvalidValueSwallowingNextAttribute_OffersNoValueReplacement(string attributes)
+    [InlineData("Number=\"10>Say \" hi")]
+    public void InvalidValueSwallowingLaterMarkup_OffersNoValueReplacement(string attributes)
     {
         Assert.Empty(InvalidValueActions(ColumnDocument(attributes), ColumnTypeSystem()));
-    }
-
-    [Fact]
-    public void InvalidEnumValueWithoutCloseSpelling_OffersSmallEnumChoicesWithoutPreference()
-    {
-        var doc = ColumnDocument("FrozenEdge=\"True\"");
-        var actions = InvalidValueActions(doc, ColumnTypeSystem());
-
-        Assert.Equal(new[] { "Replace with 'None'", "Replace with 'Leading'", "Replace with 'Trailing'" },
-            actions.Select(action => action.Title));
-        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
     }
 
     [Fact]
@@ -647,6 +629,29 @@ public class XamlCodeActionsTests
             actions.Select(action => action.Title));
         Assert.True(actions[0].IsPreferred);
         Assert.NotEqual(true, actions[1].IsPreferred);
+    }
+
+    [Theory]
+    [InlineData("MaxHeight=\"200\" MaxHieght=\"300\"", "public double MaxHeight { get; set; } public double MinHeight { get; set; }", "MinHeight")]
+    [InlineData("Abcx=\"1\" Abce=\"1\" Abcd=\"1\"", "public int Abcd { get; set; } public int Abce { get; set; } public int Abcf { get; set; } public int Abcg { get; set; }", "Abcf")]
+    public void StarIsDecidedBeforeFilteringAlreadySetNames(string attributes, string extraMembers, string offered)
+    {
+        var actions = AttributeActions(ColumnDocument(attributes), ColumnTypeSystem(extraMembers: extraMembers));
+
+        var action = Assert.Single(actions);
+        Assert.EndsWith($"'{offered}'", action.Title);
+        Assert.NotEqual(true, action.IsPreferred);
+    }
+
+    [Fact]
+    public void CloseNameWithUncertainSmallEnumValue_IsAPreferredPlainRename()
+    {
+        var doc = ColumnDocument("FrozenEdg=\"Middle\"");
+        var action = Assert.Single(AttributeActions(doc, ColumnTypeSystem()));
+
+        Assert.Equal("Change 'FrozenEdg' to 'FrozenEdge'", action.Title);
+        Assert.True(action.IsPreferred);
+        Assert.Equal("FrozenEdg", RangeText(doc, Assert.Single(action.Edit!.Changes[Uri]).Range));
     }
     private static XamlTypeSystem ColumnTypeSystem(
         string members = "None = 0, Leading = 1, Trailing = 2",
@@ -1930,17 +1935,15 @@ public class XamlCodeActionsTests
         Assert.Equal("<Page xmlns=\"using:TestApp\" Width=\"0\"/>", ApplyEdit(doc, edit));
     }
 
-    [Theory]
-    [InlineData("bool")]
-    [InlineData("bool?")]
-    public void InvalidBooleanLiteral_OffersTrueAndFalseWithoutPreference(string propertyType)
+    [Fact]
+    public void InvalidBooleanLiteral_ReplacesWithFalse()
     {
-        var typeSystem = BuildWinUiTypeSystem($$"""
+        var typeSystem = BuildWinUiTypeSystem("""
             namespace TestApp
             {
                 public class Page : Microsoft.UI.Xaml.DependencyObject
                 {
-                    public {{propertyType}} IsEnabled { get; set; }
+                    public bool IsEnabled { get; set; }
                 }
             }
             """);
@@ -1952,10 +1955,11 @@ public class XamlCodeActionsTests
             R(0, valueAt, valueAt + "maybe".Length),
             null);
 
-        var actions = XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem);
-        Assert.Equal(new[] { "Replace with 'True'", "Replace with 'False'" }, actions.Select(action => action.Title));
-        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
-        var edit = Assert.Single(actions[1].Edit!.Changes[Uri]);
+        var edit = Assert.Single(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem))
+                .Edit!.Changes[Uri]);
+
+        Assert.Equal("False", edit.NewText);
         Assert.Equal(valueAt, doc.OffsetAt(edit.Range.Start));
         Assert.Equal("<Page xmlns=\"using:TestApp\" IsEnabled=\"False\"/>", ApplyEdit(doc, edit));
     }
@@ -1972,6 +1976,7 @@ public class XamlCodeActionsTests
     [InlineData("float", "0")]
     [InlineData("double?", "0")]
     [InlineData("decimal?", "0")]
+    [InlineData("bool?", "False")]
     public void InvalidPrimitiveLiteral_UsesTypeDefault(string propertyType, string expected)
     {
         var typeSystem = BuildWinUiTypeSystem($$"""
