@@ -105,10 +105,13 @@ public sealed class AttributeCompletionTests
         {
             public sealed class UpperConverter { }
             public sealed class ItemViewModel { public ItemViewModel(string name) { } }
+            public sealed class AppShell : Microsoft.UI.Xaml.Application { }
+            public static class Formatting { }
         }
 
         namespace Microsoft.UI.Xaml
         {
+            public class Application { }
             public class DependencyObject { }
             public struct Thickness { }
             public class FrameworkTemplate { }
@@ -568,6 +571,7 @@ public sealed class AttributeCompletionTests
         Assert.Equal("converters:UpperConverter", converter.TextEdit!.NewText);
         Assert.Equal(" xmlns:converters=\"using:TestApp.Converters\"", Assert.Single(converter.AdditionalTextEdits!).NewText);
         Assert.DoesNotContain(items, item => item.Label == "ItemViewModel");
+        Assert.DoesNotContain(items, item => item.Label == "AppShell");
 
         var outside = CompleteLabels("""
             <Page xmlns="using:TestApp" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
@@ -590,6 +594,7 @@ public sealed class AttributeCompletionTests
         Assert.Equal("converters:ItemViewModel", viewModel.TextEdit!.NewText);
         Assert.NotNull(viewModel.AdditionalTextEdits);
         Assert.StartsWith("0", viewModel.SortText);
+        Assert.DoesNotContain(dataTypes, item => item.Label is "converters:AppShell" or "converters:Formatting");
 
         var targetTypeItems = CompleteItems("""
             <Style xmlns="using:Microsoft.UI.Xaml" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -614,7 +619,7 @@ public sealed class AttributeCompletionTests
         var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary);
         var framework = CSharpCompilation.Create(
             "Framework",
-            [CSharpSyntaxTree.ParseText("namespace Fx { public class FontFamily { public FontFamily(string name) { } } public enum Mode { A } }")],
+            [CSharpSyntaxTree.ParseText("namespace Microsoft.UI.Xaml.Media { public class FontFamily { public FontFamily(string name) { } } public enum Mode { A } } namespace Lib { public class LibNeedsArgs { public LibNeedsArgs(string v) { } } }")],
             [corlib],
             options);
         using var image = new System.IO.MemoryStream();
@@ -625,9 +630,11 @@ public sealed class AttributeCompletionTests
             [corlib, MetadataReference.CreateFromImage(image.ToArray())],
             options);
 
-        Assert.True(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("Fx.FontFamily")!));
-        Assert.True(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("Fx.Mode")!));
-        Assert.True(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("App.Hidden")!));
+        // Matches the WinUI XAML compiler (WMC0100): only framework text types skip the public parameterless constructor.
+        Assert.True(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("Microsoft.UI.Xaml.Media.FontFamily")!));
+        Assert.True(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("Microsoft.UI.Xaml.Media.Mode")!));
+        Assert.False(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("Lib.LibNeedsArgs")!));
+        Assert.False(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("App.Hidden")!));
         Assert.False(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("App.NeedsArgs")!));
     }
 

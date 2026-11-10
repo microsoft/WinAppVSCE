@@ -663,6 +663,14 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
+        // The type part of a static path ({x:Bind helpers:Fmt.Title}) resolves to the type itself.
+        if (target.CastType is null && target.Preceding.Length == 0 && target.Name.IndexOf(':') > 0)
+        {
+            return NearestEnclosingElement(doc, offset)?.NamespaceScope is { } typeScope
+                ? XamlSemanticFacts.ResolveTypeName(target.Name, typeScope, typeSystem)
+                : null;
+        }
+
         ITypeSymbol currentType = rootType;
         bool includeRootNonPublic = SymbolEqualityComparer.Default.Equals(rootType, pageClass);
         if (target.CastType is { } castName)
@@ -1014,7 +1022,10 @@ internal sealed partial class XamlLanguageServer
 
         var seg = segments[idx];
         var (name, _) = SplitIndexers(seg.Raw.Trim());
-        if (!XamlRename.IsValidName(name))
+
+        // The first segment of a static path ({x:Bind helpers:Fmt.Title}) carries an xmlns prefix.
+        int colon = idx == 0 ? name.IndexOf(':') : -1;
+        if (!XamlRename.IsValidName(name[(colon + 1)..]) || (colon >= 0 && !XamlRename.IsValidName(name[..colon])))
         {
             return null;
         }

@@ -14,8 +14,16 @@ internal sealed record XamlFileSystemContext(
     System.Func<string, bool> FileExists,
     System.Func<string, bool> DirectoryExists)
 {
-    public static XamlFileSystemContext ForProject(string? projectDirectory) =>
-        new(projectDirectory, System.IO.File.Exists, System.IO.Directory.Exists);
+    /// <summary>A project XAML item may be linked from elsewhere, so a same-named project item counts as present.</summary>
+    public static XamlFileSystemContext ForProject(string? projectDirectory, IEnumerable<string> projectXamlFiles)
+    {
+        var xamlNames = new HashSet<string>(
+            projectXamlFiles.Select(System.IO.Path.GetFileName).OfType<string>(), System.StringComparer.OrdinalIgnoreCase);
+        return new(
+            projectDirectory,
+            path => System.IO.File.Exists(path) || xamlNames.Contains(System.IO.Path.GetFileName(path)),
+            System.IO.Directory.Exists);
+    }
 }
 
 /// <summary>Structural validation: element construction, content, property assignment, and style/resource wiring.</summary>
@@ -29,11 +37,20 @@ internal static partial class XamlValidator
         XamlFileSystemContext? fileSystem,
         List<Diagnostic> diagnostics)
     {
-        foreach (var element in root.DescendantNodesAndSelf().OfType<XamlElement>())
+        var acyclicStyles = new HashSet<XamlElement>();
+        var pending = new Stack<XamlElement>();
+        pending.Push(root);
+        while (pending.TryPop(out var element))
         {
+            // The compiler strips design-time elements together with their content.
             if (element.Name is { } elementName && IsIgnorableName(elementName, element))
             {
                 continue;
+            }
+
+            foreach (var child in element.Content.OfType<XamlElement>())
+            {
+                pending.Push(child);
             }
 
             ValidateUnsupportedMarkupExtensions(element, doc, typeSystem, diagnostics);
@@ -45,48 +62,20 @@ internal static partial class XamlValidator
             }
 
             ValidateConstructible(element, elementType, root, doc, diagnostics);
-            ValidateConflictingNames(element, doc, diagnostics);
+            ValidateConflictingNames(element, elementType, typeSystem, doc, diagnostics);
             ValidateTextContent(element, elementType, typeSystem, doc, diagnostics);
             ValidateDuplicatePropertyAssignment(element, elementType, typeSystem, doc, diagnostics);
             ValidateStyleTargetTypeExists(element, typeSystem, doc, diagnostics);
-            ValidateBasedOn(element, typeSystem, resourceIndex, doc, diagnostics);
+            ValidateBasedOn(element, typeSystem, resourceIndex, acyclicStyles, doc, diagnostics);
             ValidateResourceDictionarySource(element, typeSystem, doc, fileSystem, diagnostics);
         }
     }
 
-    /// <summary>True for names in a design-time or mc:Ignorable namespace; the compiler strips them.</summary>
-    private static bool IsIgnorableName(XamlName name, XamlElement element)
-    {
-        if (!name.HasPrefix || !element.NamespaceScope.TryResolvePrefix(name.Prefix, out var uri))
-        {
-            return false;
-        }
-
-        if (XamlNamespaces.IsDesignTime(uri))
-        {
-            return true;
-        }
-
-        for (XamlNode? node = element; node is not null; node = node.Parent)
-        {
-            if (node is not XamlElement ancestor ||
-                ancestor.Attributes.FirstOrDefault(attribute =>
-                    attribute.Name is { HasPrefix: true, LocalName: "Ignorable" } &&
-                    ancestor.NamespaceScope.TryResolvePrefix(attribute.Name.Prefix, out var mcUri) &&
-                    mcUri == XamlNamespaces.MarkupCompatibility)?.Value?.Text is not { } prefixes)
-            {
-                continue;
-            }
-
-            if (prefixes.Split((char[]?)null, System.StringSplitOptions.RemoveEmptyEntries).Any(prefix =>
-                    ancestor.NamespaceScope.TryResolvePrefix(prefix, out var ignored) && ignored == uri))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    /// <summary>True for names in the design-time namespace; the compiler strips them.</summary>
+    private static bool IsIgnorableName(XamlName name, XamlElement element) =>
+        name.HasPrefix &&
+        element.NamespaceScope.TryResolvePrefix(name.Prefix, out var uri) &&
+        XamlNamespaces.IsDesignTime(uri);
 
     private static void ValidateUnsupportedMarkupExtensions(
         XamlElement element, TextDocument doc, XamlTypeSystem typeSystem, List<Diagnostic> diagnostics)
@@ -117,8 +106,8 @@ internal static partial class XamlValidator
                     var replacement = name.LocalName switch
                     {
                         "DynamicResource" => " Use ThemeResource or StaticResource instead.",
-                        "Static" => " Use x:Bind with a static path instead.",
-                        _ => " Use the type name directly instead.",
+                        "Type" => " Use the type name directly instead.",
+                        _ => string.Empty,
                     };
                     diagnostics.Add(Diag(doc, name.Span, SeverityError, UnsupportedMarkupExtensionCode,
                         $"The markup extension '{name.FullName}' is not supported by WinUI XAML.{replacement}"));
@@ -156,9 +145,14 @@ internal static partial class XamlValidator
         }
     }
 
-    private static void ValidateConflictingNames(XamlElement element, TextDocument doc, List<Diagnostic> diagnostics)
+    private static void ValidateConflictingNames(
+        XamlElement element, INamedTypeSymbol elementType, XamlTypeSystem typeSystem,
+        TextDocument doc, List<Diagnostic> diagnostics)
     {
-        if (XamlSemanticFacts.GetDirectiveAttribute(element, "Name") is not null &&
+        // Name aliases x:Name only on FrameworkElement; elsewhere it is an ordinary property.
+        if (typeSystem.Capabilities.FrameworkElement is { } frameworkElement &&
+            XamlTypeSystem.IsAssignableTo(elementType, frameworkElement) &&
+            XamlSemanticFacts.GetDirectiveAttribute(element, "Name") is not null &&
             element.Attributes.FirstOrDefault(attribute =>
                 !attribute.IsNamespaceDeclaration &&
                 !attribute.Name.HasPrefix &&
@@ -182,9 +176,9 @@ internal static partial class XamlValidator
             return;
         }
 
-        // Text is accepted only by object, string, or inline content, never by UIElement content.
-        var contentType = typeSystem.GetContentPropertyType(elementType);
-        if (contentType is null || XamlTypeSystem.IsAssignableTo(contentType, uiElement))
+        // Only UIElement content provably rejects text; the compiler special-cases some types without a content property.
+        if (typeSystem.GetContentPropertyType(elementType) is { } contentType &&
+            XamlTypeSystem.IsAssignableTo(contentType, uiElement))
         {
             diagnostics.Add(Diag(doc, text.Span, SeverityError, InvalidTextContentCode,
                 $"'{elementType.Name}' does not accept text content."));
@@ -221,7 +215,7 @@ internal static partial class XamlValidator
         }
 
         if (typeSystem.GetContentPropertyName(elementType) is { } contentName &&
-            element.GetAttribute(contentName) is not null &&
+            assigned.Contains(contentName) &&
             element.Content.FirstOrDefault(node =>
                 (node is XamlElement { IsPropertyElement: false, Name: { } childName } child &&
                  !IsIgnorableName(childName, child)) ||
@@ -263,7 +257,7 @@ internal static partial class XamlValidator
 
     private static void ValidateBasedOn(
         XamlElement style, XamlTypeSystem typeSystem, XamlSemanticFacts.ResourceScopeIndex resourceIndex,
-        TextDocument doc, List<Diagnostic> diagnostics)
+        HashSet<XamlElement> acyclicStyles, TextDocument doc, List<Diagnostic> diagnostics)
     {
         if (!XamlSemanticFacts.IsElement(style, typeSystem.Capabilities.Style, typeSystem, allowDerived: true) ||
             TryGetBasedOnReference(style, resourceIndex, typeSystem) is not { } reference)
@@ -279,8 +273,9 @@ internal static partial class XamlValidator
             return;
         }
 
+        // Chains already proven to terminate are skipped, so each style is walked once per pass.
         var visited = new HashSet<XamlElement> { style };
-        for (var current = target; current is not null && visited.Add(current);)
+        for (var current = target; current is not null && !acyclicStyles.Contains(current) && visited.Add(current);)
         {
             current = TryGetBasedOnReference(current, resourceIndex, typeSystem)?.Target;
             if (ReferenceEquals(current, style))
@@ -288,6 +283,11 @@ internal static partial class XamlValidator
                 diagnostics.Add(Diag(doc, span, SeverityError, InvalidBasedOnCode,
                     $"The BasedOn chain through '{key}' is circular."));
                 return;
+            }
+
+            if (current is null)
+            {
+                acyclicStyles.UnionWith(visited);
             }
         }
 
@@ -334,8 +334,9 @@ internal static partial class XamlValidator
             return;
         }
 
+        // Primitive values go through WinUI's runtime value conversion (a Double becomes a Thickness or GridLength).
         var target = XamlValueConverter.UnwrapNullable(propertyType);
-        if (resourceType.SpecialType == SpecialType.System_String ||
+        if (resourceType.SpecialType != SpecialType.None ||
             target.SpecialType == SpecialType.System_String ||
             XamlTypeSystem.IsAssignableTo(resourceType, target) ||
             typeSystem.HasImplicitConversion(resourceType, target))
@@ -464,11 +465,12 @@ internal static partial class XamlValidator
             source, System.IO.Path.GetDirectoryName(documentPath), projectDirectory, _ => true);
 
         // Only report paths inside an existing project folder; other roots may be library resources.
+        var projectRoot = System.IO.Path.TrimEndingDirectorySeparator(projectDirectory) + System.IO.Path.DirectorySeparatorChar;
         if (candidate is null ||
+            !candidate.StartsWith(projectRoot, System.StringComparison.OrdinalIgnoreCase) ||
             fileSystem.FileExists(candidate) ||
             System.IO.Path.GetDirectoryName(candidate) is not { } directory ||
-            !fileSystem.DirectoryExists(directory) ||
-            !candidate.StartsWith(projectDirectory, System.StringComparison.OrdinalIgnoreCase))
+            !fileSystem.DirectoryExists(directory))
         {
             return;
         }

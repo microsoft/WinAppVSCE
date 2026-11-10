@@ -491,6 +491,43 @@ public class XamlRenameTests
     }
 
     [Fact]
+    public void Rename_OuterNameRefusesNameThatShadowsItInsideReferencingTemplate()
+    {
+        var (doc, offset) = Caret("""
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              <controls:Grid x:Name="Out|er" />
+              <DataTemplate>
+                <controls:Grid x:Name="Inner" />
+                <controls:TextBox Text="{Binding ElementName=Outer}" />
+              </DataTemplate>
+            </Page>
+            """);
+
+        Assert.Throws<RenameValidationException>(() =>
+            XamlRename.Rename(doc, offset, "Inner", CreateFrameworkTypeSystem()));
+    }
+
+    [Theory]
+    [InlineData("Out|er", "Outer")]
+    [InlineData("Outer", "Out|er")]
+    public void Rename_UnsupportedOuterBindRefusesFromDeclarationAndTemplateReference(string declaration, string usage)
+    {
+        var (doc, offset) = Caret($$"""
+            <Page xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <TextBox x:Name="{{declaration}}" />
+              <TextBlock Text="{x:Bind Format(Outer.Text}" />
+              <DataTemplate>
+                <TextBox Text="{Binding ElementName={{usage}}}" />
+              </DataTemplate>
+            </Page>
+            """);
+
+        Assert.Throws<RequestFailedException>(() => XamlRename.Rename(doc, offset, "Entry", FrameworkTypeSystem));
+    }
+
+    [Fact]
     public void Rename_Name_DoesNotRewriteCustomMarkupExtensionElementNameArgument()
     {
         const string source = """

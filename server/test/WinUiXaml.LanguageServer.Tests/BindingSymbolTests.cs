@@ -31,6 +31,7 @@ public sealed class BindingSymbolTests
     [InlineData("local:Statics.Ti|tle", "Title")]
     [InlineData("local:Statics.Jo|in('a', 'b')", "Join")]
     [InlineData("ViewModel.Format(local:Statics.Ti|tle)", "Title")]
+    [InlineData("local:Sta|tics.Title", "Statics")]
     public void BindingNavigationUsesReadableAccessibleMembersAndCallableOverloads(
         string path, string? expectedName)
     {

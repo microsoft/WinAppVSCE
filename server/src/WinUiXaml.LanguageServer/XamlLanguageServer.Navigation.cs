@@ -117,27 +117,13 @@ internal sealed partial class XamlLanguageServer
                 continue;
             }
 
-            foreach (var attribute in element.Attributes)
+            foreach (var attribute in element.Attributes.Where(attribute => attribute.Value?.MarkupExtension is not null))
             {
-                if (attribute.Value?.MarkupExtension is not { } extension)
+                ForEachExtension(attribute.Value!.MarkupExtension!, e =>
                 {
-                    continue;
-                }
-
-                ForEachExtension(extension, e =>
-                {
-                    if (!XamlSemanticFacts.IsBindingMarkupExtension(e, element.NamespaceScope, typeSystem))
+                    foreach (var span in ElementNameArgumentSpans(e, element.NamespaceScope, name, typeSystem))
                     {
-                        return;
-                    }
-
-                    foreach (var argument in e.Arguments)
-                    {
-                        if (argument.IsNamed &&
-                            argument.Name?.LocalName == "ElementName" &&
-                            argument.Value?.Trim() == name &&
-                            argument.ValueSpan is { } span &&
-                            ReferenceEquals(
+                        if (ReferenceEquals(
                                 XamlSemanticFacts.FindElementNameBindingTarget(doc, attribute, name, typeSystem),
                                 declaration))
                         {
@@ -148,6 +134,18 @@ internal sealed partial class XamlLanguageServer
             }
         }
     }
+
+    /// <summary>Value spans of ElementName arguments naming name in a classic Binding extension.</summary>
+    private static IEnumerable<TextSpan> ElementNameArgumentSpans(
+        XamlMarkupExtension extension, XamlNamespaceScope scope, string name, XamlTypeSystem? typeSystem) =>
+        typeSystem is null || !XamlSemanticFacts.IsBindingMarkupExtension(extension, scope, typeSystem)
+            ? []
+            : extension.Arguments
+                .Where(argument => argument.IsNamed &&
+                    argument.Name?.LocalName == "ElementName" &&
+                    argument.Value?.Trim() == name &&
+                    argument.ValueSpan is not null)
+                .Select(argument => argument.ValueSpan!.Value);
 
     /// <summary>Classifies the renameable/referenceable symbol the caret sits on: an x:Name/Name (whether the caret is on the declaration or a usage) or an x:Key resource key.</summary>
     internal static (XamlRenameKind Kind, string Name)? DetectSymbolAt(
@@ -361,21 +359,9 @@ internal sealed partial class XamlLanguageServer
                         return;
                     }
 
-                    if (typeSystem is null ||
-                        !XamlSemanticFacts.IsBindingMarkupExtension(e, element.NamespaceScope, typeSystem))
+                    foreach (var vs in ElementNameArgumentSpans(e, element.NamespaceScope, name, typeSystem))
                     {
-                        return;
-                    }
-
-                    foreach (var arg in e.Arguments)
-                    {
-                        if (arg.IsNamed &&
-                            string.Equals(arg.Name?.LocalName, "ElementName", StringComparison.Ordinal) &&
-                            arg.Value is { Length: > 0 } v && string.Equals(v.Trim(), name, StringComparison.Ordinal) &&
-                            arg.ValueSpan is { } vs)
-                        {
-                            results.Add((doc.RangeOf(vs), false));
-                        }
+                        results.Add((doc.RangeOf(vs), false));
                     }
                 });
             }
@@ -545,7 +531,10 @@ internal sealed partial class XamlLanguageServer
 
     internal static void EnsureCompleteBindRename(TextDocument doc, int offset, string name, XamlTypeSystem typeSystem)
     {
-        foreach (var element in XamlSemanticFacts.EnumerateElementsInNameScope(doc, doc.Parsed.FindNode(offset), typeSystem))
+        // Check the declaration's scope, which may enclose the template the caret is in.
+        var context = doc.Parsed.FindNode(offset);
+        var scopeContext = (XamlNode?)XamlSemanticFacts.FindElementNameBindingTarget(doc, context, name, typeSystem) ?? context;
+        foreach (var element in XamlSemanticFacts.EnumerateElementsInNameScope(doc, scopeContext, typeSystem))
         {
             foreach (var extension in element.Attributes.SelectMany(attribute =>
                          attribute.DescendantNodesAndSelf().OfType<XamlMarkupExtension>()))

@@ -2472,10 +2472,12 @@ public class XamlValidatorTests
     [InlineData("<AbstractElement />", XamlValidator.NonConstructibleElementCode)]
     [InlineData("<ProtectedElement />", XamlValidator.NonConstructibleElementCode)]
     [InlineData("""<ui:ResourceDictionary><NeedsArgs x:Key="A" /></ui:ResourceDictionary>""", XamlValidator.NonConstructibleElementCode)]
+    [InlineData("<InternalCtorElement />", XamlValidator.NonConstructibleElementCode)]
     [InlineData("""<ui:FrameworkElement x:Name="A" Name="B" />""", XamlValidator.ConflictingNameCode)]
     [InlineData("<UiPanel>hello</UiPanel>", XamlValidator.InvalidTextContentCode)]
     [InlineData("""<ContentHost Content="a"><ContentHost.Content>b</ContentHost.Content></ContentHost>""", XamlValidator.DuplicatePropertyAssignmentCode)]
     [InlineData("""<ContentHost Content="a"><Child /></ContentHost>""", XamlValidator.DuplicatePropertyAssignmentCode)]
+    [InlineData("""<ContentHost><ContentHost.Content>a</ContentHost.Content><Child /></ContentHost>""", XamlValidator.DuplicatePropertyAssignmentCode)]
     [InlineData("""<Child x:Load="False" />""", XamlValidator.LoadRequiresNameCode)]
     [InlineData("""<ui:Style TargetType="Nope" />""", XamlValidator.UnknownTypeCode)]
     public void Structure_ReportsInvalidConstructs(string body, string code)
@@ -2493,9 +2495,11 @@ public class XamlValidatorTests
     [InlineData("""<ui:Style TargetType="Child" />""")]
     [InlineData("""<ui:ResourceDictionary><ui:Visibility x:Key="V">Collapsed</ui:Visibility></ui:ResourceDictionary>""")]
     [InlineData("""<ui:ResourceDictionary><ui:Thickness x:Key="T" /></ui:ResourceDictionary>""")]
-    [InlineData("""<InternalCtorElement />""")]
     [InlineData("""<Child d:Tag="{x:Type local:Child}" />""")]
     [InlineData("""<ContentHost Content="a"><d:Child /></ContentHost>""")]
+    [InlineData("""<d:Child><AbstractElement x:Load="False" /></d:Child>""")]
+    [InlineData("""<StyleHostBase>Add</StyleHostBase>""")]
+    [InlineData("""<Child x:Name="A" Name="B" />""")]
     public void Structure_AcceptsValidConstructs(string body)
     {
         var codes = new[]
@@ -2570,9 +2574,12 @@ public class XamlValidatorTests
                   xmlns:ui="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                   x:Class="TestApp.Page"
                   Width="{ui:StaticResource Accent}"
-                  Foreground="{ui:StaticResource Accent}">
+                  Foreground="{ui:StaticResource Accent}"
+                  Margin="{ui:StaticResource Spacing}"
+                  CornerRadius="{ui:StaticResource Spacing}">
               <Page.Resources>
                 <media:SolidColorBrush x:Key="Accent" />
+                <x:Double x:Key="Spacing">4</x:Double>
               </Page.Resources>
             </Page>
             """;
@@ -2598,6 +2605,11 @@ public class XamlValidatorTests
             ValidateWithFileSystem(xaml, fileSystem),
             d => d.Code == XamlValidator.MissingResourceDictionarySourceCode);
         Assert.Contains("Missing.xaml", diagnostic.Message);
+
+        // A same-named project item may be linked into the package under another path.
+        var linked = XamlFileSystemContext.ForProject(@"C:\test", [@"C:\Shared\Missing.xaml", @"C:\Shared\Present.xaml"]);
+        Assert.DoesNotContain(ValidateWithFileSystem(xaml, linked with { DirectoryExists = fileSystem.DirectoryExists }),
+            d => d.Code == XamlValidator.MissingResourceDictionarySourceCode);
     }
 
     private static string PageWithContent(string content) => Page(string.Empty).Replace("/>", ">" + content + "</Page>");

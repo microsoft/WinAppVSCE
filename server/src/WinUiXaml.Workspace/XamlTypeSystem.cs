@@ -414,7 +414,7 @@ namespace WinUiXaml.Workspace
             }
         }
 
-        /// <summary>True when the XAML compiler can create the type as an object element. Framework classes created from text (FontFamily) only need a public constructor.</summary>
+        /// <summary>True when the XAML compiler can create the type as an object element: a public parameterless constructor, or a framework type created from text (FontFamily).</summary>
         public static bool IsXamlConstructible(INamedTypeSymbol type)
         {
             if (type.TypeKind is TypeKind.Struct or TypeKind.Enum)
@@ -427,11 +427,11 @@ namespace WinUiXaml.Workspace
                 return false;
             }
 
-            bool fromSource = type.Locations.Any(location => location.IsInSource);
-            return type.InstanceConstructors.Any(ctor => ctor.Parameters.Length == 0
-                ? ctor.DeclaredAccessibility == Accessibility.Public ||
-                  (fromSource && ctor.DeclaredAccessibility is Accessibility.Internal or Accessibility.ProtectedOrInternal)
-                : !fromSource && ctor.DeclaredAccessibility == Accessibility.Public);
+            bool framework = type.ContainingNamespace?.ToDisplayString() is { } ns &&
+                (ns.StartsWith("Microsoft.UI.Xaml", StringComparison.Ordinal) || ns.StartsWith("Windows.", StringComparison.Ordinal));
+            return type.InstanceConstructors.Any(ctor => ctor.DeclaredAccessibility == Accessibility.Public &&
+                (ctor.Parameters.Length == 0 ||
+                 (framework && ctor.Parameters is [{ Type.SpecialType: SpecialType.System_String }])));
         }
 
         /// <summary>Every accessible, non-generic top-level type declared in the project's own source.</summary>

@@ -209,6 +209,27 @@ internal static class XamlRename
         SyntaxFacts.GetKeywordKind(value) == SyntaxKind.None &&
         !value.StartsWith('@');
 
+    /// <summary>True when, looking outward from the reference, newName is visible before the referenced name.</summary>
+    private static bool IsShadowedBy(TextDocument doc, Lsp.Range reference, string newName, XamlTypeSystem typeSystem)
+    {
+        int start = doc.OffsetAt(reference.Start);
+        var oldName = doc.Text.Substring(start, doc.OffsetAt(reference.End) - start);
+        foreach (var (name, _) in XamlSemanticFacts.EnumerateElementNameBindingTargets(doc, doc.Parsed.FindNode(start), typeSystem))
+        {
+            if (name == oldName)
+            {
+                return false;
+            }
+
+            if (name == newName)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     internal static void EnsureNoCollision(
         TextDocument doc, int offset, string newName, XamlRenameKind kind, XamlTypeSystem? typeSystem)
     {
@@ -232,6 +253,14 @@ internal static class XamlRename
                     throw new RenameValidationException(
                         $"The name '{newName}' already exists in the current name scope.");
                 }
+            }
+
+            // A rewritten reference must not reach a nearer element that already uses newName.
+            if (occurrences?.Any(occurrence => !occurrence.IsDeclaration &&
+                    IsShadowedBy(doc, occurrence.Range, newName, typeSystem)) == true)
+            {
+                throw new RenameValidationException(
+                    $"The name '{newName}' already exists in a template scope that a renamed reference resolves through.");
             }
         }
         else if (kind == XamlRenameKind.Key &&

@@ -275,7 +275,7 @@ internal static partial class CompletionProvider
         if (includeProjectObjects)
         {
             candidates = candidates.Concat(typeSystem.GetSourceTypes()
-                .Where(type => type.TypeKind == TypeKind.Class && !type.IsImplicitClass));
+                .Where(type => type.TypeKind == TypeKind.Class && !type.IsImplicitClass && IsUserInstanceType(type)));
         }
 
         foreach (var type in candidates)
@@ -1120,7 +1120,7 @@ internal static partial class CompletionProvider
             var requiredBase = ctx.AttributeName!.EndsWith("SourcePageType", StringComparison.Ordinal)
                 ? typeSystem.ResolveMetadataType("Microsoft.UI.Xaml.Controls.Page")
                 : null;
-            return CompleteTypeNameValue(ctx.Partial, scope, typeSystem, replaceRange, requiredBaseType: requiredBase, doc: doc);
+            return CompleteTypeNameValue(ctx.Partial, scope, typeSystem, replaceRange, requiredBaseType: requiredBase, doc: doc, rankProjectTypesFirst: requiredBase is not null);
         }
 
         // Scalar (keyword/named) value completers keyed purely on the value type — enum, bool, GridLength, named color, named font weight. Shared with the Setter.Value path so both stay in lockstep.
@@ -1304,12 +1304,15 @@ internal static partial class CompletionProvider
         XamlNamespaceScope scope, XamlTypeSystem typeSystem, Lsp.Range replaceRange,
         bool allTypeKinds, INamedTypeSymbol? requiredBaseType, bool rankProjectTypesFirst)
     {
+        // x:DataType and SourcePageType name project types; TargetType keeps framework matches first.
+        var sortPrefix = rankProjectTypesFirst ? "0" : "\uffff";
         var defaultReachable = new HashSet<string>(typeSystem.ClrNamespacesForUri(defaultUri), StringComparer.Ordinal);
         foreach (var type in typeSystem.GetSourceTypes())
         {
             var clrNamespace = type.ContainingNamespace?.ToDisplayString();
             if (!StartsWith(type.Name, local) ||
-                (!allTypeKinds && (type.TypeKind != TypeKind.Class || type.IsStatic)) ||
+                !IsUserInstanceType(type) ||
+                (!allTypeKinds && type.TypeKind != TypeKind.Class) ||
                 (requiredBaseType is not null && !XamlTypeSystem.IsAssignableTo(type, requiredBaseType)) ||
                 type.ContainingNamespace is null or { IsGlobalNamespace: true } ||
                 defaultReachable.Contains(clrNamespace!) ||
@@ -1333,10 +1336,23 @@ internal static partial class CompletionProvider
                 TextEdit = new TextEdit { Range = replaceRange, NewText = label },
                 AdditionalTextEdits = declarationEdit is null ? null : new List<TextEdit> { declarationEdit },
                 FilterText = type.Name,
-                // x:DataType usually names a project view model; elsewhere framework matches keep precedence.
-                SortText = (rankProjectTypesFirst ? "0" : "\uffff") + type.Name,
+                SortText = sortPrefix + type.Name,
             });
         }
+    }
+
+    /// <summary>Project types a document can instantiate or bind to; excludes static classes and the app and window shells.</summary>
+    private static bool IsUserInstanceType(INamedTypeSymbol type)
+    {
+        for (var current = type.BaseType; current is not null; current = current.BaseType)
+        {
+            if (current.ToDisplayString() is "Microsoft.UI.Xaml.Application" or "Microsoft.UI.Xaml.Window")
+            {
+                return false;
+            }
+        }
+
+        return !type.IsStatic;
     }
 
     private static int TypeCompletionKind(INamedTypeSymbol type) => type.TypeKind switch
