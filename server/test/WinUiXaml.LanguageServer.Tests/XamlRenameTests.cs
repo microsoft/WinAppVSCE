@@ -490,23 +490,25 @@ public class XamlRenameTests
         Assert.All(edits, edit => Assert.Equal("Inner", edit.NewText));
     }
 
-    [Fact]
-    public void Rename_OuterNameRefusesNameThatShadowsItInsideReferencingTemplate()
+    [Theory]
+    [InlineData("Out|er", "Inner", "Inner")]
+    [InlineData("Outer", "In|ner", "Outer")]
+    public void Rename_RefusesWhenTemplateElementNameWouldResolveDifferently(string outer, string inner, string newName)
     {
-        var (doc, offset) = Caret("""
+        var (doc, offset) = Caret($$"""
             <Page xmlns="using:Microsoft.UI.Xaml"
                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                   xmlns:controls="using:Microsoft.UI.Xaml.Controls">
-              <controls:Grid x:Name="Out|er" />
+              <controls:Grid x:Name="{{outer}}" />
               <DataTemplate>
-                <controls:Grid x:Name="Inner" />
+                <controls:Grid x:Name="{{inner}}" />
                 <controls:TextBox Text="{Binding ElementName=Outer}" />
               </DataTemplate>
             </Page>
             """);
 
         Assert.Throws<RenameValidationException>(() =>
-            XamlRename.Rename(doc, offset, "Inner", CreateFrameworkTypeSystem()));
+            XamlRename.Rename(doc, offset, newName, CreateFrameworkTypeSystem()));
     }
 
     [Theory]

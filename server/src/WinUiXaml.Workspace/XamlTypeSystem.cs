@@ -417,7 +417,8 @@ namespace WinUiXaml.Workspace
         /// <summary>True when the XAML compiler can create the type as an object element: a public parameterless constructor, or a framework type created from text (FontFamily).</summary>
         public static bool IsXamlConstructible(INamedTypeSymbol type)
         {
-            if (type.TypeKind is TypeKind.Struct or TypeKind.Enum)
+            // XAML language primitives (x:String) are created from text like structs and enums.
+            if (type.TypeKind is TypeKind.Struct or TypeKind.Enum || type.SpecialType == SpecialType.System_String)
             {
                 return true;
             }

@@ -105,47 +105,57 @@ internal sealed partial class XamlLanguageServer
             CollectNameOccurrences(element, name, doc, typeSystem, occurrences, recurse: false);
         }
 
-        if (declaration is null || doc.Parsed.Root is not { } root)
+        if (declaration is null)
         {
             return;
         }
 
-        foreach (var element in root.DescendantNodesAndSelf().OfType<XamlElement>())
+        foreach (var reference in EnumerateElementNameReferences(doc, typeSystem))
         {
-            if (inScope.Contains(element))
+            if (reference.Name == name &&
+                !inScope.Contains(reference.Element) &&
+                ReferenceEquals(
+                    XamlSemanticFacts.FindElementNameBindingTarget(doc, reference.Attribute, name, typeSystem),
+                    declaration))
             {
-                continue;
-            }
-
-            foreach (var attribute in element.Attributes.Where(attribute => attribute.Value?.MarkupExtension is not null))
-            {
-                ForEachExtension(attribute.Value!.MarkupExtension!, e =>
-                {
-                    foreach (var span in ElementNameArgumentSpans(e, element.NamespaceScope, name, typeSystem))
-                    {
-                        if (ReferenceEquals(
-                                XamlSemanticFacts.FindElementNameBindingTarget(doc, attribute, name, typeSystem),
-                                declaration))
-                        {
-                            occurrences.Add((doc.RangeOf(span), false));
-                        }
-                    }
-                });
+                occurrences.Add((doc.RangeOf(reference.Span), false));
             }
         }
     }
 
-    /// <summary>Value spans of ElementName arguments naming name in a classic Binding extension.</summary>
-    private static IEnumerable<TextSpan> ElementNameArgumentSpans(
-        XamlMarkupExtension extension, XamlNamespaceScope scope, string name, XamlTypeSystem? typeSystem) =>
+    /// <summary>Every classic Binding ElementName argument in the document.</summary>
+    internal static List<(XamlElement Element, XamlAttribute Attribute, string Name, TextSpan Span)> EnumerateElementNameReferences(
+        TextDocument doc, XamlTypeSystem typeSystem)
+    {
+        var references = new List<(XamlElement, XamlAttribute, string, TextSpan)>();
+        foreach (var element in doc.Parsed.Root?.DescendantNodesAndSelf().OfType<XamlElement>() ?? [])
+        {
+            foreach (var attribute in element.Attributes.Where(attribute => attribute.Value?.MarkupExtension is not null))
+            {
+                ForEachExtension(attribute.Value!.MarkupExtension!, e =>
+                {
+                    foreach (var (name, span) in ElementNameArguments(e, element.NamespaceScope, typeSystem))
+                    {
+                        references.Add((element, attribute, name, span));
+                    }
+                });
+            }
+        }
+
+        return references;
+    }
+
+    /// <summary>Trimmed values and spans of ElementName arguments in a classic Binding extension.</summary>
+    private static IEnumerable<(string Name, TextSpan Span)> ElementNameArguments(
+        XamlMarkupExtension extension, XamlNamespaceScope scope, XamlTypeSystem? typeSystem) =>
         typeSystem is null || !XamlSemanticFacts.IsBindingMarkupExtension(extension, scope, typeSystem)
             ? []
             : extension.Arguments
                 .Where(argument => argument.IsNamed &&
                     argument.Name?.LocalName == "ElementName" &&
-                    argument.Value?.Trim() == name &&
+                    argument.Value?.Trim() is { Length: > 0 } &&
                     argument.ValueSpan is not null)
-                .Select(argument => argument.ValueSpan!.Value);
+                .Select(argument => (argument.Value!.Trim(), argument.ValueSpan!.Value));
 
     /// <summary>Classifies the renameable/referenceable symbol the caret sits on: an x:Name/Name (whether the caret is on the declaration or a usage) or an x:Key resource key.</summary>
     internal static (XamlRenameKind Kind, string Name)? DetectSymbolAt(
@@ -359,7 +369,7 @@ internal sealed partial class XamlLanguageServer
                         return;
                     }
 
-                    foreach (var vs in ElementNameArgumentSpans(e, element.NamespaceScope, name, typeSystem))
+                    foreach (var (_, vs) in ElementNameArguments(e, element.NamespaceScope, typeSystem).Where(argument => argument.Name == name))
                     {
                         results.Add((doc.RangeOf(vs), false));
                     }

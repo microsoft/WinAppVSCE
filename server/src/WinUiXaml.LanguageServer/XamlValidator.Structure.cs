@@ -326,11 +326,10 @@ internal static partial class XamlValidator
         INamedTypeSymbol? pageClass, XamlNamespaceScope scope, XamlTypeSystem typeSystem,
         TextDocument doc, List<Diagnostic> diagnostics)
     {
+        // Any non-event attribute can host the property-only checks; event attributes bind methods legitimately.
         if (elementType is null ||
             attribute.Name.HasPrefix ||
-            attribute.Name.IsDotted ||
-            typeSystem.FindAttributeMember(elementType, attribute.Name.LocalName) is not
-                { Kind: XamlMemberKind.Property } ||
+            typeSystem.FindAttributeMember(elementType, attribute.Name.LocalName) is { Kind: XamlMemberKind.Event } ||
             attribute.Value?.MarkupExtension is not { IsClosed: true } extension ||
             !XamlSemanticFacts.IsXBind(extension, scope) ||
             extension.Arguments.FirstOrDefault(argument =>

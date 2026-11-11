@@ -2495,6 +2495,7 @@ public class XamlValidatorTests
     [InlineData("""<ui:Style TargetType="Child" />""")]
     [InlineData("""<ui:ResourceDictionary><ui:Visibility x:Key="V">Collapsed</ui:Visibility></ui:ResourceDictionary>""")]
     [InlineData("""<ui:ResourceDictionary><ui:Thickness x:Key="T" /></ui:ResourceDictionary>""")]
+    [InlineData("""<ui:ResourceDictionary><x:String x:Key="S">a</x:String></ui:ResourceDictionary>""")]
     [InlineData("""<Child d:Tag="{x:Type local:Child}" />""")]
     [InlineData("""<ContentHost Content="a"><d:Child /></ContentHost>""")]
     [InlineData("""<d:Child><AbstractElement x:Load="False" /></d:Child>""")]
@@ -2532,6 +2533,8 @@ public class XamlValidatorTests
     {
         Assert.Contains(Validate(Page("""Text="{x:Bind Zero}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
         Assert.Contains(Validate(Page("""Text="{x:Bind local:BindStatics.Format}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
+        Assert.Contains(Validate(Page("""Grid.Row="{x:Bind local:BindStatics.Format}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
+        Assert.Contains(Validate(Page("""Grid.Row="{x:Bind Zero}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
         Assert.DoesNotContain(Validate(Page("""Text="{x:Bind Zero()}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
 
         Assert.Contains(Validate(Page("""Text="{x:Bind Child.Name, Mode=TwoWay}" """)), d => d.Code == XamlValidator.ReadOnlyTwoWayBindCode);
