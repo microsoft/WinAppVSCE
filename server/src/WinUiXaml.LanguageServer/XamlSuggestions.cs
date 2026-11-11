@@ -47,38 +47,72 @@ internal static class XamlSuggestions
     private static bool SharesFirstLetter(string a, string b) =>
         a.Length > 0 && b.Length > 0 && char.ToLowerInvariant(a[0]) == char.ToLowerInvariant(b[0]);
 
-    /// <summary>True when the first ranked name is strictly closer to target than the second, so it is safe to prefer.</summary>
-    public static bool IsUniqueBest(string target, IReadOnlyList<string> ranked) =>
-        ranked.Count == 1 ||
-        ranked.Count > 1 && Distance(target, ranked[0], 64) < Distance(target, ranked[1], 64);
-
-    public static IReadOnlyList<string> AttributeNames(string target, IEnumerable<string> candidates)
+    /// <summary>The one name that completes a partially typed name or differs from it by a single whole word; null when none or several match.</summary>
+    public static string? RelatedName(string target, IEnumerable<string> candidates)
     {
-        var names = candidates.ToArray();
-        var nearest = Nearest(target, names);
-        if (nearest.Count > 0 || string.IsNullOrEmpty(target))
+        if (string.IsNullOrEmpty(target) || target.Length < 3 || candidates is null)
         {
-            return nearest;
+            return null;
         }
 
-        // A count-shaped name can refer to a single-item property, but only match its exact stem.
-        if (target.EndsWith("Count", StringComparison.Ordinal))
+        var targetWords = Words(target);
+        string? match = null;
+        foreach (var candidate in candidates.Distinct(StringComparer.Ordinal))
         {
-            string stem = target.Substring(0, target.Length - "Count".Length);
-            return stem.Length >= 6
-                ? names.Where(name => string.Equals(name, stem, StringComparison.Ordinal)).Take(1).ToArray()
-                : Array.Empty<string>();
+            if (string.IsNullOrEmpty(candidate) || string.Equals(candidate, target, StringComparison.Ordinal) ||
+                !candidate.StartsWith(target, StringComparison.OrdinalIgnoreCase) &&
+                !DifferByOneWord(targetWords, Words(candidate)))
+            {
+                continue;
+            }
+
+            if (match is not null)
+            {
+                return null;
+            }
+            match = candidate;
         }
 
-        // A truncated name may be completed, but only when exactly one property extends it.
-        var extensions = target.Length >= 5
-            ? names.Where(name => name.Length > target.Length && name.StartsWith(target, StringComparison.Ordinal))
-                .Distinct(StringComparer.Ordinal).Take(2).ToArray()
-            : Array.Empty<string>();
-        return extensions.Length == 1 ? extensions : Array.Empty<string>();
+        return match;
     }
 
-    /// <summary>Case-insensitive edit distance, counting adjacent transpositions as one typo.</summary>
+    // PascalCase words; an acronym ends before a capital that starts a lowercase word (UIElement -> UI, Element).
+    private static string[] Words(string name)
+    {
+        var words = new List<string>();
+        int start = 0;
+        for (int i = 1; i < name.Length; i++)
+        {
+            if (char.IsUpper(name[i]) &&
+                (!char.IsUpper(name[i - 1]) || i + 1 < name.Length && char.IsLower(name[i + 1])))
+            {
+                words.Add(name.Substring(start, i - start));
+                start = i;
+            }
+        }
+        words.Add(name.Substring(start));
+        return words.ToArray();
+    }
+
+    private static bool DifferByOneWord(string[] a, string[] b)
+    {
+        var (shorter, longer) = a.Length < b.Length ? (a, b) : (b, a);
+        if (longer.Length != shorter.Length + 1)
+        {
+            return false;
+        }
+
+        for (int skip = 0; skip < longer.Length; skip++)
+        {
+            if (longer.Where((_, i) => i != skip).SequenceEqual(shorter, StringComparer.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Case-insensitive edit distance counting adjacent swaps as one typo, bailing out (returning threshold + 1) once a row exceeds the threshold.</summary>
     private static int Distance(string a, string b, int threshold)
     {
         int n = a.Length;

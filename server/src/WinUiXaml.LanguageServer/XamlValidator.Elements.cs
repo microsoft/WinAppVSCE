@@ -223,7 +223,7 @@ internal static partial class XamlValidator
         {
             diagnostics.Add(Diag(doc, name.LocalNameSpan, SeverityError, UnknownTypeCode,
                 $"The type '{name.LocalName}' was not found in the XAML namespace '{uri}'.",
-                SuggestData(name.LocalName, typeSystem.GetAllTypes(uri).Select(t => t.Name))));
+                SuggestNameData(name.LocalName, typeSystem.GetAllTypes(uri).Select(t => t.Name))));
             return;
         }
 
@@ -270,9 +270,14 @@ internal static partial class XamlValidator
         var member = typeSystem.FindAttributeMember(elementType, name.LocalName);
         if (member is null)
         {
+            // Never suggest a property the element already sets; that fix would only create a duplicate.
+            var setNames = (attribute.Parent as XamlElement)?.Attributes
+                .Where(other => !other.Name.HasPrefix && !other.Name.IsDotted)
+                .Select(other => other.Name.LocalName)
+                .ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
             diagnostics.Add(Diag(doc, name.LocalNameSpan, SeverityWarning, UnknownAttributeCode,
                 $"'{name.LocalName}' is not a property or event of '{elementType.Name}'.",
-                SuggestData(name.LocalName, typeSystem.GetAttributeCandidateNames(elementType))));
+                SuggestNameData(name.LocalName, typeSystem.GetAttributeCandidateNames(elementType).Where(n => !setNames.Contains(n)))));
             return;
         }
 
@@ -341,39 +346,6 @@ internal static partial class XamlValidator
                     : null));
     }
 
-    /// <summary>The type a literal value of this attribute is validated against; the validator and quick fixes share it. Null when unresolved.</summary>
-    internal static ITypeSymbol? ResolveAttributeValueType(
-        XamlAttribute attribute,
-        INamedTypeSymbol elementType,
-        XamlNamespaceScope scope,
-        XamlTypeSystem typeSystem)
-    {
-        var name = attribute.Name;
-        if (!name.IsDotted)
-        {
-            return !name.HasPrefix &&
-                typeSystem.FindAttributeMember(elementType, name.LocalName) is { Kind: XamlMemberKind.Property, Type: { } type }
-                    ? type
-                    : null;
-        }
-
-        int dot = name.LocalName.LastIndexOf('.');
-        if (dot <= 0 || dot >= name.LocalName.Length - 1 ||
-            !scope.TryResolvePrefix(name.Prefix, out var uri) ||
-            uri == XamlTypeSystem.XamlLanguageNamespace ||
-            !typeSystem.IsKnownNamespace(uri) ||
-            typeSystem.ResolveType(uri, name.LocalName.Substring(0, dot)) is not { } owner)
-        {
-            return null;
-        }
-
-        var memberName = name.LocalName.Substring(dot + 1);
-        return XamlTypeSystem.IsAssignableTo(elementType, owner) &&
-            typeSystem.FindAttributeMember(elementType, memberName) is { Kind: XamlMemberKind.Property, Type: { } ordinaryType }
-                ? ordinaryType
-                : typeSystem.GetAttachedMemberType(owner, memberName, elementType);
-    }
-
     /// <summary>Validates an Owner.Member attached-property attribute: resolves the owner type through the attribute's namespace and checks it actually exposes the member.</summary>
     private static void ValidateAttachedProperty(
         XamlAttribute attribute,
@@ -415,8 +387,19 @@ internal static partial class XamlValidator
             return;
         }
 
-        // Owner.Property may also name the element's own ordinary property, for example Grid.ColumnDefinitions.
-        var memberType = ResolveAttributeValueType(attribute, elementType, scope, typeSystem);
+        // Owner.Property is also legal for an ordinary property when Owner is the
+        // element's own type (or one of its bases), for example Grid.ColumnDefinitions.
+        if (XamlTypeSystem.IsAssignableTo(elementType, owner) &&
+            typeSystem.FindAttributeMember(elementType, memberName) is { Kind: XamlMemberKind.Property, Type: { } ordinaryType })
+        {
+            ValidateLiteralAttributeValue(attribute, ordinaryType, typeSystem, doc, diagnostics);
+            return;
+        }
+
+        var memberType = typeSystem.GetAttachedMemberType(
+            owner,
+            memberName,
+            elementType);
         if (memberType is not null)
         {
             ValidateLiteralAttributeValue(attribute, memberType, typeSystem, doc, diagnostics);

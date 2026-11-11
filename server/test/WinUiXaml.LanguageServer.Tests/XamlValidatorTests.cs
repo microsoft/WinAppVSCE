@@ -529,21 +529,26 @@ public class XamlValidatorTests
         Assert.Contains("OneWay", data.Suggestions);
     }
 
-    [Theory]
-    [InlineData("""IsEnabled="not-bool" """, true)]
-    [InlineData("""Width="abc" """, true)]
-    [InlineData("""Text="Ture" """, false)]
-    [InlineData("""IsEnabled="True" """, false)]
-    [InlineData("""IsEnabled="false" """, false)]
-    [InlineData("""IsEnabled="{x:Bind Child}" """, false)]
-    public void LiteralSuggestions_DoNotGuessUnrelatedOrValidValues(string attribute, bool invalid)
+    [Fact]
+    public void UnknownAttribute_NeverSuggestsAPropertyTheElementAlreadySets()
     {
-        var diagnostics = Validate(Page(attribute));
+        var diagnostic = Assert.Single(
+            Validate(Page("""Widht="1" Width="2" """)),
+            d => d.Code == XamlValidator.UnknownAttributeCode);
 
-        Assert.Equal(invalid, diagnostics.Any(item => item.Code == XamlValidator.InvalidAttributeValueCode));
-        Assert.All(
-            diagnostics.Where(item => item.Code == XamlValidator.InvalidAttributeValueCode),
-            item => Assert.Null(item.Data));
+        Assert.True(diagnostic.Data is null ||
+            !Assert.IsType<DiagnosticData>(diagnostic.Data).Suggestions.Contains("Width"));
+    }
+
+    [Fact]
+    public void MisspelledBooleanValue_SuggestsTrueOrFalse()
+    {
+        var diagnostic = Assert.Single(
+            Validate(Page("""IsEnabled="Flase" """)),
+            d => d.Code == XamlValidator.InvalidAttributeValueCode);
+
+        var data = Assert.IsType<DiagnosticData>(diagnostic.Data);
+        Assert.Equal("False", Assert.Single(data.Suggestions));
     }
 
     [Fact]

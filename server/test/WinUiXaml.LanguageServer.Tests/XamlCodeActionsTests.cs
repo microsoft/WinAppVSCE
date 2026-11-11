@@ -160,533 +160,6 @@ public class XamlCodeActionsTests
         Assert.Equal("Stretch", Assert.Single(action.Edit!.Changes[Uri]).NewText);
     }
 
-    [Theory]
-    [InlineData("<local:Gird></local:Gird>", "Gird", "Grid", XamlValidator.UnknownTypeCode)]
-    [InlineData("<local:Grid Txet=\"unchanged\" />", "Txet", "Text", XamlValidator.UnknownAttributeCode)]
-    [InlineData("<local:Grid IsEnabled='Ture' />", "Ture", "True", XamlValidator.InvalidAttributeValueCode)]
-    [InlineData("<local:Grid IsEnabled=\"  Ture  \" />", "Ture", "True", XamlValidator.InvalidAttributeValueCode)]
-    [InlineData("<local:Grid IsEnabled=\"Flase\" />", "Flase", "False", XamlValidator.InvalidAttributeValueCode)]
-    [InlineData("<local:Grid OptionalEnabled=\"Ture\" />", "Ture", "True", XamlValidator.InvalidAttributeValueCode)]
-    public void ValidatedTypo_RoundTripsToReplacementThatClearsDiagnostic(
-        string body, string bad, string replacement, string code)
-    {
-        var typeSystem = BuildTypeSystem("""
-            namespace TestControls
-            {
-                public enum Mode { No, Yes }
-                public class Grid
-                {
-                    public string Text { get; set; }
-                    public bool IsEnabled { get; set; }
-                    public bool? OptionalEnabled { get; set; }
-                    public Mode Mode { get; set; }
-                }
-            }
-            """);
-        var xaml = $"<local:Grid xmlns:local=\"using:TestControls\">\r\n{body}\r\n</local:Grid>";
-        var doc = new TextDocument(Uri, xaml);
-        var diagnostic = Assert.Single(XamlValidator.Validate(doc, typeSystem), item => item.Code == code);
-        var wireDiagnostic = JsonSerializer.Deserialize<Diagnostic>(
-            JsonSerializer.Serialize(diagnostic, LspJson.Options), LspJson.Options)!;
-        Assert.IsType<JsonElement>(wireDiagnostic.Data);
-
-        var action = Assert.Single(
-            XamlCodeActions.Compute(Uri, doc, Context(wireDiagnostic), typeSystem),
-            item => item.Title == $"Change '{bad}' to '{replacement}'");
-
-        Assert.Equal("quickfix", action.Kind);
-        Assert.True(action.IsPreferred);
-        Assert.Null(action.Command);
-        var edits = action.Edit!.Changes[Uri];
-        Assert.Equal(code == XamlValidator.UnknownTypeCode ? 2 : 1, edits.Count);
-        var fixedText = xaml;
-        foreach (var edit in edits.OrderByDescending(edit => doc.OffsetAt(edit.Range.Start)))
-        {
-            int start = doc.OffsetAt(edit.Range.Start);
-            int end = doc.OffsetAt(edit.Range.End);
-            Assert.Equal(bad, xaml[start..end]);
-            Assert.Equal(replacement, edit.NewText);
-            fixedText = fixedText[..start] + edit.NewText + fixedText[end..];
-        }
-
-        Assert.Equal(xaml.Replace(bad, replacement, System.StringComparison.Ordinal), fixedText);
-        var fixedDoc = new TextDocument(Uri, fixedText);
-        Assert.Empty(fixedDoc.Parsed.Diagnostics);
-        Assert.Empty(XamlValidator.Validate(fixedDoc, typeSystem));
-    }
-
-    [Fact]
-    public void UnknownColumnProperty_MapsNumberUsingInheritedEnumMetadata_AndGuardsWholeAttribute()
-    {
-        var typeSystem = ColumnTypeSystem();
-        const string attribute = "FrozenEdgeCount = '1'";
-        var doc = ColumnDocument($"Label=\"keep\" {attribute} Number=\"42\"");
-
-        var action = Assert.Single(AttributeActions(doc, typeSystem));
-        Assert.Equal("Replace with FrozenEdge=\"Leading\"", action.Title);
-        Assert.NotEqual(true, action.IsPreferred);
-        var edit = Assert.Single(GuardedEdits(action, doc));
-        Assert.Equal(attribute, RangeText(doc, edit.Range));
-        Assert.Equal("FrozenEdge = 'Leading'", edit.NewText);
-        var fixedText = ApplyEdit(doc, edit);
-        Assert.Equal(doc.Text.Replace(attribute, edit.NewText), fixedText);
-        Assert.Empty(XamlValidator.Validate(new TextDocument(Uri, fixedText), typeSystem));
-
-        var wire = JsonSerializer.SerializeToElement(action, LspJson.Options);
-        Assert.False(wire.TryGetProperty("edit", out _));
-        var arguments = wire.GetProperty("command").GetProperty("arguments")[0];
-        Assert.Equal(17, arguments.GetProperty("expectedVersion").GetInt32());
-        Assert.Equal(attribute, arguments.GetProperty("edits")[0].GetProperty("expectedText").GetString());
-    }
-
-    [Theory]
-    [InlineData("None = 0, Leading = 1, Trailing = 2", "Leading")]
-    [InlineData("None = 0, Trailing = 1, Leading = 2", "Trailing")]
-    [InlineData("None = 0, Start = 1, End = 2", "Start")]
-    public void UnknownColumnProperty_UsesReferencedVersionNotHardcodedNames(string members, string expected)
-    {
-        var typeSystem = ColumnTypeSystem(members);
-        var doc = ColumnDocument("FrozenEdgeCount=\"1\"");
-        var action = Assert.Single(AttributeActions(doc, typeSystem));
-
-        Assert.Equal($"Replace with FrozenEdge=\"{expected}\"", action.Title);
-        Assert.Empty(XamlValidator.Validate(
-            new TextDocument(Uri, ApplyEdit(doc, Assert.Single(GuardedEdits(action, doc)))), typeSystem));
-    }
-
-    [Theory]
-    [InlineData("FrozenEdgeCount=\"unknown\"", "None,Leading,Trailing")]
-    [InlineData("FrozenEdgeCount=\"Leadnig\"", "Leading")]
-    public void UnknownProperty_OffersSmallExplicitValueChoices(string attributes, string choices)
-    {
-        var typeSystem = ColumnTypeSystem();
-        var doc = ColumnDocument(attributes);
-        var actions = AttributeActions(doc, typeSystem);
-
-        Assert.Equal(choices.Split(',').Length, actions.Count);
-        foreach (var (action, expected) in actions.Zip(choices.Split(',')))
-        {
-            Assert.NotEqual(true, action.IsPreferred);
-            Assert.EndsWith($"=\"{expected}\"", action.Title);
-            var edit = Assert.Single(GuardedEdits(action, doc));
-            Assert.Equal(attributes, RangeText(doc, edit.Range));
-            Assert.Empty(XamlValidator.Validate(new TextDocument(Uri, ApplyEdit(doc, edit)), typeSystem));
-        }
-    }
-
-    [Theory]
-    [InlineData("FrozenEdgeCount=\"  Trailing  \"", "FrozenEdge=\"  Trailing  \"")]
-    [InlineData("FrozenEdgeCount=\"Leading, Trailing\"", "FrozenEdge=\"Leading, Trailing\"")]
-    public void UnknownProperty_PreservesAlreadyValidValues(string attributes, string expected)
-    {
-        var doc = ColumnDocument(attributes);
-        var action = Assert.Single(AttributeActions(doc, ColumnTypeSystem()));
-        var edit = Assert.Single(GuardedEdits(action, doc));
-
-        Assert.Equal(expected, edit.NewText);
-        Assert.NotEqual(true, action.IsPreferred);
-    }
-
-    [Fact]
-    public void UnnamedNumber_OnNonFlagsEnum_OffersNamedChoicesInsteadOfKeepingTheNumber()
-    {
-        var doc = ColumnDocument("FrozenEdgeCount=\"99\"");
-        var actions = AttributeActions(doc, ColumnTypeSystem());
-
-        Assert.Equal(
-            new[] { "Replace with FrozenEdge=\"None\"", "Replace with FrozenEdge=\"Leading\"", "Replace with FrozenEdge=\"Trailing\"" },
-            actions.Select(action => action.Title));
-        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
-    }
-
-    [Fact]
-    public void EnumAliases_AreChoicesWithoutPreference()
-    {
-        var doc = ColumnDocument("FrozenEdgeCount=\"1\"");
-        var actions = AttributeActions(doc, ColumnTypeSystem("None = 0, Leading = 1, Start = 1"));
-
-        Assert.Equal(new[] { "Replace with FrozenEdge=\"Leading\"", "Replace with FrozenEdge=\"Start\"" },
-            actions.Select(action => action.Title));
-        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
-    }
-
-    [Fact]
-    public void Flags_OnlyUseDeclaredNumericConstants()
-    {
-        var typeSystem = ColumnTypeSystem("None = 0, Leading = 1, Trailing = 2", enumPrefix: "[System.Flags]");
-        var doc = ColumnDocument("FrozenEdgeCount=\"3\"");
-        var action = Assert.Single(AttributeActions(doc, typeSystem));
-
-        Assert.Equal("FrozenEdge=\"3\"", Assert.Single(GuardedEdits(action, doc)).NewText);
-    }
-
-    [Fact]
-    public void AmbiguousProperties_HaveNoPreferredAction_AndTotalChoicesAreCapped()
-    {
-        var typeSystem = ColumnTypeSystem(extraMembers: """
-            public Edge Mode { get; set; }
-            public Edge More { get; set; }
-            """);
-        var doc = ColumnDocument("Moe=\"1\"");
-        var actions = AttributeActions(doc, typeSystem);
-        Assert.Equal(new[] { "Replace with Mode=\"Leading\"", "Replace with More=\"Leading\"" },
-            actions.Select(action => action.Title));
-        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
-
-        var tied = AttributeActions(ColumnDocument("Moe=\"unknown\""), typeSystem);
-        Assert.Equal(new[] { "Change 'Moe' to 'Mode'", "Change 'Moe' to 'More'" }, tied.Select(action => action.Title));
-        Assert.All(tied, action => Assert.NotEqual(true, action.IsPreferred));
-    }
-
-    [Theory]
-    [InlineData("FrozenEdgeCount=\"1\" FrozenEdge=\"Trailing\"")]
-    [InlineData("FrozenEdge=\"Trailing\" FrozenEdgeCount=\"1\"")]
-    [InlineData("FrozenEdg=\"1\" FrozenEdge=\"Trailing\"")]
-    [InlineData("LabelCount=\"1\"")]
-    [InlineData("NumberCount=\"1\"")]
-    [InlineData("FrozenEdgeCount=\"{Binding Edge}\"")]
-    [InlineData("FrozenEdgeCount=\"1")]
-    public void UnsafeOrDuplicatePropertyReplacement_IsNotOffered(string attributes)
-    {
-        Assert.Empty(AttributeActions(ColumnDocument(attributes), ColumnTypeSystem()));
-    }
-
-    [Theory]
-    [InlineData("FrozenEdgeCount", "1 />", "<tabular:TableViewTemplateColumn FrozenEdge=\"keep\" />", null)]
-    [InlineData("FrozenEdg", "1 />", "<tabular:TableViewTemplateColumn FrozenEdge=\"keep\" />", "FrozenEdge")]
-    [InlineData("FrozenEdgeCount", "1\n    ", "Label=\"keep\" />", null)]
-    [InlineData("FrozenEdg", "Leadin\n    ", "Label=\"keep\" />", "FrozenEdge")]
-    [InlineData("IsEnabld", "Tru\n    ", "Label=\"keep\" />", "IsEnabled")]
-    [InlineData("IsEnabld", "Tru ", "Label=\" keep\" />", "IsEnabled")]
-    [InlineData("FrozenEdg", "Middle>Say ", "\" hi</tabular:TableViewTemplateColumn>", "FrozenEdge")]
-    [InlineData("Labl", "x", "", "Label")]
-    public void MissingClosingQuote_OnlyOffersNameRename(string bad, string value, string rest, string? good)
-    {
-        var typeSystem = ColumnTypeSystem();
-        var text = $"<tabular:TableViewTemplateColumn xmlns:tabular=\"using:TestControls\" {bad}=\"{value}{rest}";
-        var doc = new TextDocument(Uri, text, version: 17);
-        var diagnostic = Assert.Single(XamlValidator.Validate(doc, typeSystem),
-            item => item.Code == XamlValidator.UnknownAttributeCode && RangeText(doc, item.Range) == bad);
-        var actions = XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem)
-            .Where(action => action.Kind == "quickfix" && action.Diagnostics?.Contains(diagnostic) == true)
-            .ToList();
-
-        if (good is null)
-        {
-            Assert.Empty(actions);
-            return;
-        }
-
-        var action = Assert.Single(actions);
-        Assert.Equal($"Change '{bad}' to '{good}'", action.Title);
-        var edit = Assert.Single(action.Edit!.Changes[Uri]);
-        Assert.Equal(bad, RangeText(doc, edit.Range));
-        Assert.Equal(text.Replace($" {bad}=", $" {good}="), ApplyEdit(doc, edit));
-    }
-
-    [Fact]
-    public void LargeEnum_DoesNotFloodMenu_ButStillOffersCloseValueSpelling()
-    {
-        var typeSystem = ColumnTypeSystem("None, Leading, Trailing, Both, Automatic");
-        Assert.Empty(AttributeActions(ColumnDocument("FrozenEdgeCount=\"unknown\""), typeSystem));
-        var doc = ColumnDocument("FrozenEdgeCount=\"Leadnig\"");
-        Assert.Equal("Replace with FrozenEdge=\"Leading\"", Assert.Single(AttributeActions(doc, typeSystem)).Title);
-    }
-
-    [Theory]
-    [InlineData("Frozen=\"True\"", "None,Leading,Trailing")]
-    [InlineData("Frozen=\"1\"", "Leading")]
-    [InlineData("Frozen=\"Trailing\"", "Trailing")]
-    public void TruncatedEnumProperty_OffersUnpreferredMetadataChoices(string attributes, string choices)
-    {
-        var typeSystem = ColumnTypeSystem();
-        var doc = ColumnDocument(attributes);
-        var actions = AttributeActions(doc, typeSystem);
-
-        Assert.Equal(choices.Split(','), actions.Select(action => GuardedEdits(action, doc).Single().NewText
-            .Split('"')[1]));
-        foreach (var action in actions)
-        {
-            Assert.NotEqual(true, action.IsPreferred);
-            var edit = Assert.Single(GuardedEdits(action, doc));
-            Assert.Equal(attributes, RangeText(doc, edit.Range));
-            Assert.StartsWith("FrozenEdge=", edit.NewText);
-            Assert.Empty(XamlValidator.Validate(new TextDocument(Uri, ApplyEdit(doc, edit)), typeSystem));
-        }
-    }
-
-    [Theory]
-    [InlineData("Frozen=\"True\"", "public Edge FrozenEdgeMode { get; set; }")]
-    [InlineData("Thresh=\"5\"", "public int Threshold { get; set; }")]
-    [InlineData("Frozen=\"{Binding Edge}\"", "")]
-    [InlineData("Frozen=\"True\" FrozenEdge=\"None\"", "")]
-    public void TruncatedProperty_WithoutUniqueSafeEnumTarget_IsNotOffered(string attributes, string extraMembers)
-    {
-        Assert.Empty(AttributeActions(ColumnDocument(attributes), ColumnTypeSystem(extraMembers: extraMembers)));
-    }
-
-    [Fact]
-    public void TruncatedEnumProperty_WithLargeEnum_DoesNotFloodMenu()
-    {
-        var typeSystem = ColumnTypeSystem("None, Leading, Trailing, Both, Automatic");
-        Assert.Empty(AttributeActions(ColumnDocument("Frozen=\"True\""), typeSystem));
-    }
-
-    [Theory]
-    [InlineData("Numbr=\"abc\"", "Numbr", "Number", "")]
-    [InlineData("Numbr=\"\"", "Numbr", "Number", "")]
-    [InlineData("IsEnabld=\"1\"", "IsEnabld", "IsEnabled", "")]
-    [InlineData("OptionalEnabld=\"1\"", "OptionalEnabld", "OptionalEnabled", "")]
-    [InlineData("FrozenEdg=\"Middle\"", "FrozenEdg", "FrozenEdge", "None, Leading, Trailing, Both, Automatic")]
-    public void NearbyPropertyWithInvalidValue_StillOffersPreferredRename(
-        string attributes, string bad, string good, string members)
-    {
-        var typeSystem = members.Length == 0 ? ColumnTypeSystem() : ColumnTypeSystem(members);
-        var doc = ColumnDocument(attributes);
-        var action = Assert.Single(AttributeActions(doc, typeSystem));
-
-        Assert.Equal($"Change '{bad}' to '{good}'", action.Title);
-        Assert.True(action.IsPreferred);
-        Assert.Null(action.Command);
-        var edit = Assert.Single(action.Edit!.Changes[Uri]);
-        Assert.Equal(bad, RangeText(doc, edit.Range));
-        Assert.Equal(good, edit.NewText);
-        var diagnostics = XamlValidator.Validate(new TextDocument(Uri, ApplyEdit(doc, edit)), typeSystem);
-        Assert.DoesNotContain(diagnostics, item => item.Code == XamlValidator.UnknownAttributeCode);
-        Assert.Contains(diagnostics, item => item.Code == XamlValidator.InvalidAttributeValueCode);
-    }
-
-    [Fact]
-    public void StaleUnknownPropertyDiagnostic_IsCheckedAgainstCurrentNameAndMetadata()
-    {
-        var typeSystem = ColumnTypeSystem();
-        var doc = ColumnDocument("FrozenEdgeCount=\"1\"");
-        var diagnostic = Assert.Single(XamlValidator.Validate(doc, typeSystem),
-            item => item.Code == XamlValidator.UnknownAttributeCode);
-        var changed = new TextDocument(Uri, doc.Text.Replace("FrozenEdgeCount", "DifferentNameXX"), version: 18);
-        Assert.Empty(XamlCodeActions.Compute(Uri, changed, Context(diagnostic), typeSystem));
-
-        var updatedTypeSystem = ColumnTypeSystem(extraMembers: "public int FrozenEdgeCount { get; set; }");
-        Assert.Empty(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), updatedTypeSystem));
-
-        var valueChanged = new TextDocument(Uri, doc.Text.Replace("\"1\"", "\"2\""), version: 18);
-        var action = Assert.Single(XamlCodeActions.Compute(Uri, valueChanged, Context(diagnostic), typeSystem));
-        Assert.Equal("Replace with FrozenEdge=\"Trailing\"", action.Title);
-        Assert.Equal("FrozenEdge=\"Trailing\"", Assert.Single(GuardedEdits(action, valueChanged)).NewText);
-    }
-
-    [Fact]
-    public void UnknownProperty_WithoutReferencedMember_DoesNotInventReplacement()
-    {
-        var typeSystem = BuildTypeSystem("namespace TestControls { public class TableViewTemplateColumn { } }");
-        Assert.Empty(AttributeActions(ColumnDocument("FrozenEdgeCount=\"1\""), typeSystem));
-    }
-
-    [Theory]
-    [InlineData("public Edge FrozenEdge { get; }")]
-    [InlineData("public Edge FrozenEdge { get; private set; }")]
-    [InlineData("public static Edge FrozenEdge { get; set; }")]
-    public void UnknownProperty_DoesNotSuggestUnavailableSetters(string property)
-    {
-        var typeSystem = BuildTypeSystem($$"""
-            namespace TestControls
-            {
-                public enum Edge { None, Leading, Trailing }
-                public class TableViewTemplateColumn { {{property}} }
-            }
-            """);
-        Assert.Empty(AttributeActions(ColumnDocument("FrozenEdgeCount=\"1\""), typeSystem));
-    }
-
-    [Fact]
-    public void UnknownProperty_DoesNotDuplicatePropertyElementAssignment()
-    {
-        var doc = new TextDocument(Uri, """
-            <tabular:TableViewTemplateColumn xmlns:tabular="using:TestControls" FrozenEdgeCount="1">
-              <tabular:TableViewTemplateColumn.FrozenEdge>Trailing</tabular:TableViewTemplateColumn.FrozenEdge>
-            </tabular:TableViewTemplateColumn>
-            """);
-        Assert.Empty(AttributeActions(doc, ColumnTypeSystem()));
-    }
-
-    private const string TagsOwner = """
-        public static class Tags
-        {
-            public static string GetLabel(object target) => "";
-            public static void SetLabel(object target, string value) { }
-            public static Edge GetEdge(object target) => Edge.None;
-            public static void SetEdge(object target, Edge value) { }
-            public static int GetRow(object target) => 0;
-            public static void SetRow(object target, int value) { }
-        }
-        """;
-
-    [Theory]
-    [InlineData("FrozenEdgeCount=\"1\" tabular:Column.FrozenEdge=\"Trailing\"")]
-    [InlineData("FrozenEdgeCount=\"1\" tabular:TableViewTemplateColumn.FrozenEdge=\"Trailing\"")]
-    [InlineData("Labl=\"x\" tabular:Column.Label=\"y\"")]
-    public void UnknownProperty_DoesNotDuplicateOwnerQualifiedAssignment(string attributes)
-    {
-        Assert.Empty(AttributeActions(ColumnDocument(attributes), ColumnTypeSystem(enumPrefix: TagsOwner)));
-    }
-
-    [Fact]
-    public void UnknownProperty_IgnoresUnrelatedAttachedPropertyWithSameMemberName()
-    {
-        var typeSystem = ColumnTypeSystem(enumPrefix: TagsOwner);
-        var attributeForm = ColumnDocument("Labl=\"x\" tabular:Tags.Label=\"y\"");
-        var elementForm = new TextDocument(Uri, """
-            <tabular:TableViewTemplateColumn xmlns:tabular="using:TestControls" Labl="x">
-              <tabular:Tags.Label>y</tabular:Tags.Label>
-            </tabular:TableViewTemplateColumn>
-            """);
-
-        foreach (var doc in new[] { attributeForm, elementForm })
-        {
-            var action = Assert.Single(AttributeActions(doc, typeSystem));
-            Assert.Equal("Change 'Labl' to 'Label'", action.Title);
-            Assert.True(action.IsPreferred);
-        }
-    }
-
-    [Fact]
-    public void StaleInvalidValueDiagnostic_IsNotAppliedToRenamedProperty()
-    {
-        var typeSystem = ColumnTypeSystem(extraMembers: "public string GroupName { get; set; }");
-        var doc = ColumnDocument("IsEnabled=\"Ture\"");
-        var diagnostic = Assert.Single(XamlValidator.Validate(doc, typeSystem),
-            item => item.Code == XamlValidator.InvalidAttributeValueCode);
-        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem),
-            item => item.Kind == "quickfix");
-        Assert.Equal("Change 'Ture' to 'True'", action.Title);
-
-        // Same-length rename keeps the stale range on the "Ture" token.
-        var renamed = new TextDocument(Uri, doc.Text.Replace("IsEnabled", "GroupName"), version: 18);
-        Assert.Empty(XamlValidator.Validate(renamed, typeSystem));
-        Assert.DoesNotContain(XamlCodeActions.Compute(Uri, renamed, Context(diagnostic), typeSystem),
-            item => item.Kind == "quickfix");
-    }
-
-    [Fact]
-    public void InvalidAttachedEnumValue_StillOffersSpellingFix()
-    {
-        var typeSystem = ColumnTypeSystem(enumPrefix: TagsOwner);
-        var doc = ColumnDocument("tabular:Tags.Edge=\"Leadng\"");
-        var diagnostic = Assert.Single(XamlValidator.Validate(doc, typeSystem),
-            item => item.Code == XamlValidator.InvalidAttributeValueCode);
-        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem),
-            item => item.Kind == "quickfix" && item.IsPreferred == true);
-        Assert.Equal("Change 'Leadng' to 'Leading'", action.Title);
-    }
-
-    private static List<CodeAction> InvalidValueActions(TextDocument doc, XamlTypeSystem typeSystem)
-    {
-        var diagnostic = Assert.Single(XamlValidator.Validate(doc, typeSystem),
-            item => item.Code == XamlValidator.InvalidAttributeValueCode);
-        return XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem)
-            .Where(item => item.Kind == "quickfix").ToList();
-    }
-
-    [Fact]
-    public void InvalidAttachedNumericValue_OffersDefaultLiteral()
-    {
-        var doc = ColumnDocument("tabular:Tags.Row=\"abc\"");
-        var action = Assert.Single(InvalidValueActions(doc, ColumnTypeSystem(enumPrefix: TagsOwner)));
-
-        Assert.Equal("Replace with '0'", action.Title);
-        Assert.True(action.IsPreferred);
-    }
-
-    [Fact]
-    public void PaddedInvalidEnumValue_ReplacesOnlyTheMisspelledToken()
-    {
-        var doc = ColumnDocument("FrozenEdge=\" Leadng \"");
-        var action = Assert.Single(InvalidValueActions(doc, ColumnTypeSystem()), item => item.IsPreferred == true);
-        var edit = Assert.Single(action.Edit!.Changes[Uri]);
-
-        Assert.Equal("Change 'Leadng' to 'Leading'", action.Title);
-        Assert.Equal("Leadng", RangeText(doc, edit.Range));
-        Assert.Contains("FrozenEdge=\" Leading \"", ApplyEdit(doc, edit));
-    }
-
-    [Theory]
-    [InlineData("IsEnabled=\"Tru\n    Label=\"keep\"")]
-    [InlineData("Number=\"10 Label=\"keep\"")]
-    [InlineData("Number=\"10 Label=\" keep\"")]
-    [InlineData("Number=\"10>Say \" hi")]
-    public void InvalidValueSwallowingLaterMarkup_OffersNoValueReplacement(string attributes)
-    {
-        Assert.Empty(InvalidValueActions(ColumnDocument(attributes), ColumnTypeSystem()));
-    }
-
-    [Fact]
-    public void StrictlyClosestPropertyName_StaysPreferredWhenAWeakerMatchIsListed()
-    {
-        var typeSystem = ColumnTypeSystem(extraMembers: "public double MaxHeight { get; set; } public double MinHeight { get; set; }");
-        var actions = AttributeActions(ColumnDocument("MaxHieght=\"200\""), typeSystem);
-
-        Assert.Equal(new[] { "Change 'MaxHieght' to 'MaxHeight'", "Change 'MaxHieght' to 'MinHeight'" },
-            actions.Select(action => action.Title));
-        Assert.True(actions[0].IsPreferred);
-        Assert.NotEqual(true, actions[1].IsPreferred);
-    }
-
-    [Theory]
-    [InlineData("MaxHeight=\"200\" MaxHieght=\"300\"", "public double MaxHeight { get; set; } public double MinHeight { get; set; }", "MinHeight")]
-    [InlineData("Abcx=\"1\" Abce=\"1\" Abcd=\"1\"", "public int Abcd { get; set; } public int Abce { get; set; } public int Abcf { get; set; } public int Abcg { get; set; }", "Abcf")]
-    public void StarIsDecidedBeforeFilteringAlreadySetNames(string attributes, string extraMembers, string offered)
-    {
-        var actions = AttributeActions(ColumnDocument(attributes), ColumnTypeSystem(extraMembers: extraMembers));
-
-        var action = Assert.Single(actions);
-        Assert.EndsWith($"'{offered}'", action.Title);
-        Assert.NotEqual(true, action.IsPreferred);
-    }
-
-    [Fact]
-    public void CloseNameWithUncertainSmallEnumValue_IsAPreferredPlainRename()
-    {
-        var doc = ColumnDocument("FrozenEdg=\"Middle\"");
-        var action = Assert.Single(AttributeActions(doc, ColumnTypeSystem()));
-
-        Assert.Equal("Change 'FrozenEdg' to 'FrozenEdge'", action.Title);
-        Assert.True(action.IsPreferred);
-        Assert.Equal("FrozenEdg", RangeText(doc, Assert.Single(action.Edit!.Changes[Uri]).Range));
-    }
-    private static XamlTypeSystem ColumnTypeSystem(
-        string members = "None = 0, Leading = 1, Trailing = 2",
-        string extraMembers = "",
-        string enumPrefix = "") =>
-        BuildReferencedWinUiTypeSystem($$"""
-            namespace TestControls
-            {
-                {{enumPrefix}}
-                public enum Edge { {{members}} }
-                public class Column
-                {
-                    public Edge FrozenEdge { get; set; }
-                    public bool IsEnabled { get; set; }
-                    public bool? OptionalEnabled { get; set; }
-                    public string Label { get; set; }
-                    public int Number { get; set; }
-                    {{extraMembers}}
-                }
-                public class TableViewTemplateColumn : Column { }
-            }
-            """);
-
-    private static TextDocument ColumnDocument(string attributes) =>
-        new(Uri, $"<tabular:TableViewTemplateColumn xmlns:tabular=\"using:TestControls\" {attributes} />", version: 17);
-
-    private static List<CodeAction> AttributeActions(TextDocument doc, XamlTypeSystem typeSystem)
-    {
-        var diagnostic = Assert.Single(XamlValidator.Validate(doc, typeSystem),
-            item => item.Code == XamlValidator.UnknownAttributeCode);
-        var wireDiagnostic = JsonSerializer.Deserialize<Diagnostic>(
-            JsonSerializer.Serialize(diagnostic, LspJson.Options), LspJson.Options)!;
-        return XamlCodeActions.Compute(Uri, doc, Context(wireDiagnostic), typeSystem);
-    }
-
     [Fact]
     public void MismatchedClosingTag_UsesInnermostParserEvidence()
     {
@@ -974,6 +447,18 @@ public class XamlCodeActionsTests
         var action = Assert.Single(XamlCodeActions.Compute(Uri, null, ctx));
         Assert.Equal("Change 'Bttn' to 'Button'", action.Title);
         Assert.Equal("Button", Assert.Single(action.Edit!.Changes[Uri]).NewText);
+    }
+
+    [Fact]
+    public void WireShape_RelatedSuggestionFromJson_IsNotPreferred()
+    {
+        var data = new DiagnosticData { Bad = "FrozenEdgeCount", Suggestions = ["FrozenEdge"], Related = true };
+        var json = JsonSerializer.SerializeToElement(data, LspJson.Options);
+        var ctx = Context(Diag(XamlValidator.UnknownAttributeCode, R(0, 1, 16), json));
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, null, ctx));
+        Assert.Equal("Change 'FrozenEdgeCount' to 'FrozenEdge'", action.Title);
+        Assert.Null(action.IsPreferred);
     }
 
     [Fact]
@@ -1962,6 +1447,57 @@ public class XamlCodeActionsTests
         Assert.Equal("False", edit.NewText);
         Assert.Equal(valueAt, doc.OffsetAt(edit.Range.Start));
         Assert.Equal("<Page xmlns=\"using:TestApp\" IsEnabled=\"False\"/>", ApplyEdit(doc, edit));
+    }
+
+    [Fact]
+    public void MisspelledBooleanLiteral_PrefersSpellingOverDefault()
+    {
+        var typeSystem = BuildWinUiTypeSystem("""
+            namespace TestApp
+            {
+                public class Page : Microsoft.UI.Xaml.DependencyObject
+                {
+                    public bool IsEnabled { get; set; }
+                }
+            }
+            """);
+        var doc = new TextDocument(Uri, "<Page xmlns=\"using:TestApp\" IsEnabled=\"Ture\"/>");
+        var diagnostic = Assert.Single(
+            XamlValidator.Validate(doc, typeSystem),
+            item => item.Code == XamlValidator.InvalidAttributeValueCode);
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem));
+        Assert.Equal("Change 'Ture' to 'True'", action.Title);
+        Assert.True(action.IsPreferred);
+        Assert.Equal(
+            "<Page xmlns=\"using:TestApp\" IsEnabled=\"True\"/>",
+            ApplyEdit(doc, Assert.Single(action.Edit!.Changes[Uri])));
+    }
+
+    [Fact]
+    public void RelatedPropertyName_IsAnUnpreferredRenameThatKeepsTheValue()
+    {
+        var typeSystem = BuildWinUiTypeSystem("""
+            namespace TestApp
+            {
+                public enum TableViewFrozenEdge { None, Leading, Trailing }
+                public class TableViewTemplateColumn : Microsoft.UI.Xaml.DependencyObject
+                {
+                    public TableViewFrozenEdge FrozenEdge { get; set; }
+                }
+            }
+            """);
+        var doc = new TextDocument(Uri, "<TableViewTemplateColumn xmlns=\"using:TestApp\" FrozenEdgeCount=\"1\"/>");
+        var diagnostic = Assert.Single(
+            XamlValidator.Validate(doc, typeSystem),
+            item => item.Code == XamlValidator.UnknownAttributeCode);
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem));
+        Assert.Equal("Change 'FrozenEdgeCount' to 'FrozenEdge'", action.Title);
+        Assert.Null(action.IsPreferred);
+        var fixedDoc = new TextDocument(Uri, ApplyEdit(doc, Assert.Single(action.Edit!.Changes[Uri])));
+        Assert.Equal("<TableViewTemplateColumn xmlns=\"using:TestApp\" FrozenEdge=\"1\"/>", fixedDoc.Text);
+        Assert.Empty(XamlValidator.Validate(fixedDoc, typeSystem));
     }
 
     [Theory]

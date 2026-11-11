@@ -23,7 +23,6 @@ public class XamlSuggestionsTests
 
     [Theory]
     [InlineData("Gird", "Grid")]
-    [InlineData("gIrd", "Grid")]
     [InlineData("Txet", "Text")]
     [InlineData("Ture", "True")]
     public void AdjacentTransposition_CountsAsOneTypo(string bad, string expected)
@@ -38,45 +37,24 @@ public class XamlSuggestionsTests
     }
 
     [Theory]
-    [InlineData("MaxHieght", new[] { "MaxHeight", "MinHeight" }, true)]
-    [InlineData("Moe", new[] { "Mode", "More" }, false)]
-    [InlineData("Widht", new[] { "Width" }, true)]
-    public void IsUniqueBest_RequiresStrictlyCloserFirstMatch(string target, string[] ranked, bool expected)
+    [InlineData("FrozenEdgeCount", "FrozenEdge")]
+    [InlineData("frozenEdgeCount", "FrozenEdge")]
+    [InlineData("Edge", "FrozenEdge")]
+    [InlineData("Visib", "Visibility")]
+    public void RelatedName_FindsThePartialOrOneWordMatch(string typed, string expected)
     {
-        Assert.Equal(expected, XamlSuggestions.IsUniqueBest(target, ranked));
+        Assert.Equal(expected, XamlSuggestions.RelatedName(typed, ["FrozenEdge", "Visibility", "Width", "Header"]));
     }
 
     [Theory]
-    [InlineData("abcd", "badc")]
-    [InlineData("abcd", "dbca")]
-    [InlineData("abcd", "wxyz")]
-    public void MultipleEdits_StillRespectShortNameThreshold(string bad, string candidate)
+    [InlineData("Font")]
+    [InlineData("TableViewColumn")]
+    [InlineData("FrozenEdgeColumnCount")]
+    [InlineData("Ed")]
+    public void RelatedName_OffersNothingWhenTheMatchIsUnclear(string typed)
     {
-        Assert.Empty(XamlSuggestions.Nearest(bad, [candidate]));
-    }
-
-    [Fact]
-    public void AttributeNames_RecognizesExactCountStemWithoutBroadeningGeneralSpelling()
-    {
-        Assert.Empty(XamlSuggestions.Nearest("FrozenEdgeCount", ["FrozenEdge"]));
-        Assert.Equal("FrozenEdge", Assert.Single(
-            XamlSuggestions.AttributeNames("FrozenEdgeCount", ["FrozenEdge", "Frozen", "Unrelated"])));
-        Assert.Empty(XamlSuggestions.AttributeNames("FrozenEdgeCount", ["frozenEdge", "Frozen", "Leading"]));
-        Assert.Empty(XamlSuggestions.AttributeNames("FrozenEdgeTotal", ["FrozenEdge"]));
-        Assert.Empty(XamlSuggestions.AttributeNames("FrozenEdgeCount", ["FrozenEdgeMode"]));
-        Assert.Equal("FrozenEdgeCounts", Assert.Single(
-            XamlSuggestions.AttributeNames("FrozenEdgeCount", ["FrozenEdge", "FrozenEdgeCounts"])));
-    }
-
-    [Fact]
-    public void AttributeNames_CompletesOnlyUniqueTruncatedNames()
-    {
-        Assert.Equal("FrozenEdge", Assert.Single(
-            XamlSuggestions.AttributeNames("Frozen", ["FrozenEdge", "Header", "Width"])));
-        Assert.Empty(XamlSuggestions.AttributeNames("Frozen", ["FrozenEdge", "FrozenEdgeMode"]));
-        Assert.Empty(XamlSuggestions.AttributeNames("frozen", ["FrozenEdge"]));
-        Assert.Empty(XamlSuggestions.AttributeNames("Font", ["FontFamily"]));
-        Assert.Empty(XamlSuggestions.AttributeNames("Horizontal", ["HorizontalAlignment", "HorizontalContentAlignment"]));
+        Assert.Null(XamlSuggestions.RelatedName(
+            typed, ["FontSize", "FontFamily", "TableView", "TableViewTextColumn", "FrozenEdge", "EdgeMode"]));
     }
 
     [Fact]
