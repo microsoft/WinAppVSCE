@@ -819,16 +819,17 @@ internal static class XamlSemanticFacts
             .FirstOrDefault(candidate => string.Equals(candidate.Name, name, StringComparison.Ordinal))
             .Element;
 
-    /// <summary>Named elements visible to a classic Binding ElementName, innermost namescope first, shadowed names omitted.</summary>
+    /// <summary>Named elements visible to a classic Binding ElementName, innermost namescope first; shadowed names omitted unless requested.</summary>
     internal static IEnumerable<(string Name, XamlElement Element)> EnumerateElementNameBindingTargets(
         TextDocument document,
         XamlNode? context,
-        XamlTypeSystem typeSystem)
+        XamlTypeSystem typeSystem,
+        bool includeShadowed = false)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var candidate in EnumerateNamedElementsInScope(document, context, typeSystem))
         {
-            if (seen.Add(candidate.Name))
+            if (seen.Add(candidate.Name) || includeShadowed)
             {
                 yield return candidate;
             }
@@ -845,7 +846,7 @@ internal static class XamlSemanticFacts
 
             foreach (var candidate in EnumerateNamedElementsInScope(document, element, typeSystem))
             {
-                if (seen.Add(candidate.Name))
+                if (seen.Add(candidate.Name) || includeShadowed)
                 {
                     yield return candidate;
                 }

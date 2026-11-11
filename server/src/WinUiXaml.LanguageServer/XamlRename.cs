@@ -231,11 +231,11 @@ internal static class XamlRename
         return false;
     }
 
-    /// <summary>True when an ElementName lookup from context reaches first before second.</summary>
+    /// <summary>True when an ElementName lookup from context reaches first's namescope before second's, regardless of names.</summary>
     private static bool IsFoundFirst(
         TextDocument doc, XamlNode context, XamlElement first, XamlElement second, XamlTypeSystem typeSystem)
     {
-        foreach (var (_, element) in XamlSemanticFacts.EnumerateElementNameBindingTargets(doc, context, typeSystem))
+        foreach (var (_, element) in XamlSemanticFacts.EnumerateElementNameBindingTargets(doc, context, typeSystem, includeShadowed: true))
         {
             if (ReferenceEquals(element, first))
             {
@@ -280,7 +280,8 @@ internal static class XamlRename
             {
                 int start = doc.OffsetAt(declared.Range.Start);
                 var oldName = doc.Text.Substring(start, doc.OffsetAt(declared.Range.End) - start);
-                if (XamlSemanticFacts.FindElementNameBindingTarget(doc, doc.Parsed.FindNode(start), oldName, typeSystem) is { } declaration &&
+                if (oldName != newName &&
+                    XamlSemanticFacts.FindElementNameBindingTarget(doc, doc.Parsed.FindNode(start), oldName, typeSystem) is { } declaration &&
                     ChangesElementNameResolution(doc, declaration, oldName, newName, typeSystem))
                 {
                     throw new RenameValidationException(

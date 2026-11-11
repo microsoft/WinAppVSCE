@@ -511,6 +511,46 @@ public class XamlRenameTests
             XamlRename.Rename(doc, offset, newName, CreateFrameworkTypeSystem()));
     }
 
+    [Fact]
+    public void Rename_RefusesCaptureWhenOldNameIsReusedInNestedTemplate()
+    {
+        var (doc, offset) = Caret("""
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              <controls:Grid x:Name="Target" />
+              <DataTemplate>
+                <controls:Grid x:Name="O|ld" />
+                <DataTemplate>
+                  <controls:Grid x:Name="Old" />
+                  <controls:TextBox Text="{Binding ElementName=Target}" />
+                </DataTemplate>
+              </DataTemplate>
+            </Page>
+            """);
+
+        Assert.Throws<RenameValidationException>(() =>
+            XamlRename.Rename(doc, offset, "Target", CreateFrameworkTypeSystem()));
+    }
+
+    [Fact]
+    public void Rename_SameNameWithElementNameReferenceIsAllowed()
+    {
+        var (doc, offset) = Caret("""
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              <controls:Grid x:Name="Ro|ot">
+                <controls:TextBox Text="{Binding ElementName=Root}" />
+              </controls:Grid>
+            </Page>
+            """);
+
+        var edit = XamlRename.Rename(doc, offset, "Root", CreateFrameworkTypeSystem());
+
+        Assert.Equal(2, Assert.Single(edit!.Changes!).Value.Count);
+    }
+
     [Theory]
     [InlineData("Out|er", "Outer")]
     [InlineData("Outer", "Out|er")]
