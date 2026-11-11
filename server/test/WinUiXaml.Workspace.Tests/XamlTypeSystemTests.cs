@@ -107,7 +107,7 @@ public sealed class XamlTypeSystemTests
         var color = ts.ResolveType(Presentation, "Color");
 
         Assert.NotNull(color);
-        Assert.Equal("Windows.UI.Color", color.ToDisplayString());
+        Assert.Equal("Windows.UI.Color", color!.ToDisplayString());
     }
 
     [Fact]
