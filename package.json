@@ -435,7 +435,7 @@
             "properties": {
               "input": {
                 "type": "string",
-                "description": "What to run: a project file (.csproj), a solution (.sln/.slnx), a directory containing one, or a build output folder containing your app binaries (e.g., '${workspaceFolder}/bin/Debug/net8.0-windows10.0.22621'). If not set, you will be prompted to select a target."
+                "description": "What to run: a project file (.csproj or C++ .vcxproj), a solution (.sln/.slnx), a directory containing one, or a build output folder containing your app binaries (e.g., '${workspaceFolder}/bin/Debug/net8.0-windows10.0.22621'). If not set, you will be prompted to select a target."
               },
               "inputFolder": {
                 "type": "string",
