@@ -377,8 +377,8 @@ test.describe('run target picker', () => {
         }
     });
 
-    // CLI v0.7.1 cannot build a .vcxproj through solution mode. Keeping the
-    // solution would auto-select an input that always fails and hide the
+    // Discovery cannot yet list a .vcxproj solution member. Keeping the
+    // solution would auto-select it with nothing to prompt for and hide the
     // folder-mode path the released extension used for native apps.
     test('falls back to native build output when a solution has no supported members', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-native-e2e-'));

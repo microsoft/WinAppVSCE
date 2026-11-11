@@ -3,7 +3,7 @@ import { extractJsonObject } from './winapp-cli-utils';
 
 /** Shared `winapp run` option shape for palette and debug invocations. */
 export interface WinAppRunOptions {
-	/** Positional `input`: a build-output folder, `.csproj`, `.sln`/`.slnx`, or a directory containing one. */
+	/** Positional `input`: a build-output folder, `.csproj`, `.vcxproj`, `.sln`/`.slnx`, or a directory containing one. */
 	input: string;
 
 	// --- Project mode only (silently ignored by the CLI in folder mode) ---

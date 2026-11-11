@@ -145,7 +145,7 @@ Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which de
 |---|------|-----------|
 | 1 | hides class libraries and test projects | Non-runnable projects are filtered out rather than offered as targets the CLI would reject |
 | 2 | falls back to build output when the only project is a library | With nothing runnable found, the build-output scan still supplies targets |
-| 3 | explains why an unbuilt native-only solution is not offered | A `.sln` containing only unsupported `.vcxproj` members and no built output reports that the solution was found and tells the user to build before browsing, rather than claiming no solution exists |
+| 3 | explains why an unbuilt native-only solution is not offered | A `.sln` containing only `.vcxproj` members, which discovery cannot list yet, and no built output reports that the solution was found and suggests building first or browsing to it, rather than claiming no solution exists |
 | 4 | falls back to native build output when a solution has no supported members | A `.sln` containing only `.vcxproj` members does not hide runnable `.exe` output from the bundled CLI's folder mode |
 | 5 | prefers the project over its own build output folder | A project and its `bin` output collapse to the project entry |
 | 6 | finds output for a project-less app without surfacing node_modules | Electron/Rust-shaped workspaces reach the `.exe` scan, and excluded directories stay excluded |

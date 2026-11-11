@@ -50,6 +50,12 @@ describe('classifyRunTargetFile', () => {
 		assert.strictEqual(classifyRunTargetFile('C:/ws/App.CS'), 'project');
 	});
 
+	// winapp 0.8.0 builds C++ projects in project mode, so launch.json must accept them.
+	it('treats a C++ .vcxproj as project mode', () => {
+		assert.strictEqual(classifyRunTargetFile('C:/ws/App.vcxproj'), 'project');
+		assert.strictEqual(classifyRunTargetFile('C:/ws/App.VCXPROJ'), 'project');
+	});
+
 	it('is case-insensitive', () => {
 		assert.strictEqual(classifyRunTargetFile('C:/ws/MyApp.CSPROJ'), 'project');
 		assert.strictEqual(classifyRunTargetFile('C:/ws/MyApp.SLN'), 'solution');
@@ -68,6 +74,11 @@ describe('classifyRunTargetEntries', () => {
 
 	it('prefers a project over loose executables', () => {
 		assert.strictEqual(classifyRunTargetEntries(['MyApp.csproj', 'MyApp.exe']), 'project');
+	});
+
+	it('treats a directory holding a C++ project as project mode', () => {
+		assert.strictEqual(classifyRunTargetEntries(['App.vcxproj', 'App.cpp']), 'project');
+		assert.strictEqual(classifyRunTargetEntries(['App.vcxproj', 'App.sln']), 'solution');
 	});
 
 	// The CLI reaches single-file mode only from an explicitly typed `.cs`
