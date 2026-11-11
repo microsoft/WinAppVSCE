@@ -126,14 +126,17 @@ internal sealed class RenderHost
     /// resource-scope key resolver (Layer 2) is passed through so the cleaner can distinguish a resolvable
     /// <c>{StaticResource}</c> from a genuinely-undefined one.
     /// </summary>
-    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false, SampleTypeModel? sampleTypes = null, IList<ChartFixup>? chartFixups = null, ISet<string>? missingFrameworkTypes = null, bool designValues = true, ISet<string>? designPromotions = null)
+    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false, SampleTypeModel? sampleTypes = null, IList<ChartFixup>? chartFixups = null, ISet<string>? missingFrameworkTypes = null, bool designValues = true, ISet<string>? designPromotions = null, PageDictionaries? pageDictionaries = null)
     {
         var missing = new SortedSet<string>(StringComparer.Ordinal);
         var unmapped = new SortedSet<string>(StringComparer.Ordinal);
         var designSized = new HashSet<string>(StringComparer.Ordinal);
-        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped, sampleTypes, chartFixups, missingFrameworkTypes, designSized, designValues, designPromotions);
+        var forcedSwaps = new SortedSet<string>(StringComparer.Ordinal);
+        XamlCleaner.ProviderTypeResolver ??= ProviderUnderlyingType;
+        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped, sampleTypes, chartFixups, missingFrameworkTypes, designSized, designValues, designPromotions, pageDictionaries is null ? null : pageDictionaries.Resolve, forcedSwaps);
         LastMissingKeys = missing.ToArray();
         LastUnmappedTypes = unmapped.ToArray();
+        LastPlaceholderTypes = forcedSwaps.ToArray();
         LastDesignSizedRoot = designSized;
         LastNewerTypes = missingFrameworkTypes is { Count: > 0 } ? missingFrameworkTypes.OrderBy(t => t, StringComparer.Ordinal).ToArray() : Array.Empty<string>();
         // WS2-F5: name keys the preview can't resolve (e.g. added in App.xaml.cs), once per distinct set.
@@ -153,6 +156,9 @@ internal sealed class RenderHost
 
     /// <summary>Custom types the most recent clean had to placeholder/drop because nothing could map them.</summary>
     internal static string[] LastUnmappedTypes { get; private set; } = Array.Empty<string>();
+
+    /// <summary>Custom types the most recent clean placeholdered although they map (heavy or throwing constructor).</summary>
+    internal static string[] LastPlaceholderTypes { get; private set; } = Array.Empty<string>();
 
     /// <summary>Root dimensions ("Width"/"Height") the most recent clean took from <c>d:</c> markup; a device preset overrides these.</summary>
     internal static IReadOnlySet<string> LastDesignSizedRoot { get; private set; } = new HashSet<string>();
@@ -229,6 +235,22 @@ internal sealed class RenderHost
     }
 
     /// <summary>
+    /// The CLR type the provider chain maps <paramref name="fullName"/> to. Asking loads a dependency's projection
+    /// assembly (e.g. Win2D's) that nothing has touched yet, so the cleaner can see the type's events.
+    /// </summary>
+    private static Type? ProviderUnderlyingType(string fullName)
+    {
+        try
+        {
+            return (Application.Current as IXamlMetadataProvider)?.GetXamlType(fullName)?.UnderlyingType;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Parses <paramref name="rawXaml"/> at runtime, hosts it in the warm off-screen window,
     /// and captures it to a JPEG at (contentDIP × <paramref name="scale"/>) pixels. Never
     /// throws for document problems — categorises them into a <see cref="RenderResult"/> with
@@ -295,6 +317,7 @@ internal sealed class RenderHost
     {
         LastMissingKeys = Array.Empty<string>();
         LastUnmappedTypes = Array.Empty<string>();
+        LastPlaceholderTypes = Array.Empty<string>();
         LastNewerTypes = Array.Empty<string>();
         LastDesignSizedRoot = new HashSet<string>();
         LastDesignValuesSkipped = false;
@@ -331,11 +354,12 @@ internal sealed class RenderHost
             const int maxSafetyNetRetries = 5;
             // d: values (d:Text, d:Background, …) apply with Sample data on; dropped once if the page won't load with them.
             var designValues = SampleData;
+            var pageDictionaries = PageDictionaries.For(DocumentPath);
             for (int attempt = 0; ; attempt++)
             {
                 var chartFixups = new List<ChartFixup>();
                 var designPromotions = new HashSet<string>(StringComparer.Ordinal);
-                var xaml = CleanXaml(rawXaml, forced, SampleData, sampleTypes, chartFixups, missingFramework, designValues, designPromotions);
+                var xaml = CleanXaml(rawXaml, forced, SampleData, sampleTypes, chartFixups, missingFramework, designValues, designPromotions, pageDictionaries);
                 if (attempt == 0 && timings is not null) timings.CleanMs = ElapsedMs(tClean);
 
                 object? parsed;

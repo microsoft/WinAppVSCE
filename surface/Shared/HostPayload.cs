@@ -167,6 +167,63 @@ internal static class HostPayload
     public static void CopyFile(string source, string destination, CancellationToken cancellation = default) =>
         Copy(source, destination, null, cancellation);
 
+    /// <summary>
+    /// A private run directory for a host with no payload manifest (the bundled host the extension ships). The
+    /// surface stages the user's loose XAML and content files beside its exe, so running it in place would leave
+    /// one project's files where another project's preview finds them. Members are hard links to the host where
+    /// the volume allows (fast, no extra disk) and copies otherwise; the surface replaces, never writes through,
+    /// a file it stages. Caller supplies a NEW path under a run root that <see cref="SweepRunRoot"/> cleans.
+    /// </summary>
+    public static void CreateLinkedRunCopy(string host, string destination, Action<string>? log = null)
+    {
+        host = CanonicalDirectory(host);
+        destination = CanonicalDirectory(destination);
+        var staging = destination + ".preparing-" + Guid.NewGuid().ToString("N");
+        if (IsWithin(destination, host) || IsWithin(staging, host) || IsWithin(host, destination))
+            throw new IOException("Run-copy destination and staging must be outside the host.");
+        if (Directory.Exists(destination) || File.Exists(destination))
+            throw new IOException("Run-copy destination must not exist: " + destination);
+        Directory.CreateDirectory(staging);
+        try
+        {
+            int linked = 0, copied = 0;
+            foreach (var path in Directory.EnumerateFiles(host, "*", SearchOption.AllDirectories))
+            {
+                var rel = path.Substring(host.Length + 1);
+                if (rel == RunMarker) continue;
+                var dest = Path.Combine(staging, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                // A read-only member is copied: its link couldn't be deleted without changing the host's attributes.
+                if ((File.GetAttributes(path) & FileAttributes.ReadOnly) == 0 && CreateHardLink(dest, path, IntPtr.Zero)) linked++;
+                else { Copy(path, dest, null, CancellationToken.None); copied++; }
+            }
+            File.WriteAllText(Path.Combine(staging, RunMarker), Guid.NewGuid().ToString("N"));
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    Directory.Move(staging, destination);
+                    break;
+                }
+                catch (Exception ex) when (attempt < 10 && (ex is IOException or UnauthorizedAccessException)
+                    && Directory.Exists(staging) && !Directory.Exists(destination) && !File.Exists(destination))
+                {
+                    log?.Invoke($"Run-copy publish retry {attempt + 1}: {ex.Message}");
+                    Thread.Sleep(50 * (attempt + 1));
+                }
+            }
+            log?.Invoke($"Linked run copy: {linked} linked, {copied} copied.");
+        }
+        finally
+        {
+            if (Directory.Exists(staging)) DeleteOwnedDirectory(staging);
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint = "CreateHardLinkW", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool CreateHardLink(string fileName, string existingFileName, IntPtr securityAttributes);
+
     private static string CopyAndHash(string source, string destination, CancellationToken cancellation)
     {
         using var sha = SHA256.Create();

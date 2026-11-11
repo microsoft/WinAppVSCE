@@ -387,6 +387,17 @@ internal static partial class Program
             BuildHint.Describe(true, null, new[] { "A.T1", "A.T2", "A.T3", "A.T4", "A.T5" })!
                 .Contains("5 custom controls shown as placeholders (T1, T2, T3, +2 more)"));
 
+        // ---- built-project partial-render notice (F04) ----
+        Check("built notice: nothing lost → none", BuildHint.DescribeBuilt(new string[0], null, null) == null);
+        Eq("built notice: names controls and resources",
+            "3 controls shown as placeholders (StatusPill, Gauge, CanvasControl); 2 resources not found (PillCornerRadius, AccentBrush), so defaults are used.",
+            BuildHint.DescribeBuilt(someKeys, someTypes, new[] { "Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl" }));
+        Eq("built notice: caps named keys",
+            "5 resources not found (K1, K2, K3, +2 more), so defaults are used.",
+            BuildHint.DescribeBuilt(new[] { "K1", "K2", "K3", "K4", "K5" }, null));
+        Check("unbuilt hint counts forced placeholders too",
+            BuildHint.Describe(true, null, null, new[] { "A.Heavy" })!.Contains("1 custom control shown as placeholders (Heavy)"));
+
         // ---- WinUI types newer than the bundled host ----
         Check("newer types: none → no hint", NewerTypesHint.Describe(new string[0], "2.2.0", "2.2.2", false, false) == null);
         Check("newer types: null → no hint", NewerTypesHint.Describe(null, "2.2.0", "2.2.2", false, false) == null);

@@ -625,6 +625,7 @@ internal sealed class FrameServer
                 data = Convert.ToBase64String(result.Image!),
                 missingKeys = RenderHost.LastMissingKeys,
                 unmappedTypes = RenderHost.LastUnmappedTypes,
+                placeholderTypes = RenderHost.LastPlaceholderTypes,
                 newerTypes = RenderHost.LastNewerTypes,
                 designValuesSkipped = RenderHost.LastDesignValuesSkipped,
             });
@@ -641,6 +642,7 @@ internal sealed class FrameServer
                 notDesignable = result.NotDesignable,
                 missingKeys = RenderHost.LastMissingKeys,
                 unmappedTypes = RenderHost.LastUnmappedTypes,
+                placeholderTypes = RenderHost.LastPlaceholderTypes,
                 newerTypes = RenderHost.LastNewerTypes,
                 designValuesSkipped = RenderHost.LastDesignValuesSkipped,
             });
@@ -696,6 +698,7 @@ internal sealed class FrameServer
                 scale = result.DpiScale,
                 missingKeys = RenderHost.LastMissingKeys,
                 unmappedTypes = RenderHost.LastUnmappedTypes,
+                placeholderTypes = RenderHost.LastPlaceholderTypes,
                 newerTypes = RenderHost.LastNewerTypes,
                 designValuesSkipped = RenderHost.LastDesignValuesSkipped,
             });
@@ -717,6 +720,7 @@ internal sealed class FrameServer
                 notDesignable = result.NotDesignable,
                 missingKeys = RenderHost.LastMissingKeys,
                 unmappedTypes = RenderHost.LastUnmappedTypes,
+                placeholderTypes = RenderHost.LastPlaceholderTypes,
                 newerTypes = RenderHost.LastNewerTypes,
                 designValuesSkipped = RenderHost.LastDesignValuesSkipped,
             });

@@ -205,6 +205,25 @@ namespace WinUIXamlPreview.Protocol
 
                 args.Append("--user-pri ").Append(Quote(Path.Combine(_privateRun!, "Surface.designtime.pri")));
             }
+            else if (!(SurfaceIdentity.FallbackActive && SurfaceIdentity.HasIdentityPayload(_surfaceExe)))
+            {
+                // The bundled host stages each project's loose XAML and content files beside its exe; a private
+                // run directory per process keeps one project's files out of every later preview. Not under the
+                // identity fallback: the sparse package's external location is the host folder itself.
+                try
+                {
+                    var source = Path.GetDirectoryName(Path.GetFullPath(_surfaceExe))!;
+                    _privateRun = Path.Combine(RunRoot, Guid.NewGuid().ToString("N"));
+                    var rcSw = Stopwatch.StartNew();
+                    HostPayload.CreateLinkedRunCopy(source, _privateRun, _log);
+                    _log($"PERF client.runcopy ms={rcSw.ElapsedMilliseconds}");
+                }
+                catch (Exception ex)
+                {
+                    _log($"Private run directory unavailable; running the host in place: {ex.Message}");
+                    _privateRun = null;
+                }
+            }
 
             var launchExe = _privateRun == null ? _surfaceExe : Path.Combine(_privateRun, "Surface.exe");
             _log($"Launching surface: \"{launchExe}\" {args}");

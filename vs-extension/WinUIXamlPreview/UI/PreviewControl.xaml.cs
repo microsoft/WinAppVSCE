@@ -1050,6 +1050,9 @@ namespace WinUIXamlPreview.UI
         /// <summary>Raised (on the UI thread) when a fresh <see cref="ContentPropsMsg"/> updates the map.</summary>
         internal event Action? ContentPropMapChanged;
 
+        /// <summary>Raised (on the UI thread) when a re-render replaced the tree while an element was selected.</summary>
+        internal event Action? ContentRerendered;
+
         /// <summary>
         /// Select the element at an authored-tree index path in the preview surface (editor caret -> previewer,
         /// plan §41 #2). No-op if no surface is live or not in design mode. UI thread only.
@@ -1986,16 +1989,22 @@ namespace WinUIXamlPreview.UI
         }
 
         /// <summary>
-        /// Warn when an unbuilt project's page rendered with parts missing (custom controls placeholdered, app
-        /// resources unresolved) — a build restores them, and the output watcher relaunches the preview on its own.
+        /// Warn when a page rendered with parts missing (custom controls placeholdered, resources unresolved). For an
+        /// unbuilt project a build restores them, and the output watcher relaunches the preview on its own; otherwise
+        /// an Info banner names what fell back, so a placeholder or default color isn't mistaken for the real thing.
         /// </summary>
-        private void UpdateBuildHint(System.Collections.Generic.List<string>? missingKeys, System.Collections.Generic.List<string>? unmappedTypes, bool designValuesSkipped = false)
+        private void UpdateBuildHint(System.Collections.Generic.List<string>? missingKeys, System.Collections.Generic.List<string>? unmappedTypes, bool designValuesSkipped = false, System.Collections.Generic.List<string>? placeholderTypes = null)
         {
             var doc = SelectionDocument;
             var unbuilt = _activeProject != null && _activeUserDll == null;
-            var text = BuildHint.Describe(unbuilt, missingKeys, unmappedTypes);
+            var text = BuildHint.Describe(unbuilt, missingKeys, unmappedTypes, placeholderTypes);
             var title = BuildHint.Title;
             var severity = BannerSeverity.Warning;
+            if (text == null && !unbuilt)
+            {
+                text = BuildHint.DescribeBuilt(missingKeys, unmappedTypes, placeholderTypes);
+                (title, severity) = (BuildHint.BuiltTitle, BannerSeverity.Info);
+            }
             if (designValuesSkipped)
             {
                 if (text == null)
@@ -2019,7 +2028,7 @@ namespace WinUIXamlPreview.UI
 
             if (!_buildHintBar.IsShown)
             {
-                Log.Write($"Build hint: unbuilt project; {missingKeys?.Count ?? 0} unresolved key(s), unmapped type(s): {string.Join(", ", unmappedTypes ?? new System.Collections.Generic.List<string>())}; d: values skipped: {designValuesSkipped}.");
+                Log.Write($"Build hint: {(unbuilt ? "unbuilt project" : "partial render")}; {missingKeys?.Count ?? 0} unresolved key(s), unmapped type(s): {string.Join(", ", unmappedTypes ?? new System.Collections.Generic.List<string>())}; placeholdered type(s): {string.Join(", ", placeholderTypes ?? new System.Collections.Generic.List<string>())}; d: values skipped: {designValuesSkipped}.");
             }
             _buildHintBar.Show(severity, title, text);
         }
@@ -2164,7 +2173,7 @@ namespace WinUIXamlPreview.UI
                     PerfEnd("frame");
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
-                    UpdateBuildHint(frame.MissingKeys, frame.UnmappedTypes, frame.DesignValuesSkipped);
+                    UpdateBuildHint(frame.MissingKeys, frame.UnmappedTypes, frame.DesignValuesSkipped, frame.PlaceholderTypes);
                     UpdateNewerTypesNote(frame.NewerTypes);
                     Log.Write($"Frame rendered: {frame.Width}x{frame.Height}px ({frame.DipWidth}x{frame.DipHeight} dip).");
                 }
@@ -2232,9 +2241,17 @@ namespace WinUIXamlPreview.UI
                     PerfEnd("hwnd");
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
-                    UpdateBuildHint(msg.MissingKeys, msg.UnmappedTypes, msg.DesignValuesSkipped);
+                    UpdateBuildHint(msg.MissingKeys, msg.UnmappedTypes, msg.DesignValuesSkipped, msg.PlaceholderTypes);
                     UpdateNewerTypesNote(msg.NewerTypes);
                     Log.Write($"Native surface hosted: hwnd=0x{msg.Hwnd:X} px={pxW}x{pxH} dip={dipW:0}x{dipH:0} scale={msg.Scale}.");
+
+                    // The re-render replaced every element, so the selection (and the Properties pane) points at
+                    // the old tree; let the editor re-select the element at its caret in the new one.
+                    if (_lastSelected != null && PreviewOptions.DesignMode)
+                    {
+                        try { ContentRerendered?.Invoke(); }
+                        catch (Exception ex) { Log.Write("ContentRerendered handler failed: " + ex.Message); }
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -2312,7 +2329,7 @@ namespace WinUIXamlPreview.UI
                 }
 
                 PerfEnd(err.NotDesignable ? "notdesignable" : "error");
-                UpdateBuildHint(err.MissingKeys, err.UnmappedTypes);
+                UpdateBuildHint(err.MissingKeys, err.UnmappedTypes, false, err.PlaceholderTypes);
                 UpdateNewerTypesNote(err.NewerTypes);
 
                 // A promoted spare that answered with an error never rendered, so it is still fresh: a held

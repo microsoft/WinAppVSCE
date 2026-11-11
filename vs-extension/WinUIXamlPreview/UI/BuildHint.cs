@@ -20,7 +20,7 @@ namespace WinUIXamlPreview.UI
         /// The banner message, or null when no hint applies: the project has a build (or there is no project),
         /// or the render lost nothing a build would restore.
         /// </summary>
-        public static string? Describe(bool unbuiltProject, IReadOnlyCollection<string>? missingKeys, IReadOnlyCollection<string>? unmappedTypes)
+        public static string? Describe(bool unbuiltProject, IReadOnlyCollection<string>? missingKeys, IReadOnlyCollection<string>? unmappedTypes, IReadOnlyCollection<string>? placeholderTypes = null)
         {
             if (!unbuiltProject)
             {
@@ -28,7 +28,7 @@ namespace WinUIXamlPreview.UI
             }
 
             int keys = missingKeys?.Count ?? 0;
-            var types = (unmappedTypes ?? new string[0])
+            var types = (unmappedTypes ?? new string[0]).Concat(placeholderTypes ?? new string[0])
                 .Select(SimpleName)
                 .Where(n => n.Length > 0)
                 .Distinct()
@@ -55,6 +55,49 @@ namespace WinUIXamlPreview.UI
 
             return "Parts of this page can't be previewed yet: " + string.Join("; ", parts) +
                    ". Build the project for a complete preview — it refreshes automatically when the build finishes.";
+        }
+
+        public const string BuiltTitle = "Some parts couldn't be previewed";
+        private const int MaxNamedKeys = 3;
+
+        /// <summary>
+        /// For a built project (or a loose file): names the controls shown as placeholders and the resources that
+        /// weren't found, so a fallback isn't mistaken for the real rendering. Null when nothing was lost.
+        /// </summary>
+        public static string? DescribeBuilt(IReadOnlyCollection<string>? missingKeys, IReadOnlyCollection<string>? unmappedTypes, IReadOnlyCollection<string>? placeholderTypes = null)
+        {
+            var types = (unmappedTypes ?? new string[0]).Concat(placeholderTypes ?? new string[0])
+                .Select(SimpleName)
+                .Where(n => n.Length > 0)
+                .Distinct()
+                .ToList();
+            var keys = (missingKeys ?? new string[0])
+                .Select(k => (k ?? string.Empty).Trim())
+                .Where(k => k.Length > 0)
+                .Distinct()
+                .ToList();
+            if (keys.Count == 0 && types.Count == 0)
+            {
+                return null;
+            }
+
+            var parts = new List<string>();
+            if (types.Count > 0)
+            {
+                parts.Add($"{Plural(types.Count, "control")} shown as placeholders ({Named(types, MaxNamedTypes)})");
+            }
+            if (keys.Count > 0)
+            {
+                parts.Add($"{Plural(keys.Count, "resource")} not found ({Named(keys, MaxNamedKeys)}), so defaults are used");
+            }
+
+            return string.Join("; ", parts) + ".";
+        }
+
+        private static string Named(List<string> names, int max)
+        {
+            var named = string.Join(", ", names.Take(max));
+            return names.Count > max ? named + $", +{names.Count - max} more" : named;
         }
 
         private static string SimpleName(string fullName)

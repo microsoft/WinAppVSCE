@@ -6,7 +6,7 @@ param(
 )
 $ErrorActionPreference = "Stop"
 # This script owns only these generated children, never a user cache or caller source.
-$work = Join-Path $PSScriptRoot "obj\PayloadBuild"
+$work = & "$PSScriptRoot\Get-PayloadWorkDir.ps1"
 $sdk = Join-Path $PSScriptRoot "obj\HostSDK"
 function Assert-File([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Required shared input/output missing: $Path" }
@@ -29,7 +29,7 @@ $lock = [IO.File]::Open($lockPath, 'OpenOrCreate', 'ReadWrite', 'None')
 try {
     foreach ($dir in @($work, $sdk)) {
         if (Test-Path $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
-        New-Item -ItemType Directory $dir | Out-Null
+        New-Item -ItemType Directory -Force $dir | Out-Null
     }
     Copy-SourceTree "$PSScriptRoot\Surface" "$work\Surface"
     Copy-SourceTree "$PSScriptRoot\SurfaceProvisioner" "$work\SurfaceProvisioner"

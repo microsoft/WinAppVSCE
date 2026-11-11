@@ -96,7 +96,7 @@ validation. Its old stop/next-boundary statements are superseded by this section
   VS script owns only prerequisites, identity copy/logos and net472/WPF/VSSDK
   packaging. Default WASDK is 2.2.0; `WinUISurfaceWasdkVersion` override remains.
   Packaged `Surface.wasdk.version` makes bundled-version selection explicit.
-- Shared build outputs: `surface/obj/PayloadBuild`, `surface/obj/HostSDK`.
+- Shared build outputs: `%TEMP%\wxp\<checkout hash>` (`surface/Get-PayloadWorkDir.ps1`), `surface/obj/HostSDK`.
   VS shipping identity copy: `vs-extension/WinUIXamlPreview/obj/IdentityPayload`.
   Installed HostSDK paths remain backward-compatible (`surface/Surface`,
   `PreviewHost`, compiled `SurfaceProvisioner`). Distribution layout is **not**
@@ -567,7 +567,7 @@ From the repository root:
 `AnyCPU` configuration is retained; the **payload is x64**, not AnyCPU/ARM64.
 Do not use `dotnet build` alone to package this classic VSSDK extension.
 
-The script deletes/recreates only its ignored `obj/PayloadBuild` and `obj/HostSDK`
+The script deletes/recreates only its `%TEMP%\wxp\<checkout hash>` and ignored `obj/HostSDK`
 staging directories. It copies migrated source, builds the renderer at the
 unchanged WASDK 2.2.0 pin and the net8 provisioner, and packages:
 

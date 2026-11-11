@@ -155,6 +155,7 @@ namespace Surface.Tests
             Run("R5 design namespaces", Rule5);
             Run("R6 resources", Rule6);
             Run("R7 unmapped custom types", Rule7);
+            Run("R1c page ResourceDictionary sources", Rule1cDictionaries);
             Run("R7 WinUI types newer than the host", Rule7NewerFrameworkTypes);
             Run("R7 known WinUI type list (typos stay errors)", KnownWinUiTypeList);
             Run("R7a/b/c attached, extensions, converters", Rule7abc);
@@ -1560,6 +1561,56 @@ namespace Surface.Tests
             var none = new SortedSet<string>(StringComparer.Ordinal);
             XamlCleaner.Clean(Doc("<Grid><good:Card /></Grid>"), providerMapsFullName: GoodOnly, unmappedTypes: none);
             Check("unmappedTypes: empty when everything maps", none.Count == 0, string.Join(",", none));
+
+            // Forced-placeholder report (F04): mapped types placeholdered anyway are named, unmapped ones aren't.
+            var forced = new SortedSet<string>(StringComparer.Ordinal);
+            XamlCleaner.Clean(raw, providerMapsFullName: GoodOnly, forcePlaceholderTypes: new HashSet<string> { "Good.Thrower", "Other" }, forcedTypes: forced);
+            Eq("forcedTypes: mapped but placeholdered", "Good.CameraPreview,Good.Other,Good.Thrower", string.Join(",", forced));
+        }
+
+        private static void Rule1cDictionaries()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "wxp-r1c-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(Path.Combine(root, "Pages"));
+                Directory.CreateDirectory(Path.Combine(root, "Themes"));
+                File.WriteAllText(Path.Combine(root, "App.csproj"), "<Project />");
+                var page = Path.Combine(root, "Pages", "P.xaml");
+                File.WriteAllText(page, "<Page />");
+                File.WriteAllText(Path.Combine(root, "Themes", "Brushes.xaml"),
+                    $"<ResourceDictionary {Ns}><SolidColorBrush x:Key=\"AccentBrush\" Color=\"Red\" />" +
+                    "<ResourceDictionary.MergedDictionaries><ResourceDictionary Source=\"Nested.xaml\" /></ResourceDictionary.MergedDictionaries>" +
+                    "</ResourceDictionary>");
+                File.WriteAllText(Path.Combine(root, "Themes", "Nested.xaml"),
+                    $"<ResourceDictionary {Ns}><x:Double x:Key=\"PillRadius\">8</x:Double></ResourceDictionary>");
+
+                var dicts = PageDictionaries.For(page);
+                Check("project found from the page's folder", dicts is not null);
+                var xaml = Doc(
+                    "<Page.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries>" +
+                    "<ResourceDictionary x:Name=\"Rel\" Source=\"../Themes/Brushes.xaml\" />" +
+                    "<ResourceDictionary x:Name=\"Abs\" Source=\"ms-appx:///Themes/Nested.xaml\" />" +
+                    "<ResourceDictionary x:Name=\"Gone\" Source=\"../Themes/Missing.xaml\" />" +
+                    "</ResourceDictionary.MergedDictionaries></ResourceDictionary></Page.Resources>" +
+                    "<Border x:Name=\"B\" Background=\"{StaticResource AccentBrush}\" CornerRadius=\"{StaticResource PillRadius}\" />");
+                var missing = new SortedSet<string>(StringComparer.Ordinal);
+                var r = XDocument.Parse(XamlCleaner.Clean(xaml, _ => false, missingResourceKeys: missing, resolveDictionarySource: dicts!.Resolve)).Root!;
+                Eq("relative Source -> project ms-appx", "ms-appx:///Themes/Brushes.xaml", Attr(Named(r, "Rel"), "Source"));
+                Eq("ms-appx Source kept", "ms-appx:///Themes/Nested.xaml", Attr(Named(r, "Abs"), "Source"));
+                Eq("unresolvable Source kept as written", "../Themes/Missing.xaml", Attr(Named(r, "Gone"), "Source"));
+                Eq("dictionary key kept", "{StaticResource AccentBrush}", Attr(Named(r, "B"), "Background"));
+                Eq("nested dictionary key kept", "{StaticResource PillRadius}", Attr(Named(r, "B"), "CornerRadius"));
+                Check("no keys reported missing", missing.Count == 0, string.Join(",", missing));
+
+                var without = XDocument.Parse(XamlCleaner.Clean(xaml, _ => false)).Root!;
+                Check("without the resolver the keys are stripped (baseline)", Attr(Named(without, "B"), "Background") is null);
+                Check("loose file: no project -> no resolver", PageDictionaries.For(Path.Combine(Path.GetTempPath(), "nope-" + Guid.NewGuid() + ".xaml")) is null);
+            }
+            finally
+            {
+                try { Directory.Delete(root, true); } catch { }
+            }
         }
 
         private static void Rule7abc()

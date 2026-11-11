@@ -208,6 +208,7 @@ namespace WinUIXamlPreview.Protocol
         [JsonPropertyName("missingKeys"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? MissingKeys { get; set; }
         [JsonPropertyName("unmappedTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? UnmappedTypes { get; set; }
         [JsonPropertyName("newerTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? NewerTypes { get; set; }
+        [JsonPropertyName("placeholderTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? PlaceholderTypes { get; set; }
 
         /// <summary>True when the page's d: design values were left out because it failed to load with them.</summary>
         [JsonPropertyName("designValuesSkipped")] public bool DesignValuesSkipped { get; set; }
@@ -228,6 +229,7 @@ namespace WinUIXamlPreview.Protocol
         [JsonPropertyName("missingKeys"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? MissingKeys { get; set; }
         [JsonPropertyName("unmappedTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? UnmappedTypes { get; set; }
         [JsonPropertyName("newerTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? NewerTypes { get; set; }
+        [JsonPropertyName("placeholderTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? PlaceholderTypes { get; set; }
 
         /// <summary>True when the page's d: design values were left out because it failed to load with them.</summary>
         [JsonPropertyName("designValuesSkipped")] public bool DesignValuesSkipped { get; set; }
@@ -253,6 +255,7 @@ namespace WinUIXamlPreview.Protocol
         /// <summary>Custom types the surface replaced with placeholders because nothing could map them.</summary>
         [JsonPropertyName("unmappedTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? UnmappedTypes { get; set; }
         [JsonPropertyName("newerTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? NewerTypes { get; set; }
+        [JsonPropertyName("placeholderTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? PlaceholderTypes { get; set; }
 
         /// <summary>True when the page's d: design values were left out because it failed to load with them.</summary>
         [JsonPropertyName("designValuesSkipped")] public bool DesignValuesSkipped { get; set; }

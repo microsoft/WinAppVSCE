@@ -36,7 +36,7 @@ retain their original TFM and package pins. The adapter reads the packaged
 reports the same build-time version (stamped into Surface.dll metadata) and is
 logged as a cross-check.
 
-Fresh staging/output is under `surface/obj/PayloadBuild` and `surface/obj/HostSDK`.
+Fresh staging/output is under `%TEMP%\wxp\<checkout hash>` (see `Get-PayloadWorkDir.ps1`; short so deep checkouts stay under MAX_PATH) and `surface/obj/HostSDK`.
 Shared building holds an exclusive `surface/obj/payload.lock`; a concurrent
 shared build fails instead of deleting active build staging. Package generation
 is a single-caller operation: do not start another shared payload build while a

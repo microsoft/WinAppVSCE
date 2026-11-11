@@ -303,6 +303,10 @@ public static class Program
         {
             var hostName = Assembly.GetEntryAssembly()?.GetName().Name ?? "Surface";
             var hostPri = Path.Combine(AppContext.BaseDirectory, hostName + ".pri");
+            if (File.Exists(hostPri))
+            {
+                File.Delete(hostPri);
+            }
             File.Copy(UserPriPath, hostPri, overwrite: true);
             Boot($"StageUserPri: staged '{UserPriPath}' -> '{hostPri}'");
         }
@@ -967,6 +971,12 @@ public partial class App : Application, IXamlMetadataProvider
                     return;
                 }
 
+                // A run directory's host files can be hard links to the installed host; replace the link
+                // rather than write through it, so staging never changes the install.
+                if (d.Exists)
+                {
+                    File.Delete(dest);
+                }
                 File.Copy(src, dest, overwrite: true);
                 return;
             }

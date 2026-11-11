@@ -77,7 +77,7 @@ if (-not $IncludeRenderer) { return }
 
 # Use only a disposable copy of the pristine build, never an installed identity,
 # source output or host cache. The smoke client owns/disposes each child PID.
-$raw = "$root\surface\obj\PayloadBuild\Surface\bin\x64\Debug\net10.0-windows10.0.26100.0\win-x64"
+$raw = "$(& "$root\surface\Get-PayloadWorkDir.ps1")\Surface\bin\x64\Debug\net10.0-windows10.0.26100.0\win-x64"
 if (-not (Test-Path "$raw\Surface.exe")) { throw "Run Build-Vsix.ps1 -NoDeploy first (Debug)." }
 & dotnet build "$root\surface\TestUserApp\TestUserApp.csproj" -c Debug -p:Platform=x64 `
     -p:RuntimeIdentifier=win-x64 --nologo -v minimal

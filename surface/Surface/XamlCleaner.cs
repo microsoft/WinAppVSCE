@@ -99,8 +99,16 @@ internal static class XamlCleaner
         "MediaEnded", "MediaFailed", "MediaOpened", "ImageOpened", "ImageFailed",
     };
 
-    // Resolved-type cache keyed by full CLR name (value may be null = "known not resolvable").
-    private static readonly ConcurrentDictionary<string, Type?> TypeCache = new(StringComparer.Ordinal);
+    // Resolved-type cache keyed by full CLR name. Only hits are cached for good: a type's assembly can load later
+    // (Win2D's projection loads on first XAML use), so a miss is remembered only until the assembly set changes.
+    private static readonly ConcurrentDictionary<string, Type> TypeCache = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, int> TypeMisses = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Last-resort type lookup through the XAML metadata provider chain, which loads a dependency's projection
+    /// assembly on demand. Set by the host; null in unit tests.
+    /// </summary>
+    internal static Func<string, Type?>? ProviderTypeResolver { get; set; }
 
     // The WinUI managed-projection assembly, discovered from a well-known framework type.
     private static readonly Assembly? WinUiAssembly = SafeGetWinUiAssembly();
@@ -169,6 +177,8 @@ internal static class XamlCleaner
     /// designer. When false only the root's design size is kept (Sample data off, or the values failed to load).
     /// </param>
     /// <param name="designPromotions">Receives "Element.Property" for each <c>d:</c> value promoted to a runtime property. May be null.</param>
+    /// <param name="resolveDictionarySource">Maps a page's merged-dictionary <c>Source</c> to a loadable one plus the keys it defines (Rule 1c). May be null.</param>
+    /// <param name="forcedTypes">Receives the full name of every custom type the provider maps but that was placeholdered anyway (heavy or throwing constructor). May be null.</param>
     public static string Clean(
         string rawXaml,
         Func<string, bool>? isKnownResourceKey = null,
@@ -182,7 +192,9 @@ internal static class XamlCleaner
         ISet<string>? missingFrameworkTypes = null,
         ISet<string>? designSizedRoot = null,
         bool designValues = true,
-        ISet<string>? designPromotions = null)
+        ISet<string>? designPromotions = null,
+        Func<string, (string Source, IReadOnlyCollection<string> Keys)?>? resolveDictionarySource = null,
+        ISet<string>? forcedTypes = null)
     {
         if (string.IsNullOrWhiteSpace(rawXaml))
         {
@@ -247,6 +259,23 @@ internal static class XamlCleaner
                 }
             }
 
+            // Rule 1c: a page's merged dictionary Source is written relative to the page file, which the
+            // design-time loader (no base URI) can't resolve; point it at the project-relative ms-appx URI and
+            // count the keys that dictionary defines as in scope, so Rule 6 keeps references to them.
+            if (resolveDictionarySource is not null)
+            {
+                foreach (var rd in root.DescendantsAndSelf().Where(e => e.Name.LocalName == "ResourceDictionary").ToList())
+                {
+                    var source = rd.Attribute("Source");
+                    if (source is null || resolveDictionarySource(source.Value) is not { } resolved)
+                    {
+                        continue;
+                    }
+                    source.Value = resolved.Source;
+                    docKeys.UnionWith(resolved.Keys);
+                }
+            }
+
             // Rule 5 (elements): remove whole design-namespace elements (e.g. <d:DesignData>) up front
             // so the attribute pass never touches dead subtrees.
             foreach (var el in root.DescendantsAndSelf().Where(e => e.Name.Namespace == Design).ToList())
@@ -262,7 +291,7 @@ internal static class XamlCleaner
             var droppedKeys = new HashSet<string>(StringComparer.Ordinal);
             if (providerMapsFullName is not null)
             {
-                SubstituteUnresolvableElements(root, docKeys, droppedKeys, providerMapsFullName, forcePlaceholderTypes, unmappedTypes, missingFrameworkTypes);
+                SubstituteUnresolvableElements(root, docKeys, droppedKeys, providerMapsFullName, forcePlaceholderTypes, unmappedTypes, missingFrameworkTypes, forcedTypes);
             }
 
             // Attribute pass over every surviving element.
@@ -1082,7 +1111,8 @@ internal static class XamlCleaner
         Func<string, bool> providerMapsFullName,
         ISet<string>? forcePlaceholderTypes = null,
         ISet<string>? unmappedTypes = null,
-        ISet<string>? missingFrameworkTypes = null)
+        ISet<string>? missingFrameworkTypes = null,
+        ISet<string>? forcedTypes = null)
     {
         foreach (var el in root.Descendants().ToList())
         {
@@ -1141,6 +1171,10 @@ internal static class XamlCleaner
             if (!maps)
             {
                 unmappedTypes?.Add(fullName);
+            }
+            else
+            {
+                forcedTypes?.Add(fullName);
             }
 
             if (IsResourceEntry(el))
@@ -1515,39 +1549,62 @@ internal static class XamlCleaner
     private static Type? FindClrType(string clrNamespace, string localName)
     {
         var full = clrNamespace + "." + localName;
-        return TypeCache.GetOrAdd(full, static f =>
+        if (TypeCache.TryGetValue(full, out var cached))
         {
-            try
-            {
-                // Prefer the WinUI projection assembly for framework namespaces.
-                var t = WinUiAssembly?.GetType(f, throwOnError: false, ignoreCase: false);
-                if (t is not null)
-                {
-                    return t;
-                }
+            return cached;
+        }
 
-                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+        if (TypeMisses.TryGetValue(full, out var missAt) && missAt == assemblies.Length)
+        {
+            return null;
+        }
+
+        var found = LookupClrType(full, assemblies, allowProvider: !clrNamespace.StartsWith("Microsoft.UI.Xaml", StringComparison.Ordinal));
+        if (found is not null)
+        {
+            TypeMisses.TryRemove(full, out _);
+            return TypeCache.GetOrAdd(full, found);
+        }
+
+        TypeMisses[full] = AppDomain.CurrentDomain.GetAssemblies().Length;
+        return null;
+    }
+
+    private static Type? LookupClrType(string full, Assembly[] assemblies, bool allowProvider)
+    {
+        try
+        {
+            // Prefer the WinUI projection assembly for framework namespaces.
+            var t = WinUiAssembly?.GetType(full, throwOnError: false, ignoreCase: false);
+            if (t is not null)
+            {
+                return t;
+            }
+
+            foreach (var asm in assemblies)
+            {
+                try
                 {
-                    try
+                    t = asm.GetType(full, throwOnError: false, ignoreCase: false);
+                    if (t is not null)
                     {
-                        t = asm.GetType(f, throwOnError: false, ignoreCase: false);
-                        if (t is not null)
-                        {
-                            return t;
-                        }
-                    }
-                    catch
-                    {
-                        // Some dynamic/reflection-only assemblies can throw; skip them.
+                        return t;
                     }
                 }
+                catch
+                {
+                    // Some dynamic/reflection-only assemblies can throw; skip them.
+                }
             }
-            catch
-            {
-                // best-effort resolution only
-            }
+
+            return allowProvider ? ProviderTypeResolver?.Invoke(full) : null;
+        }
+        catch
+        {
+            // best-effort resolution only
             return null;
-        });
+        }
     }
 
     private static Assembly? SafeGetWinUiAssembly()

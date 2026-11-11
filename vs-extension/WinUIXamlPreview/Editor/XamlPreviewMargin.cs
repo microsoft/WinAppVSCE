@@ -247,6 +247,7 @@ namespace WinUIXamlPreview.Editor
             // previewer selection (#2). Both are best-effort and guarded against echo looping.
             _preview.ElementSelected += OnPreviewerElementSelected;
             _preview.ContentPropMapChanged += OnContentPropMapChanged;
+            _preview.ContentRerendered += OnContentRerendered;
             try { _textView.Caret.PositionChanged += OnCaretPositionChanged; }
             catch (Exception ex) { Log.Write("Caret sync subscribe failed: " + ex.Message); }
 
@@ -596,6 +597,32 @@ namespace WinUIXamlPreview.Editor
             }
         }
 
+        /// <summary>#2 — the preview re-rendered under a selection; re-select the element at the caret in the new tree.</summary>
+        private void OnContentRerendered()
+        {
+            if (_disposed || !_caretSync.TracksCaret(PreviewOptions.DesignMode))
+            {
+                return;
+            }
+
+            try
+            {
+                var map = EnsureSourceMap();
+                var path = map?.PathForOffset(_textView.Caret.Position.BufferPosition.Position);
+                if (path == null)
+                {
+                    return;
+                }
+
+                _caretSync.CaretMovedTo(path);
+                _preview.SelectByPath(path);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Re-render reselection failed: " + ex.Message);
+            }
+        }
+
         /// <summary>#2 — the editor caret moved; select the innermost enclosing element in the previewer.</summary>
         private void OnCaretPositionChanged(object sender, CaretPositionChangedEventArgs e)
         {
@@ -880,6 +907,7 @@ namespace WinUIXamlPreview.Editor
             {
                 _preview.ElementSelected -= OnPreviewerElementSelected;
                 _preview.ContentPropMapChanged -= OnContentPropMapChanged;
+                _preview.ContentRerendered -= OnContentRerendered;
                 _textView.Caret.PositionChanged -= OnCaretPositionChanged;
             }
             catch (Exception ex) { Log.Write("Margin teardown (selection sync) failed: " + ex); }
