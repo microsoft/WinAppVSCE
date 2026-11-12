@@ -567,20 +567,6 @@ export async function runEditorScenarios(ctx) {
     console.log(`[ok] spelling quick fix: ${scenario.bad} -> ${scenario.good}, exact edits clear diagnostics`);
   }
 
-  const duplicateText = pageCls('<Button VisibilityCount="Collapsed" Visibility="Visible" />');
-  const duplicateDiagnostics = await validateDoc(
-    duplicateText,
-    (items) => items.some((item) => item.code === "WXAML0003"),
-    "duplicate property correction",
-  );
-  const duplicateActions = await codeActionWith(
-    920200, duplicateDiagnostics.find((item) => item.code === "WXAML0003"), "duplicate property correction",
-  );
-  if (duplicateActions.some((action) => action.title.endsWith("to 'Visibility'"))) {
-    fail(`related name: must not suggest a property that is already set: ${JSON.stringify(duplicateActions)}`);
-  }
-  console.log("[ok] related name: an already-set property is never suggested");
-
   // 21b) code action for a misspelled property element whose intended target is a GET-ONLY collection property (Grid.RowDefinitions has no setter). Regression guard: the suggestion candidate source must mirror property-element VALIDITY (HasProperty, get-only included), not the setter-only GetMembers — otherwise a real fix like RowDefinitionz -> RowDefinitions would be silently missing.
   const caPe = `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <Grid>\n    <Grid.RowDefinitionz><RowDefinition /></Grid.RowDefinitionz>\n  </Grid>\n</Page>`;
   const caPeDiags = await validateDoc(

@@ -270,14 +270,9 @@ internal static partial class XamlValidator
         var member = typeSystem.FindAttributeMember(elementType, name.LocalName);
         if (member is null)
         {
-            // Never suggest a property the element already sets; that fix would only create a duplicate.
-            var setNames = (attribute.Parent as XamlElement)?.Attributes
-                .Where(other => !other.Name.HasPrefix && !other.Name.IsDotted)
-                .Select(other => other.Name.LocalName)
-                .ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
             diagnostics.Add(Diag(doc, name.LocalNameSpan, SeverityWarning, UnknownAttributeCode,
                 $"'{name.LocalName}' is not a property or event of '{elementType.Name}'.",
-                SuggestNameData(name.LocalName, typeSystem.GetAttributeCandidateNames(elementType).Where(n => !setNames.Contains(n)))));
+                SuggestNameData(name.LocalName, typeSystem.GetAttributeCandidateNames(elementType))));
             return;
         }
 

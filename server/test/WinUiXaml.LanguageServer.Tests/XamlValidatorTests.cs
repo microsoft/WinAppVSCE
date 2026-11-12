@@ -530,17 +530,6 @@ public class XamlValidatorTests
     }
 
     [Fact]
-    public void UnknownAttribute_NeverSuggestsAPropertyTheElementAlreadySets()
-    {
-        var diagnostic = Assert.Single(
-            Validate(Page("""Widht="1" Width="2" """)),
-            d => d.Code == XamlValidator.UnknownAttributeCode);
-
-        Assert.True(diagnostic.Data is null ||
-            !Assert.IsType<DiagnosticData>(diagnostic.Data).Suggestions.Contains("Width"));
-    }
-
-    [Fact]
     public void MisspelledBooleanValue_SuggestsTrueOrFalse()
     {
         var diagnostic = Assert.Single(
