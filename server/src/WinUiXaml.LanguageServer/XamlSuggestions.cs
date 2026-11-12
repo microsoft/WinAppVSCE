@@ -47,7 +47,7 @@ internal static class XamlSuggestions
     private static bool SharesFirstLetter(string a, string b) =>
         a.Length > 0 && b.Length > 0 && char.ToLowerInvariant(a[0]) == char.ToLowerInvariant(b[0]);
 
-    /// <summary>The one name that completes a partially typed name or differs from it by a single whole word; null when none or several match.</summary>
+    /// <summary>The one name that completes a partially typed name or shares the most whole words with it; null when none or several match.</summary>
     public static string? RelatedName(string target, IEnumerable<string> candidates)
     {
         if (string.IsNullOrEmpty(target) || target.Length < 3 || candidates is null)
@@ -56,24 +56,42 @@ internal static class XamlSuggestions
         }
 
         var targetWords = Words(target);
-        string? match = null;
+        string? completion = null;
+        int completions = 0;
+        string? best = null;
+        int bestShared = 0;
+        bool tied = false;
         foreach (var candidate in candidates.Distinct(StringComparer.Ordinal))
         {
-            if (string.IsNullOrEmpty(candidate) || string.Equals(candidate, target, StringComparison.Ordinal) ||
-                !candidate.StartsWith(target, StringComparison.OrdinalIgnoreCase) &&
-                !DifferByOneWord(targetWords, Words(candidate)))
+            if (string.IsNullOrEmpty(candidate) || string.Equals(candidate, target, StringComparison.Ordinal))
             {
                 continue;
             }
 
-            if (match is not null)
+            if (candidate.StartsWith(target, StringComparison.OrdinalIgnoreCase))
             {
-                return null;
+                completion = candidate;
+                completions++;
             }
-            match = candidate;
+
+            var candidateWords = Words(candidate);
+            int shared = targetWords.Count(word => candidateWords.Contains(word, StringComparer.OrdinalIgnoreCase));
+            if (shared > bestShared)
+            {
+                (best, bestShared, tied) = (candidate, shared, false);
+            }
+            else if (shared > 0 && shared == bestShared)
+            {
+                tied = true;
+            }
         }
 
-        return match;
+        var wordMatch = bestShared > 0 && !tied ? best : null;
+        if (completions > 1 || completion is not null && wordMatch is not null && completion != wordMatch)
+        {
+            return null;
+        }
+        return completion ?? wordMatch;
     }
 
     // PascalCase words; an acronym ends before a capital that starts a lowercase word (UIElement -> UI, Element).
@@ -92,24 +110,6 @@ internal static class XamlSuggestions
         }
         words.Add(name.Substring(start));
         return words.ToArray();
-    }
-
-    private static bool DifferByOneWord(string[] a, string[] b)
-    {
-        var (shorter, longer) = a.Length < b.Length ? (a, b) : (b, a);
-        if (longer.Length != shorter.Length + 1)
-        {
-            return false;
-        }
-
-        for (int skip = 0; skip < longer.Length; skip++)
-        {
-            if (longer.Where((_, i) => i != skip).SequenceEqual(shorter, StringComparer.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-        return false;
     }
 
     /// <summary>Case-insensitive edit distance counting adjacent swaps as one typo, bailing out (returning threshold + 1) once a row exceeds the threshold.</summary>

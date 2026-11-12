@@ -38,23 +38,38 @@ public class XamlSuggestionsTests
 
     [Theory]
     [InlineData("FrozenEdgeCount", "FrozenEdge")]
+    [InlineData("FrozenColumnCount", "FrozenEdge")]
     [InlineData("frozenEdgeCount", "FrozenEdge")]
     [InlineData("Edge", "FrozenEdge")]
     [InlineData("Visib", "Visibility")]
-    public void RelatedName_FindsThePartialOrOneWordMatch(string typed, string expected)
+    public void RelatedName_FindsThePartialOrWordMatch(string typed, string expected)
     {
         Assert.Equal(expected, XamlSuggestions.RelatedName(typed, ["FrozenEdge", "Visibility", "Width", "Header"]));
+    }
+
+    [Fact]
+    public void RelatedName_MapsDataGridStyleNameOnRealTableViewColumnMembers()
+    {
+        string[] columnMembers =
+        [
+            "ActualWidth", "CanResize", "CanSort", "CellEditingTemplate", "CellTemplate", "CellToolTipBinding",
+            "CustomSortComparer", "FrozenEdge", "Header", "HeaderTemplate", "HeaderTemplateSelector", "HeaderToolTip",
+            "IsReadOnly", "MaxWidth", "MinWidth", "SortCycle", "SortDirection", "SortMemberPath", "Visibility", "Width",
+        ];
+
+        Assert.Equal("FrozenEdge", XamlSuggestions.RelatedName("FrozenColumnCount", columnMembers));
     }
 
     [Theory]
     [InlineData("Font")]
     [InlineData("TableViewColumn")]
-    [InlineData("FrozenEdgeColumnCount")]
+    [InlineData("BackgroundColor")]
     [InlineData("Ed")]
     public void RelatedName_OffersNothingWhenTheMatchIsUnclear(string typed)
     {
         Assert.Null(XamlSuggestions.RelatedName(
-            typed, ["FontSize", "FontFamily", "TableView", "TableViewTextColumn", "FrozenEdge", "EdgeMode"]));
+            typed,
+            ["FontSize", "FontFamily", "TableView", "TableViewTextColumn", "TableViewTemplateColumn", "Background", "BackgroundSizing", "EdgeMode"]));
     }
 
     [Fact]

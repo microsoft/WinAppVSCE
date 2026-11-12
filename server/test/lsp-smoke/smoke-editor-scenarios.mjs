@@ -533,6 +533,7 @@ export async function runEditorScenarios(ctx) {
     { body: '<Button MaxHieght="200" />', bad: "MaxHieght", good: "MaxHeight", code: "WXAML0003", count: 1, preferred: true },
     { body: '<Button VisibilityCount="Collapsed" />', bad: "VisibilityCount", good: "Visibility", code: "WXAML0003", count: 1, preferred: false },
     { body: '<Button Visib="Collapsed" />', bad: "Visib", good: "Visibility", code: "WXAML0003", count: 1, preferred: false },
+    { body: '<Button ForegroundColor="Red" />', bad: "ForegroundColor", good: "Foreground", code: "WXAML0003", count: 1, preferred: false },
   ];
   for (const [index, scenario] of spellingCases.entries()) {
     const text = pageCls(scenario.body);
