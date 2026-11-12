@@ -1484,6 +1484,7 @@ public class XamlCodeActionsTests
     [Theory]
     [InlineData("Visibility=\"Visbile/>\n")]
     [InlineData("IsEnabled=\"Ture/>\n")]
+    [InlineData("IsEnabled=\"Ture Tag=\"x\"/>")]
     public void UnterminatedValueSwallowingMarkup_OffersNoValueReplacement(string attribute)
     {
         var typeSystem = BuildWinUiTypeSystem("""
