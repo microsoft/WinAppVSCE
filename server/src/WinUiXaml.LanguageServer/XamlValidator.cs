@@ -330,13 +330,19 @@ internal static partial class XamlValidator
         return nearest.Count == 0 ? null : new DiagnosticData { Bad = bad, Suggestions = nearest.ToArray() };
     }
 
-    /// <summary>Typo suggestions for a control or property name, else the single related name (never a preferred fix).</summary>
+    /// <summary>Typo suggestions for a control or property name, else up to three related names (never a preferred fix).</summary>
     private static DiagnosticData? SuggestNameData(string bad, IEnumerable<string> candidates)
     {
         var names = candidates.ToArray();
-        return SuggestData(bad, names) ?? (XamlSuggestions.RelatedName(bad, names) is { } related
-            ? new DiagnosticData { Bad = bad, Suggestions = new[] { related }, Related = true }
-            : null);
+        if (SuggestData(bad, names) is { } typos)
+        {
+            return typos;
+        }
+
+        var related = XamlSuggestions.RelatedNames(bad, names);
+        return related.Count > 0
+            ? new DiagnosticData { Bad = bad, Suggestions = related.ToArray(), Related = true }
+            : null;
     }
 
     private static DiagnosticData? SuggestNamespaceData(

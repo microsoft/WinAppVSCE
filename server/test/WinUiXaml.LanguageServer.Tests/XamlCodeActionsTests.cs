@@ -450,15 +450,22 @@ public class XamlCodeActionsTests
     }
 
     [Fact]
-    public void WireShape_RelatedSuggestionFromJson_IsNotPreferred()
+    public void WireShape_RelatedSuggestionsFromJson_AreListedInOrderWithoutAPreferredFix()
     {
-        var data = new DiagnosticData { Bad = "FrozenEdgeCount", Suggestions = ["FrozenEdge"], Related = true };
+        var data = new DiagnosticData
+        {
+            Bad = "BackgroundColor",
+            Suggestions = ["Background", "RowBackground", "BackgroundSizing"],
+            Related = true,
+        };
         var json = JsonSerializer.SerializeToElement(data, LspJson.Options);
         var ctx = Context(Diag(XamlValidator.UnknownAttributeCode, R(0, 1, 16), json));
 
-        var action = Assert.Single(XamlCodeActions.Compute(Uri, null, ctx));
-        Assert.Equal("Change 'FrozenEdgeCount' to 'FrozenEdge'", action.Title);
-        Assert.Null(action.IsPreferred);
+        var actions = XamlCodeActions.Compute(Uri, null, ctx);
+        Assert.Equal(
+            ["Change 'BackgroundColor' to 'Background'", "Change 'BackgroundColor' to 'RowBackground'", "Change 'BackgroundColor' to 'BackgroundSizing'"],
+            actions.Select(action => action.Title));
+        Assert.All(actions, action => Assert.Null(action.IsPreferred));
     }
 
     [Fact]

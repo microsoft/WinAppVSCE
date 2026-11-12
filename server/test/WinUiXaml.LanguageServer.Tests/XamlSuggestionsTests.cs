@@ -42,13 +42,14 @@ public class XamlSuggestionsTests
     [InlineData("frozenEdgeCount", "FrozenEdge")]
     [InlineData("Edge", "FrozenEdge")]
     [InlineData("Visib", "Visibility")]
-    public void RelatedName_FindsThePartialOrWordMatch(string typed, string expected)
+    public void RelatedNames_FindsThePartialOrWordMatch(string typed, string expected)
     {
-        Assert.Equal(expected, XamlSuggestions.RelatedName(typed, ["FrozenEdge", "Visibility", "Width", "Header"]));
+        Assert.Equal(expected, Assert.Single(
+            XamlSuggestions.RelatedNames(typed, ["FrozenEdge", "Visibility", "Width", "Header"])));
     }
 
     [Fact]
-    public void RelatedName_MapsDataGridStyleNameOnRealTableViewColumnMembers()
+    public void RelatedNames_MapsDataGridStyleNameOnRealTableViewColumnMembers()
     {
         string[] columnMembers =
         [
@@ -57,19 +58,29 @@ public class XamlSuggestionsTests
             "IsReadOnly", "MaxWidth", "MinWidth", "SortCycle", "SortDirection", "SortMemberPath", "Visibility", "Width",
         ];
 
-        Assert.Equal("FrozenEdge", XamlSuggestions.RelatedName("FrozenColumnCount", columnMembers));
+        Assert.Equal("FrozenEdge", Assert.Single(XamlSuggestions.RelatedNames("FrozenColumnCount", columnMembers)));
     }
 
     [Theory]
-    [InlineData("Font")]
-    [InlineData("TableViewColumn")]
-    [InlineData("BackgroundColor")]
-    [InlineData("Ed")]
-    public void RelatedName_OffersNothingWhenTheMatchIsUnclear(string typed)
+    [InlineData("BackgroundColor", new[] { "Background", "RowBackground", "BackgroundSizing" })]
+    [InlineData("Font", new[] { "FontSize", "FontStyle", "FontFamily" })]
+    public void RelatedNames_ListsUpToThreeTiedMatchesClosestFirst(string typed, string[] expected)
     {
-        Assert.Null(XamlSuggestions.RelatedName(
-            typed,
-            ["FontSize", "FontFamily", "TableView", "TableViewTextColumn", "TableViewTemplateColumn", "Background", "BackgroundSizing", "EdgeMode"]));
+        string[] candidates =
+        [
+            "AlternatingRowBackground", "BackgroundSizing", "RowBackground", "Background", "Foreground",
+            "FontWeight", "FontFamily", "FontStyle", "FontSize",
+        ];
+
+        Assert.Equal(expected, XamlSuggestions.RelatedNames(typed, candidates));
+    }
+
+    [Theory]
+    [InlineData("Ed")]
+    [InlineData("Zebra")]
+    public void RelatedNames_OffersNothingWithoutAPartialOrSharedWordMatch(string typed)
+    {
+        Assert.Empty(XamlSuggestions.RelatedNames(typed, ["EdgeMode", "Background", "FontSize"]));
     }
 
     [Fact]

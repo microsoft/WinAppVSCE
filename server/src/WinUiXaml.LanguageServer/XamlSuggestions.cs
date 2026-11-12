@@ -47,20 +47,17 @@ internal static class XamlSuggestions
     private static bool SharesFirstLetter(string a, string b) =>
         a.Length > 0 && b.Length > 0 && char.ToLowerInvariant(a[0]) == char.ToLowerInvariant(b[0]);
 
-    /// <summary>The one name that completes a partially typed name or shares the most whole words with it; null when none or several match.</summary>
-    public static string? RelatedName(string target, IEnumerable<string> candidates)
+    /// <summary>Up to max names completing a partially typed name, else those sharing the most whole words with it, closest first.</summary>
+    public static IReadOnlyList<string> RelatedNames(string target, IEnumerable<string> candidates, int max = 3)
     {
         if (string.IsNullOrEmpty(target) || target.Length < 3 || candidates is null)
         {
-            return null;
+            return Array.Empty<string>();
         }
 
         var targetWords = Words(target);
-        string? completion = null;
-        int completions = 0;
-        string? best = null;
-        int bestShared = 0;
-        bool tied = false;
+        var completions = new List<string>();
+        var wordMatches = new List<(string Name, int Shared, int Extra)>();
         foreach (var candidate in candidates.Distinct(StringComparer.Ordinal))
         {
             if (string.IsNullOrEmpty(candidate) || string.Equals(candidate, target, StringComparison.Ordinal))
@@ -70,28 +67,37 @@ internal static class XamlSuggestions
 
             if (candidate.StartsWith(target, StringComparison.OrdinalIgnoreCase))
             {
-                completion = candidate;
-                completions++;
+                completions.Add(candidate);
             }
 
             var candidateWords = Words(candidate);
             int shared = targetWords.Count(word => candidateWords.Contains(word, StringComparer.OrdinalIgnoreCase));
-            if (shared > bestShared)
+            if (shared > 0)
             {
-                (best, bestShared, tied) = (candidate, shared, false);
-            }
-            else if (shared > 0 && shared == bestShared)
-            {
-                tied = true;
+                int extra = candidateWords.Count(word => !targetWords.Contains(word, StringComparer.OrdinalIgnoreCase));
+                wordMatches.Add((candidate, shared, extra));
             }
         }
 
-        var wordMatch = bestShared > 0 && !tied ? best : null;
-        if (completions > 1 || completion is not null && wordMatch is not null && completion != wordMatch)
+        if (completions.Count > 0)
         {
-            return null;
+            return completions
+                .OrderBy(name => name.Length)
+                .ThenBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .Take(max)
+                .ToList();
         }
-        return completion ?? wordMatch;
+
+        // Keep only the names sharing the most words; fewer unrelated words ranks a name closer.
+        int best = wordMatches.Count == 0 ? 0 : wordMatches.Max(match => match.Shared);
+        return wordMatches
+            .Where(match => match.Shared == best)
+            .OrderBy(match => match.Extra)
+            .ThenBy(match => match.Name.Length)
+            .ThenBy(match => match.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(match => match.Name)
+            .Take(max)
+            .ToList();
     }
 
     // PascalCase words; an acronym ends before a capital that starts a lowercase word (UIElement -> UI, Element).
