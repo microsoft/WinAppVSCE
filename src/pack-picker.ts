@@ -153,7 +153,7 @@ async function pickPackProject(
 	if (candidates.length === 0) {
 		vscode.window.showWarningMessage(
 			unsupportedSolutionsFound
-				? 'Solutions were found, but none contained .NET projects supported by the bundled WinApp CLI. Browse to the project or solution you want to package.'
+				? 'Solutions were found, but none contained .NET projects. Browse to the .NET project or solution you want to package.'
 				: onlyUnrunnableProjects
 				? 'Only library and test projects were found. Browse to the application project or solution you want to package.'
 				: 'No projects or solutions were found. Browse to the project or solution you want to package.'

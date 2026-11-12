@@ -306,7 +306,7 @@ export async function pickRunTarget(
 		// unbidden — the user asked to run, not to browse.
 		vscode.window.showWarningMessage(
 			unsupportedSolutionsFound
-				? 'Solutions were found, but none contained .NET projects supported by the bundled WinApp CLI, and no build output folders were found. Build the app first, then browse to its output folder.'
+				? 'Solutions were found, but none contained .NET projects, and no build output folders were found. Build the app first, or browse to the solution to let WinApp build it.'
 				: onlyUnrunnableProjects
 				? 'Only library and test projects were found in this workspace, and winapp run needs an executable app project. Browse to the project or folder you want to run.'
 				: 'No projects, solutions, or build output folders were found in this workspace. Browse to the project or folder you want to run.'

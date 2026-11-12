@@ -1,0 +1,16 @@
+steps:
+  - task: PowerShell@2
+    displayName: Add release NuGet package source
+    inputs:
+      pwsh: true
+      errorActionPreference: stop
+      targetType: inline
+      script: |
+        $source = Join-Path "$(Build.SourcesDirectory)" '.pipelines\release-nuget.config'
+        $userNuGetDirectory = Join-Path $env:APPDATA 'NuGet'
+        New-Item -ItemType Directory -Path $userNuGetDirectory -Force | Out-Null
+        # Temporary test projects also need the feed when they are outside the checkout.
+        Copy-Item -LiteralPath $source -Destination (Join-Path $userNuGetDirectory 'NuGet.Config') -Force
+        Copy-Item -LiteralPath $source -Destination (Join-Path "$(Build.SourcesDirectory)" 'nuget.config') -Force
+  - task: NuGetAuthenticate@1
+    displayName: Authenticate with Azure Artifacts NuGet feed
