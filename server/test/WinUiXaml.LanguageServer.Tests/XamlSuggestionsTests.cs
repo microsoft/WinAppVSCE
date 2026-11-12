@@ -78,9 +78,10 @@ public class XamlSuggestionsTests
     [Theory]
     [InlineData("Ed")]
     [InlineData("Zebra")]
+    [InlineData("IsDefault")]
     public void RelatedNames_OffersNothingWithoutAPartialOrSharedWordMatch(string typed)
     {
-        Assert.Empty(XamlSuggestions.RelatedNames(typed, ["EdgeMode", "Background", "FontSize"]));
+        Assert.Empty(XamlSuggestions.RelatedNames(typed, ["EdgeMode", "Background", "FontSize", "IsEnabled", "IsTabStop"]));
     }
 
     [Fact]

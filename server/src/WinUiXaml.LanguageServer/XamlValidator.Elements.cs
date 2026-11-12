@@ -223,7 +223,7 @@ internal static partial class XamlValidator
         {
             diagnostics.Add(Diag(doc, name.LocalNameSpan, SeverityError, UnknownTypeCode,
                 $"The type '{name.LocalName}' was not found in the XAML namespace '{uri}'.",
-                SuggestNameData(name.LocalName, typeSystem.GetAllTypes(uri).Select(t => t.Name))));
+                SuggestData(name.LocalName, typeSystem.GetAllTypes(uri).Select(t => t.Name))));
             return;
         }
 
@@ -272,7 +272,7 @@ internal static partial class XamlValidator
         {
             diagnostics.Add(Diag(doc, name.LocalNameSpan, SeverityWarning, UnknownAttributeCode,
                 $"'{name.LocalName}' is not a property or event of '{elementType.Name}'.",
-                SuggestNameData(name.LocalName, typeSystem.GetAttributeCandidateNames(elementType))));
+                SuggestPropertyNameData(name.LocalName, typeSystem.GetAttributeCandidateNames(elementType))));
             return;
         }
 

@@ -71,7 +71,9 @@ internal static class XamlSuggestions
             }
 
             var candidateWords = Words(candidate);
-            int shared = targetWords.Count(word => candidateWords.Contains(word, StringComparer.OrdinalIgnoreCase));
+            // Words under 3 letters (Is, On, X) carry no meaning on their own, so they never count as shared.
+            int shared = targetWords.Count(word =>
+                word.Length >= 3 && candidateWords.Contains(word, StringComparer.OrdinalIgnoreCase));
             if (shared > 0)
             {
                 int extra = candidateWords.Count(word => !targetWords.Contains(word, StringComparer.OrdinalIgnoreCase));
