@@ -1481,6 +1481,30 @@ public class XamlCodeActionsTests
             ApplyEdit(doc, Assert.Single(action.Edit!.Changes[Uri])));
     }
 
+    [Theory]
+    [InlineData("Visibility=\"Visbile/>\n")]
+    [InlineData("IsEnabled=\"Ture/>\n")]
+    public void UnterminatedValueSwallowingMarkup_OffersNoValueReplacement(string attribute)
+    {
+        var typeSystem = BuildWinUiTypeSystem("""
+            namespace TestApp
+            {
+                public enum Vis { Visible, Collapsed }
+                public class Page : Microsoft.UI.Xaml.DependencyObject
+                {
+                    public Vis Visibility { get; set; }
+                    public bool IsEnabled { get; set; }
+                }
+            }
+            """);
+        var doc = new TextDocument(Uri, "<Page xmlns=\"using:TestApp\" " + attribute);
+        var diagnostic = Assert.Single(
+            XamlValidator.Validate(doc, typeSystem),
+            item => item.Code == XamlValidator.InvalidAttributeValueCode);
+
+        Assert.Empty(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem));
+    }
+
     [Fact]
     public void RelatedPropertyName_IsAnUnpreferredRenameThatKeepsTheValue()
     {

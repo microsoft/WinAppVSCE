@@ -727,6 +727,7 @@ internal static class XamlCodeActions
                     : XamlValueConverter.GetDefaultLiteral(memberType);
                 if (attribute?.Value is null ||
                     replacement is null ||
+                    !XamlValidator.IsClosedLiteral(doc, attribute.Value) ||
                     !DiagnosticTargetsSpan(doc, diagnostic.Range, attribute.Value.InnerSpan) ||
                     memberType is not null &&
                     XamlValueConverter.TryValidate(
