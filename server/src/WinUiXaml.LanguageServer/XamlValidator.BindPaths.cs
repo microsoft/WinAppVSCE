@@ -251,6 +251,14 @@ internal static partial class XamlValidator
             ITypeSymbol? next;
             if (first)
             {
+                // A bare static method name is reported as WXAML0048 by the bind-target check.
+                if (bracket < 0 && chain.IndexOf('.') < 0 &&
+                    typeSystem.GetBindableStaticMembers(current, accessWithin)
+                        .Any(member => member.Name == name && member is IMethodSymbol))
+                {
+                    return;
+                }
+
                 var symbol = typeSystem.GetBindableStaticMembers(current, accessWithin)
                     .FirstOrDefault(member =>
                         member.Name == name &&

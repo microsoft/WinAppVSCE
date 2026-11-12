@@ -1238,6 +1238,59 @@ export async function runCoreScenarios(ctx) {
   }
   console.log(`[ok] validation(x:Bind bool? -> object Tag): no false WXAML0030 (Nullable<T> boxes into object)`);
 
+  // Regressions #351/#352: both forms compile with the real WinUI compiler. The WXAML0048 sentinel proves diagnostics arrived.
+  const HELPERS = 'xmlns:helpers="using:SmokeFixture.Helpers"';
+  const falsePositiveDiag = await validateDoc(
+    `<Page ${NS} ${HELPERS} x:Class="SmokeFixture.SmokePage">\n  <StackPanel>\n` +
+    `    <TextBox x:Name="Outer" />\n` +
+    `    <ListView><ListView.ItemTemplate><DataTemplate>` +
+    `<TextBlock Text="{Binding Text, ElementName=Outer}" /></DataTemplate></ListView.ItemTemplate></ListView>\n` +
+    `    <Border Background="{x:Bind GreetingText}" Width="{x:Bind GreetingText}" Visibility="{x:Bind GreetingText}" />\n` +
+    `    <TextBlock Text="{x:Bind helpers:Fmt.Join}" />\n  </StackPanel>\n</Page>`,
+    (d) => d.some((x) => x.code === "WXAML0048"),
+    "issue-351-352-false-positives");
+  const unexpectedDiag = falsePositiveDiag.filter((x) => x.code !== "WMC1510");
+  if (unexpectedDiag.length !== 1) {
+    fail(`expected only the WXAML0048 sentinel, got ${JSON.stringify(unexpectedDiag.map((x) => `${x.code}:${x.message}`))}`);
+  }
+  console.log("[ok] validation(#351/#352): template ElementName and string x:Bind sources are silent; method-without-call is WXAML0048");
+
+  // Regression #357: constructs the WinUI compiler or runtime rejects now produce diagnostics.
+  const structureDiag = await validateDoc(
+    `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <Page.Resources>\n` +
+    `    <SolidColorBrush Color="Red" />\n    <SolidColorBrush x:Key="Accent" Color="Red" />\n` +
+    `    <Style x:Key="Self" TargetType="Button" BasedOn="{StaticResource Self}" />\n` +
+    `    <Style TargetType="Nope" />\n  </Page.Resources>\n` +
+    `  <StackPanel Spacing="{StaticResource Accent}">hello<Panel />\n` +
+    `    <TextBlock x:Name="A" Name="B" Text="{x:Static Foo}" />\n` +
+    `    <TextBlock x:Load="False" />\n    <Button Click="" Content="a">b</Button>\n` +
+    `  </StackPanel>\n</Page>`,
+    (d) => d.some((x) => x.code === "WXAML0043"),
+    "issue-357-structure");
+  const structureCodes = new Set(structureDiag.map((x) => x.code));
+  for (const want of ["WXAML0036", "WXAML0046", "WXAML0002", "WXAML0047", "WXAML0040", "WXAML0038", "WXAML0039", "WXAML0037", "WXAML0042", "WXAML0041", "WXAML0043"]) {
+    if (!structureCodes.has(want)) fail(`#357 structure validation missing ${want}: ${JSON.stringify([...structureCodes])}`);
+  }
+  console.log(`[ok] validation(#357): ${structureCodes.size} structural diagnostic codes reported against the real SDK`);
+
+  // Regression #358: completion offers project types and primitives, and nothing where no element can go.
+  const resourceLabels = await completeWith(9581, `<Page ${NS}>\n  <Page.Resources>\n    <|\n  </Page.Resources>\n</Page>`, "issue-358-resources");
+  for (const want of ["x:String", "x:Double", "UpperConverter", "SolidColorBrush"]) {
+    if (!resourceLabels.includes(want)) fail(`resource completion missing '${want}'`);
+  }
+  const panelLabels = await completeWith(9582, `<Page ${NS}>\n  <StackPanel>\n    <|\n  </StackPanel>\n</Page>`, "issue-358-abstract");
+  for (const unwanted of ["UIElement", "FrameworkElement", "Panel"]) {
+    if (panelLabels.includes(unwanted)) fail(`element completion offered non-constructible '${unwanted}'`);
+  }
+  if (!panelLabels.includes("Button")) fail("element completion lost 'Button'");
+  const inValueLabels = await completeWith(9583, `<Page ${NS}>\n  <Button Content="a<|" />\n</Page>`, "issue-358-lt-in-value");
+  if (inValueLabels.length !== 0) fail(`'<' inside an attribute value should offer nothing, got ${inValueLabels.length}`);
+  const dataTypeLabels = await completeWith(9584, `<Page ${NS} xmlns:local="using:SmokeFixture">\n  <ListView><ListView.ItemTemplate><DataTemplate x:DataType="|" /></ListView.ItemTemplate></ListView>\n</Page>`, "issue-358-datatype");
+  if (!dataTypeLabels.includes("local:ToolkitViewModel")) fail("x:DataType completion missing project view model");
+  const staticBindLabels = await completeWith(9585, `<Page ${NS} ${HELPERS}>\n  <TextBlock Text="{x:Bind helpers:F|}" />\n</Page>`, "issue-358-static-bind");
+  if (!staticBindLabels.includes("helpers:Fmt")) fail(`x:Bind static type completion missing 'helpers:Fmt' (got ${staticBindLabels.join(", ")})`);
+  console.log("[ok] completion(#358): resources offer x: primitives and converters; abstract types hidden; no elements in values; project types and static x:Bind roots offered");
+
   // 23c) Property-element member validation (WXAML0006): a mis-cased property element (<Grid.rowDefinitions>)
   // is flagged, while a correctly-cased instance property element (<Grid.RowDefinitions>) and an attached
   // property used in element form (<Grid.Row>) stay silent — proving no false positives on valid forms.
@@ -1349,8 +1402,8 @@ export async function runCoreScenarios(ctx) {
 
   const xNameComplete = await completeWith(306,
     `<Page ${NS}>\n  <Button Tag="{x:S|}" />\n</Page>`, "x:Static-name-completion");
-  if (!xNameComplete.includes("x:Static")) fail(`'{x:S' should offer the x:Static markup extension (got ${xNameComplete.join(",")})`);
-  console.log(`[ok] completion(markup name): '{x:S' -> x:Static (${xNameComplete.length} items)`);
+  if (xNameComplete.includes("x:Static")) fail(`'{x:S' must not offer the WPF-only x:Static markup extension (got ${xNameComplete.join(",")})`);
+  console.log(`[ok] completion(markup name): '{x:S' does not offer WPF-only x:Static (${xNameComplete.length} items)`);
 
   // 24b) Type-reference completion ({x:Type} / {x:Static} owner) offers ALL type kinds — enums and structs and static classes — not just instantiable classes like element-name completion. Regression guard for the round-21 fix: Visibility (enum) and Thickness (struct) are reachable here even though they are excluded from <Element> completion.
   const xTypeEnum = await completeWith(307,

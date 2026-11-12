@@ -209,6 +209,48 @@ internal static class XamlRename
         SyntaxFacts.GetKeywordKind(value) == SyntaxKind.None &&
         !value.StartsWith('@');
 
+    /// <summary>True when renaming declaration to newName would change which element any classic ElementName binding resolves to.</summary>
+    private static bool ChangesElementNameResolution(
+        TextDocument doc, XamlElement declaration, string oldName, string newName, XamlTypeSystem typeSystem)
+    {
+        foreach (var reference in XamlLanguageServer.EnumerateElementNameReferences(doc, typeSystem))
+        {
+            var current = XamlSemanticFacts.FindElementNameBindingTarget(doc, reference.Attribute, reference.Name, typeSystem);
+
+            // A renamed reference must not be shadowed by newName, and a newName reference must not be captured.
+            if ((reference.Name == oldName && ReferenceEquals(current, declaration) &&
+                 XamlSemanticFacts.FindElementNameBindingTarget(doc, reference.Attribute, newName, typeSystem) is { } other &&
+                 IsFoundFirst(doc, reference.Attribute, other, declaration, typeSystem)) ||
+                (reference.Name == newName && current is not null &&
+                 IsFoundFirst(doc, reference.Attribute, declaration, current, typeSystem)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>True when an ElementName lookup from context reaches first's namescope before second's, regardless of names.</summary>
+    private static bool IsFoundFirst(
+        TextDocument doc, XamlNode context, XamlElement first, XamlElement second, XamlTypeSystem typeSystem)
+    {
+        foreach (var (_, element) in XamlSemanticFacts.EnumerateElementNameBindingTargets(doc, context, typeSystem, includeShadowed: true))
+        {
+            if (ReferenceEquals(element, first))
+            {
+                return true;
+            }
+
+            if (ReferenceEquals(element, second))
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
     internal static void EnsureNoCollision(
         TextDocument doc, int offset, string newName, XamlRenameKind kind, XamlTypeSystem? typeSystem)
     {
@@ -231,6 +273,19 @@ internal static class XamlRename
                 {
                     throw new RenameValidationException(
                         $"The name '{newName}' already exists in the current name scope.");
+                }
+            }
+
+            if (occurrences?.FirstOrDefault(occurrence => occurrence.IsDeclaration) is { IsDeclaration: true } declared)
+            {
+                int start = doc.OffsetAt(declared.Range.Start);
+                var oldName = doc.Text.Substring(start, doc.OffsetAt(declared.Range.End) - start);
+                if (oldName != newName &&
+                    XamlSemanticFacts.FindElementNameBindingTarget(doc, doc.Parsed.FindNode(start), oldName, typeSystem) is { } declaration &&
+                    ChangesElementNameResolution(doc, declaration, oldName, newName, typeSystem))
+                {
+                    throw new RenameValidationException(
+                        $"Renaming to '{newName}' would change which element an ElementName binding refers to.");
                 }
             }
         }

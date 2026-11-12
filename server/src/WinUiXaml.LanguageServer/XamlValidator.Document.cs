@@ -251,10 +251,35 @@ internal static partial class XamlValidator
                 diagnostics.Add(Diag(doc, keySpan, SeverityError, DuplicateKeyCode,
                     "An item with the same key has already been added."));
             }
+            else if (XamlSemanticFacts.GetResourceKeyAttribute(entry) is null &&
+                RequiresExplicitResourceKey(entry, typeSystem))
+            {
+                diagnostics.Add(Diag(doc, entry.Name!.Span, SeverityError, MissingResourceKeyCode,
+                    $"The resource '{entry.Name.LocalName}' must have an x:Key."));
+            }
 
             // The entry's own subtree may nest further dictionaries (rare) — validate them independently.
             FindResourceScopes(entry, doc, typeSystem, diagnostics);
         }
+    }
+
+    /// <summary>Only Style supports an implicit key (its TargetType); every other resolved entry needs x:Key.</summary>
+    private static bool RequiresExplicitResourceKey(XamlElement entry, XamlTypeSystem typeSystem)
+    {
+        if (entry.Name is not { IsDotted: false } name ||
+            !entry.NamespaceScope.TryResolvePrefix(name.Prefix, out var uri))
+        {
+            return false;
+        }
+
+        if (uri == XamlTypeSystem.XamlLanguageNamespace)
+        {
+            return true;
+        }
+
+        return XamlSemanticFacts.ResolveElementType(entry, typeSystem) is { } entryType &&
+            !XamlSemanticFacts.IsStaticResourceElement(name, uri) &&
+            !(typeSystem.Capabilities.Style is { } style && XamlTypeSystem.IsAssignableTo(entryType, style));
     }
 
     private static bool IsThemeDictionariesPropertyElement(

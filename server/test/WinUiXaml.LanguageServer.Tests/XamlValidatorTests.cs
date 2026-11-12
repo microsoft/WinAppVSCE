@@ -183,6 +183,15 @@ public class XamlValidatorTests
                 public Microsoft.UI.Xaml.DataTemplate ItemTemplate { get; set; }
             }
             public class BaseControl { }
+            public abstract class AbstractElement : Microsoft.UI.Xaml.FrameworkElement { }
+            public class ProtectedElement : Microsoft.UI.Xaml.FrameworkElement { protected ProtectedElement() { } }
+            public class InternalCtorElement : Microsoft.UI.Xaml.FrameworkElement { internal InternalCtorElement() { } }
+            public class NeedsArgs { public NeedsArgs(string value) { } }
+            [Microsoft.UI.Xaml.Markup.ContentProperty(Name = "Children")]
+            public class UiPanel : Microsoft.UI.Xaml.FrameworkElement
+            {
+                public System.Collections.Generic.List<Microsoft.UI.Xaml.UIElement> Children { get; } = new();
+            }
             public class GoodRoot : BaseControl { }
             public class WrongRoot { }
 
@@ -206,7 +215,8 @@ public class XamlValidatorTests
             public struct CornerRadius { }
             public struct Thickness { }
             public class FrameworkTemplate { }
-            public class FrameworkElement
+            public class UIElement { }
+            public class FrameworkElement : UIElement
             {
                 public string Name { get; set; } = "";
                 public Style Style { get; set; }
@@ -1670,8 +1680,9 @@ public class XamlValidatorTests
                 XamlValidator.UnknownBindingArgumentCode);
     }
 
+    // Regression #351: a classic Binding ElementName inside a template resolves through outer namescopes.
     [Fact]
-    public void BindingElementName_UsesApplicableNameScope()
+    public void BindingElementName_InTemplateResolvesOuterNameScope()
     {
         const string xaml = """
             <Page xmlns="using:TestApp"
@@ -1679,14 +1690,45 @@ public class XamlValidatorTests
                   xmlns:ui="using:Microsoft.UI.Xaml"
                   x:Class="TestApp.Page">
               <Child x:Name="Outside" />
-              <ui:DataTemplate x:DataType="Child">
-                <Child Text="{ui:Binding ElementName=Outside, Path=Text}" />
-              </ui:DataTemplate>
+              <ItemsHost>
+                <ItemsHost.ItemTemplate>
+                  <ui:DataTemplate x:DataType="Child">
+                    <Child Text="{ui:Binding ElementName=Outside, Path=Text}" />
+                    <Child Text="{ui:Binding ElementName=Missing, Path=Text}" />
+                  </ui:DataTemplate>
+                </ItemsHost.ItemTemplate>
+              </ItemsHost>
             </Page>
             """;
 
-        Assert.Single(Validate(xaml),
+        var diagnostic = Assert.Single(Validate(xaml),
             d => d.Code == XamlValidator.UnknownBindingElementNameCode);
+        Assert.Contains("'Missing'", diagnostic.Message);
+    }
+
+    // Regression #352: string x:Bind sources are converted by XamlBindingHelper.ConvertValue.
+    [Theory]
+    [InlineData("Foreground")]
+    [InlineData("Width")]
+    [InlineData("Margin")]
+    [InlineData("Visibility")]
+    [InlineData("IsEnabled")]
+    [InlineData("CornerRadius")]
+    public void BindAssignment_AcceptsStringSourceForConvertibleTargets(string target)
+    {
+        Assert.DoesNotContain(
+            Validate(Page($$"""{{target}}="{x:Bind Text}" """)),
+            d => d.Code == XamlValidator.InvalidBindAssignmentCode);
+    }
+
+    [Theory]
+    [InlineData("IsEnabled", "Code")]
+    [InlineData("Foreground", "Color")]
+    public void BindAssignment_StillReportsIncompatibleNonStringSources(string target, string source)
+    {
+        Assert.Single(
+            Validate(Page($$"""{{target}}="{x:Bind {{source}}}" """)),
+            d => d.Code == XamlValidator.InvalidBindAssignmentCode);
     }
 
     [Fact]
@@ -2037,7 +2079,7 @@ public class XamlValidatorTests
     public void BindAssignment_DoesNotMisclassifyCastPathsAsFunctions()
     {
         Assert.Single(
-           Validate(Page("""Width="{x:Bind (local:Child)Name}" """)),
+           Validate(Page("""Width="{x:Bind (local:Child)Formatter}" """)),
            diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
     }
 
@@ -2418,6 +2460,138 @@ public class XamlValidatorTests
             d.Code == XamlValidator.InvalidSetterPropertyCode ||
             d.Code == XamlValidator.MultipleScalarChildrenCode);
     }
+
+    // Regression #357: constructs the WinUI XAML compiler or runtime rejects.
+    [Theory]
+    [InlineData("<ui:ResourceDictionary><Child /></ui:ResourceDictionary>", XamlValidator.MissingResourceKeyCode)]
+    [InlineData("<ui:ResourceDictionary><x:String>a</x:String></ui:ResourceDictionary>", XamlValidator.MissingResourceKeyCode)]
+    [InlineData("<ui:ResourceDictionary><ui:DataTemplate /></ui:ResourceDictionary>", XamlValidator.MissingResourceKeyCode)]
+    [InlineData("""<Child Text="{x:Static local:BindStatics.Flag}" />""", XamlValidator.UnsupportedMarkupExtensionCode)]
+    [InlineData("""<Child Text="{x:Type local:Child}" />""", XamlValidator.UnsupportedMarkupExtensionCode)]
+    [InlineData("""<Child Text="{ui:DynamicResource Key}" />""", XamlValidator.UnsupportedMarkupExtensionCode)]
+    [InlineData("<AbstractElement />", XamlValidator.NonConstructibleElementCode)]
+    [InlineData("<ProtectedElement />", XamlValidator.NonConstructibleElementCode)]
+    [InlineData("""<ui:ResourceDictionary><NeedsArgs x:Key="A" /></ui:ResourceDictionary>""", XamlValidator.NonConstructibleElementCode)]
+    [InlineData("<InternalCtorElement />", XamlValidator.NonConstructibleElementCode)]
+    [InlineData("""<ui:FrameworkElement x:Name="A" Name="B" />""", XamlValidator.ConflictingNameCode)]
+    [InlineData("<UiPanel>hello</UiPanel>", XamlValidator.InvalidTextContentCode)]
+    [InlineData("""<ContentHost Content="a"><ContentHost.Content>b</ContentHost.Content></ContentHost>""", XamlValidator.DuplicatePropertyAssignmentCode)]
+    [InlineData("""<ContentHost Content="a"><Child /></ContentHost>""", XamlValidator.DuplicatePropertyAssignmentCode)]
+    [InlineData("""<ContentHost><ContentHost.Content>a</ContentHost.Content><Child /></ContentHost>""", XamlValidator.DuplicatePropertyAssignmentCode)]
+    [InlineData("""<Child x:Load="False" />""", XamlValidator.LoadRequiresNameCode)]
+    [InlineData("""<ui:Style TargetType="Nope" />""", XamlValidator.UnknownTypeCode)]
+    public void Structure_ReportsInvalidConstructs(string body, string code)
+    {
+        Assert.Contains(Validate(PageWithContent(body)), d => d.Code == code);
+    }
+
+    [Theory]
+    [InlineData("""<ui:ResourceDictionary><Child x:Key="A" /><ui:Style TargetType="Child" /></ui:ResourceDictionary>""")]
+    [InlineData("""<Child Text="{ui:StaticResource Key}" />""")]
+    [InlineData("""<ui:FrameworkElement x:Name="A" />""")]
+    [InlineData("""<ContentHost>text</ContentHost>""")]
+    [InlineData("""<ContentHost><ContentHost.Content><Child /></ContentHost.Content></ContentHost>""")]
+    [InlineData("""<Child x:Name="Lazy" x:Load="False" />""")]
+    [InlineData("""<ui:Style TargetType="Child" />""")]
+    [InlineData("""<ui:ResourceDictionary><ui:Visibility x:Key="V">Collapsed</ui:Visibility></ui:ResourceDictionary>""")]
+    [InlineData("""<ui:ResourceDictionary><ui:Thickness x:Key="T" /></ui:ResourceDictionary>""")]
+    [InlineData("""<ui:ResourceDictionary><x:String x:Key="S">a</x:String></ui:ResourceDictionary>""")]
+    [InlineData("""<Child d:Tag="{x:Type local:Child}" />""")]
+    [InlineData("""<ContentHost Content="a"><d:Child /></ContentHost>""")]
+    [InlineData("""<d:Child><AbstractElement x:Load="False" /></d:Child>""")]
+    [InlineData("""<StyleHostBase>Add</StyleHostBase>""")]
+    [InlineData("""<Child x:Name="A" Name="B" />""")]
+    public void Structure_AcceptsValidConstructs(string body)
+    {
+        var codes = new[]
+        {
+            XamlValidator.MissingResourceKeyCode, XamlValidator.UnsupportedMarkupExtensionCode,
+            XamlValidator.NonConstructibleElementCode, XamlValidator.ConflictingNameCode,
+            XamlValidator.InvalidTextContentCode, XamlValidator.DuplicatePropertyAssignmentCode,
+            XamlValidator.LoadRequiresNameCode, XamlValidator.UnknownTypeCode,
+        };
+        Assert.DoesNotContain(Validate(PageWithContent(body), "Key"), d => codes.Contains(d.Code));
+    }
+
+    [Fact]
+    public void Structure_UnsupportedMarkupExtensionSuggestsReplacement()
+    {
+        var diagnostic = Assert.Single(
+            Validate(PageWithContent("""<Child Text="{ui:DynamicResource Key}" />""")),
+            d => d.Code == XamlValidator.UnsupportedMarkupExtensionCode);
+        Assert.Contains("ThemeResource", diagnostic.Message);
+    }
+
+    [Fact]
+    public void Structure_ReportsEmptyEventHandler()
+    {
+        Assert.Contains(Validate(Page("""Clicked="" """)), d => d.Code == XamlValidator.EmptyEventHandlerCode);
+    }
+
+    [Fact]
+    public void Structure_ReportsBindToMethodWithoutCallAndReadOnlyTwoWay()
+    {
+        Assert.Contains(Validate(Page("""Text="{x:Bind Zero}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
+        Assert.Contains(Validate(Page("""Text="{x:Bind local:BindStatics.Format}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
+        Assert.Contains(Validate(Page("""Grid.Row="{x:Bind local:BindStatics.Format}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
+        Assert.Contains(Validate(Page("""Grid.Row="{x:Bind Zero}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
+        Assert.DoesNotContain(Validate(Page("""Text="{x:Bind Zero()}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
+
+        Assert.Contains(Validate(Page("""Text="{x:Bind Child.Name, Mode=TwoWay}" """)), d => d.Code == XamlValidator.ReadOnlyTwoWayBindCode);
+        Assert.DoesNotContain(Validate(Page("""Text="{x:Bind Child.Text, Mode=TwoWay}" """)), d => d.Code == XamlValidator.ReadOnlyTwoWayBindCode);
+        Assert.DoesNotContain(Validate(Page("""Text="{x:Bind Child.Name, Mode=OneWay}" """)), d => d.Code == XamlValidator.ReadOnlyTwoWayBindCode);
+    }
+
+    [Fact]
+    public void Structure_ReportsInvalidBasedOn()
+    {
+        const string resources = """
+            <ui:ResourceDictionary>
+              <ui:Style x:Key="Self" TargetType="StyleHostBase" BasedOn="{ui:StaticResource Self}" />
+              <ui:Style x:Key="A" TargetType="StyleHostBase" BasedOn="{ui:StaticResource B}" />
+              <ui:Style x:Key="B" TargetType="StyleHostBase" BasedOn="{ui:StaticResource A}" />
+              <ui:Style x:Key="Other" TargetType="StyleHostOther" />
+              <ui:Style x:Key="Bad" TargetType="StyleHostDerived" BasedOn="{ui:StaticResource Other}" />
+              <ui:Style x:Key="Base" TargetType="StyleHostBase" />
+              <ui:Style x:Key="Good" TargetType="StyleHostDerived" BasedOn="{ui:StaticResource Base}" />
+            </ui:ResourceDictionary>
+            """;
+
+        var basedOn = Validate(PageWithContent(resources))
+            .Where(d => d.Code == XamlValidator.InvalidBasedOnCode)
+            .Select(d => d.Message)
+            .ToArray();
+        Assert.Equal(4, basedOn.Length);
+        Assert.Contains(basedOn, m => m.Contains("itself"));
+        Assert.Equal(2, basedOn.Count(m => m.Contains("circular")));
+        Assert.Contains(basedOn, m => m.Contains("'StyleHostOther'"));
+    }
+
+    [Fact]
+    public void Structure_ReportsStaticResourceOfWrongType()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:media="using:Microsoft.UI.Xaml.Media"
+                  xmlns:ui="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                  x:Class="TestApp.Page"
+                  Width="{ui:StaticResource Accent}"
+                  Foreground="{ui:StaticResource Accent}"
+                  Margin="{ui:StaticResource Spacing}"
+                  CornerRadius="{ui:StaticResource Spacing}">
+              <Page.Resources>
+                <media:SolidColorBrush x:Key="Accent" />
+                <x:Double x:Key="Spacing">4</x:Double>
+              </Page.Resources>
+            </Page>
+            """;
+
+        var diagnostic = Assert.Single(Validate(xaml), d => d.Code == XamlValidator.InvalidResourceTypeCode);
+        Assert.Contains("'Width'", diagnostic.Message);
+    }
+
+    private static string PageWithContent(string content) => Page(string.Empty).Replace("/>", ">" + content + "</Page>");
 
     private static string Page(string attributes) => $$"""
         <Page xmlns="using:TestApp"

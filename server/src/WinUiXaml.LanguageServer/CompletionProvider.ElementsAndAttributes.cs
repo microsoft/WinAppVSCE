@@ -38,9 +38,21 @@ internal static partial class CompletionProvider
 
         var items = new List<CompletionItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        bool resourceContext = IsResourceChildContext(doc, ctx, typeSystem);
+        if (resourceContext)
+        {
+            // Dictionary entries are keyed values of any type.
+            contentType = null;
+        }
         foreach (var type in typeSystem.GetTypes(uri))
         {
             if (!StartsWith(type.Name, local) || !seen.Add(type.Name))
+            {
+                continue;
+            }
+
+            // Abstract and non-default-constructible types cannot be object elements.
+            if (!XamlTypeSystem.IsXamlConstructible(type))
             {
                 continue;
             }
@@ -97,10 +109,66 @@ internal static partial class CompletionProvider
         // Unprefixed custom controls reuse or add an xmlns declaration.
         if (prefix.Length == 0)
         {
-            AddProjectElementTypes(doc, items, seen, local, uri, scope, typeSystem, replaceRange, contentType);
+            AddProjectElementTypes(doc, items, seen, local, uri, scope, typeSystem, replaceRange, contentType, resourceContext);
+            if (resourceContext)
+            {
+                AddXamlPrimitiveResources(items, seen, local, scope, typeSystem, replaceRange);
+            }
         }
 
         return Finish(items);
+    }
+
+    /// <summary>The XAML language primitives WinUI supports as keyed resources.</summary>
+    private static readonly string[] XamlPrimitiveResourceTypes = ["String", "Double", "Int32", "Boolean"];
+
+    private static void AddXamlPrimitiveResources(
+        List<CompletionItem> items, HashSet<string> seen, string local, XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem, Lsp.Range replaceRange)
+    {
+        var xamlPrefix = scope.Declarations.FirstOrDefault(declaration =>
+            string.Equals(declaration.Value, XamlTypeSystem.XamlLanguageNamespace, StringComparison.Ordinal)).Key;
+        if (string.IsNullOrEmpty(xamlPrefix))
+        {
+            return;
+        }
+
+        foreach (var intrinsic in typeSystem.GetXamlIntrinsicTypes(allTypeKinds: true))
+        {
+            var label = xamlPrefix + ":" + intrinsic.Key;
+            if (!XamlPrimitiveResourceTypes.Contains(intrinsic.Key) ||
+                !(StartsWith(intrinsic.Key, local) || StartsWith(label, local)) ||
+                !seen.Add(label))
+            {
+                continue;
+            }
+
+            items.Add(new CompletionItem
+            {
+                Label = label,
+                Kind = TypeCompletionKind(intrinsic.Value),
+                Documentation = CompletionDoc(intrinsic.Value),
+                Detail = intrinsic.Value.ToDisplayString(),
+                TextEdit = new TextEdit { Range = replaceRange, NewText = label },
+                FilterText = label,
+                SortText = label,
+            });
+        }
+    }
+
+    /// <summary>True when the element being typed is a direct entry of a resource dictionary.</summary>
+    private static bool IsResourceChildContext(TextDocument doc, Context ctx, XamlTypeSystem typeSystem)
+    {
+        for (var node = doc.Parsed.FindNode(Math.Max(0, ctx.ReplaceStart - 2)); node != null; node = node.Parent)
+        {
+            if (node is XamlElement { Name: not null } enclosing && enclosing.Span.Start < ctx.ReplaceStart - 1)
+            {
+                return XamlSemanticFacts.IsResourceDictionary(enclosing, typeSystem) ||
+                    XamlSemanticFacts.IsResourceDictionaryPropertyElement(enclosing, typeSystem);
+            }
+        }
+
+        return false;
     }
 
     private static CompletionList CompletePropertyElementName(
@@ -193,7 +261,7 @@ internal static partial class CompletionProvider
     private static void AddProjectElementTypes(
         TextDocument doc, List<CompletionItem> items, HashSet<string> seen, string local,
         string activeUri, XamlNamespaceScope scope, XamlTypeSystem typeSystem,
-        Lsp.Range replaceRange, ITypeSymbol? contentType)
+        Lsp.Range replaceRange, ITypeSymbol? contentType, bool includeProjectObjects = false)
     {
         // Types already reachable through the active default xmlns are offered above.
         var defaultReachable = new HashSet<string>(StringComparer.Ordinal);
@@ -202,9 +270,18 @@ internal static partial class CompletionProvider
             defaultReachable.Add(clrNs);
         }
 
-        foreach (var type in typeSystem.GetSourceElementTypes().Concat(typeSystem.GetReferencedElementTypes()))
+        // Resource dictionaries also hold plain CLR objects such as converters and view models.
+        var candidates = typeSystem.GetSourceElementTypes().Concat(typeSystem.GetReferencedElementTypes());
+        if (includeProjectObjects)
         {
-            if (!StartsWith(type.Name, local) || seen.Contains(type.Name))
+            candidates = candidates.Concat(typeSystem.GetSourceTypes()
+                .Where(type => type.TypeKind == TypeKind.Class && !type.IsImplicitClass && IsUserInstanceType(type)));
+        }
+
+        foreach (var type in candidates)
+        {
+            if (!StartsWith(type.Name, local) || seen.Contains(type.Name) ||
+                !XamlTypeSystem.IsXamlConstructible(type))
             {
                 continue;
             }
@@ -449,7 +526,8 @@ internal static partial class CompletionProvider
         var items = new List<CompletionItem>();
         foreach (var member in typeSystem.GetAttributeMembers(elementType))
         {
-            if (!StartsWith(member.Name, ctx.Partial) || existing.Contains(member.Name))
+            if (!StartsWith(member.Name, ctx.Partial) || existing.Contains(member.Name) ||
+                (member.Name == "Name" && existingDirectives.Contains("Name")))
             {
                 continue;
             }
@@ -531,6 +609,7 @@ internal static partial class CompletionProvider
         foreach (var (localName, description) in XamlDirectiveMetadata.AttributeDirectives)
         {
             if (existingDirectives.Contains(localName) ||
+                (localName == "Name" && existing.Contains("Name")) ||
                 !IsApplicableXamlDirective(localName, element, typeSystem))
             {
                 continue;
@@ -994,7 +1073,8 @@ internal static partial class CompletionProvider
                 typeSystem,
                 replaceRange,
                 requiredBaseType: typeSystem.ResolveMetadataType(
-                    "Microsoft.UI.Xaml.DependencyObject"));
+                    "Microsoft.UI.Xaml.DependencyObject"),
+                doc: doc);
         }
 
         // x:DataType roots binding completion and accepts any type kind.
@@ -1003,7 +1083,7 @@ internal static partial class CompletionProvider
             "DataType",
             scope))
         {
-            return CompleteTypeNameValue(ctx.Partial, scope, typeSystem, replaceRange, allTypeKinds: true);
+            return CompleteTypeNameValue(ctx.Partial, scope, typeSystem, replaceRange, allTypeKinds: true, doc: doc, rankProjectTypesFirst: true);
         }
 
         // mc:Ignorable="d …" lists the namespace prefixes a runtime XAML processor may ignore — offer the declared design-time prefixes (space-separated), the near-universal WinUI header attribute. Matched by the RESOLVED markup-compatibility URI (a custom prefix mapped to it works; a foreign one does not).
@@ -1037,7 +1117,10 @@ internal static partial class CompletionProvider
         // Any System.Type-valued attribute.
         if (valueType is INamedTypeSymbol { Name: "Type", ContainingNamespace.Name: "System" })
         {
-            return CompleteTypeNameValue(ctx.Partial, scope, typeSystem, replaceRange);
+            var requiredBase = ctx.AttributeName!.EndsWith("SourcePageType", StringComparison.Ordinal)
+                ? typeSystem.ResolveMetadataType("Microsoft.UI.Xaml.Controls.Page")
+                : null;
+            return CompleteTypeNameValue(ctx.Partial, scope, typeSystem, replaceRange, requiredBaseType: requiredBase, doc: doc, rankProjectTypesFirst: requiredBase is not null);
         }
 
         // Scalar (keyword/named) value completers keyed purely on the value type — enum, bool, GridLength, named color, named font weight. Shared with the Setter.Value path so both stay in lockstep.
@@ -1141,7 +1224,9 @@ internal static partial class CompletionProvider
     private static CompletionList CompleteTypeNameValue(
         string partial, XamlNamespaceScope scope, XamlTypeSystem typeSystem, Lsp.Range replaceRange,
         bool allTypeKinds = false,
-        INamedTypeSymbol? requiredBaseType = null)
+        INamedTypeSymbol? requiredBaseType = null,
+        TextDocument? doc = null,
+        bool rankProjectTypesFirst = false)
     {
         SplitQualified(partial, out var prefix, out var local);
         if (!scope.TryResolvePrefix(prefix, out var uri))
@@ -1151,6 +1236,11 @@ internal static partial class CompletionProvider
 
         var items = new List<CompletionItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (doc is not null && prefix.Length == 0)
+        {
+            AddProjectTypeNames(doc, items, seen, local, uri, scope, typeSystem, replaceRange, allTypeKinds, requiredBaseType, rankProjectTypesFirst);
+        }
+
         var types = allTypeKinds ? typeSystem.GetAllTypes(uri) : typeSystem.GetTypes(uri);
         foreach (var type in types)
         {
@@ -1206,6 +1296,63 @@ internal static partial class CompletionProvider
         }
 
         return Finish(items);
+    }
+
+    /// <summary>Adds project source types outside the default xmlns, qualified with a declared or newly added prefix.</summary>
+    private static void AddProjectTypeNames(
+        TextDocument doc, List<CompletionItem> items, HashSet<string> seen, string local, string defaultUri,
+        XamlNamespaceScope scope, XamlTypeSystem typeSystem, Lsp.Range replaceRange,
+        bool allTypeKinds, INamedTypeSymbol? requiredBaseType, bool rankProjectTypesFirst)
+    {
+        // x:DataType and SourcePageType name project types; TargetType keeps framework matches first.
+        var sortPrefix = rankProjectTypesFirst ? "0" : "\uffff";
+        var defaultReachable = new HashSet<string>(typeSystem.ClrNamespacesForUri(defaultUri), StringComparer.Ordinal);
+        foreach (var type in typeSystem.GetSourceTypes())
+        {
+            var clrNamespace = type.ContainingNamespace?.ToDisplayString();
+            if (!StartsWith(type.Name, local) ||
+                !IsUserInstanceType(type) ||
+                (!allTypeKinds && type.TypeKind != TypeKind.Class) ||
+                (requiredBaseType is not null && !XamlTypeSystem.IsAssignableTo(type, requiredBaseType)) ||
+                type.ContainingNamespace is null or { IsGlobalNamespace: true } ||
+                defaultReachable.Contains(clrNamespace!) ||
+                !XamlNamespaceImport.TryPlan(doc, scope, typeSystem, clrNamespace!, out var itemPrefix, out var declarationEdit))
+            {
+                continue;
+            }
+
+            var label = itemPrefix + ":" + type.Name;
+            if (!seen.Add(label))
+            {
+                continue;
+            }
+
+            items.Add(new CompletionItem
+            {
+                Label = label,
+                Kind = TypeCompletionKind(type),
+                Documentation = CompletionDoc(type),
+                Detail = declarationEdit is null ? clrNamespace : $"{clrNamespace} (adds xmlns:{itemPrefix})",
+                TextEdit = new TextEdit { Range = replaceRange, NewText = label },
+                AdditionalTextEdits = declarationEdit is null ? null : new List<TextEdit> { declarationEdit },
+                FilterText = type.Name,
+                SortText = sortPrefix + type.Name,
+            });
+        }
+    }
+
+    /// <summary>Project types a document can instantiate or bind to; excludes static classes and the app and window shells.</summary>
+    private static bool IsUserInstanceType(INamedTypeSymbol type)
+    {
+        for (var current = type.BaseType; current is not null; current = current.BaseType)
+        {
+            if (current.ToDisplayString() is "Microsoft.UI.Xaml.Application" or "Microsoft.UI.Xaml.Window")
+            {
+                return false;
+            }
+        }
+
+        return !type.IsStatic;
     }
 
     private static int TypeCompletionKind(INamedTypeSymbol type) => type.TypeKind switch

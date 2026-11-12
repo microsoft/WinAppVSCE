@@ -22,6 +22,7 @@ public sealed class AttributeCompletionTests
             }
             public class Button : DependencyObject
             {
+                public string Name { get; set; } = "";
                 public double Width { get; set; }
                 public string Text { get; set; } = "";
                 public bool IsEnabled { get; set; }
@@ -63,6 +64,8 @@ public sealed class AttributeCompletionTests
             }
 
             public class RowDefinition : DependencyObject { }
+            public abstract class AbstractBase : DependencyObject { }
+            public class ProtectedOnly : DependencyObject { protected ProtectedOnly() { } }
             public class ColumnDefinition : DependencyObject { }
             public class DoubleAnimation : DependencyObject { }
             public class HelperService { }
@@ -98,8 +101,17 @@ public sealed class AttributeCompletionTests
             internal sealed class GenericControl<T> : Microsoft.UI.Xaml.DependencyObject { }
         }
 
+        namespace TestApp.Converters
+        {
+            public sealed class UpperConverter { }
+            public sealed class ItemViewModel { public ItemViewModel(string name) { } }
+            public sealed class AppShell : Microsoft.UI.Xaml.Application { }
+            public static class Formatting { }
+        }
+
         namespace Microsoft.UI.Xaml
         {
+            public class Application { }
             public class DependencyObject { }
             public struct Thickness { }
             public class FrameworkTemplate { }
@@ -500,6 +512,130 @@ public sealed class AttributeCompletionTests
 
         var readableItem = CompleteItems(readable).Single(item => item.Label == "Items");
         Assert.Equal("property : IList<Button>", readableItem.Detail);
+    }
+
+    // Regression #358: completion gaps and wrong suggestions.
+    [Fact]
+    public void ElementCompletion_ExcludesNonConstructibleTypes()
+    {
+        var labels = CompleteLabels("""
+            <Page xmlns="using:TestApp">
+              <|
+            </Page>
+            """);
+
+        Assert.Contains("Button", labels);
+        Assert.DoesNotContain("AbstractBase", labels);
+        Assert.DoesNotContain("ProtectedOnly", labels);
+    }
+
+    [Fact]
+    public void AttributeCompletion_NameAndXNameAreMutuallyExclusive()
+    {
+        Assert.DoesNotContain("Name", CompleteLabels("""
+            <Button xmlns="using:TestApp" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    x:Name="A" Na| />
+            """));
+        Assert.DoesNotContain("x:Name", CompleteLabels("""
+            <Button xmlns="using:TestApp" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    Name="A" x:| />
+            """));
+    }
+
+    [Theory]
+    [InlineData("""<Page xmlns="using:TestApp"><Button Text="a<|" /></Page>""")]
+    [InlineData("""<Page xmlns="using:TestApp"><Button Text='a<|' /></Page>""")]
+    [InlineData("<Page xmlns=\"using:TestApp\"><Button /></Page>\n<|")]
+    public void ElementCompletion_IsEmptyWhereNoElementCanGo(string marked)
+    {
+        Assert.Empty(CompleteLabels(marked));
+    }
+
+    [Fact]
+    public void ResourceCompletion_OffersXamlPrimitivesAndProjectObjects()
+    {
+        var items = CompleteItems("""
+            <Page xmlns="using:TestApp" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Page.Resources>
+                <|
+              </Page.Resources>
+            </Page>
+            """);
+
+        foreach (var primitive in new[] { "x:String", "x:Double", "x:Int32", "x:Boolean" })
+        {
+            Assert.Contains(items, item => item.Label == primitive);
+        }
+
+        var converter = Assert.Single(items, item => item.Label == "UpperConverter");
+        Assert.Equal("converters:UpperConverter", converter.TextEdit!.NewText);
+        Assert.Equal(" xmlns:converters=\"using:TestApp.Converters\"", Assert.Single(converter.AdditionalTextEdits!).NewText);
+        Assert.DoesNotContain(items, item => item.Label == "ItemViewModel");
+        Assert.DoesNotContain(items, item => item.Label == "AppShell");
+
+        var outside = CompleteLabels("""
+            <Page xmlns="using:TestApp" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <|
+            </Page>
+            """);
+        Assert.DoesNotContain("UpperConverter", outside);
+        Assert.DoesNotContain("x:String", outside);
+    }
+
+    [Fact]
+    public void TypeValueCompletion_OffersProjectTypesWithImport()
+    {
+        var dataTypes = CompleteItems("""
+            <Page xmlns="using:TestApp" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Button x:DataType="|" />
+            </Page>
+            """);
+        var viewModel = Assert.Single(dataTypes, item => item.Label == "converters:ItemViewModel");
+        Assert.Equal("converters:ItemViewModel", viewModel.TextEdit!.NewText);
+        Assert.NotNull(viewModel.AdditionalTextEdits);
+        Assert.StartsWith("0", viewModel.SortText);
+        Assert.DoesNotContain(dataTypes, item => item.Label is "converters:AppShell" or "converters:Formatting");
+
+        var targetTypeItems = CompleteItems("""
+            <Style xmlns="using:Microsoft.UI.Xaml" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   xmlns:app="using:TestApp" TargetType="|" />
+            """);
+        var importedTarget = Assert.Single(targetTypeItems, item => item.Label == "app:Button");
+        Assert.StartsWith("\uffff", importedTarget.SortText);
+
+        var targetTypes = CompleteLabels("""
+            <Style xmlns="using:Microsoft.UI.Xaml" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   xmlns:app="using:TestApp" TargetType="|" />
+            """);
+        Assert.Contains("app:Button", targetTypes);
+        Assert.DoesNotContain("app:HelperService", targetTypes);
+    }
+
+    // Text-created framework types (FontFamily) and enums are valid object elements; source classes need a parameterless constructor.
+    [Fact]
+    public void Constructibility_MatchesXamlCompilerRules()
+    {
+        var corlib = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+        var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary);
+        var framework = CSharpCompilation.Create(
+            "Framework",
+            [CSharpSyntaxTree.ParseText("namespace Microsoft.UI.Xaml.Media { public class FontFamily { public FontFamily(string name) { } } public enum Mode { A } } namespace Lib { public class LibNeedsArgs { public LibNeedsArgs(string v) { } } }")],
+            [corlib],
+            options);
+        using var image = new System.IO.MemoryStream();
+        Assert.True(framework.Emit(image).Success);
+        var app = CSharpCompilation.Create(
+            "App",
+            [CSharpSyntaxTree.ParseText("namespace App { public class NeedsArgs { public NeedsArgs(string v) { } } public class Hidden { internal Hidden() { } } }")],
+            [corlib, MetadataReference.CreateFromImage(image.ToArray())],
+            options);
+
+        // Matches the WinUI XAML compiler (WMC0100): only framework text types skip the public parameterless constructor.
+        Assert.True(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("Microsoft.UI.Xaml.Media.FontFamily")!));
+        Assert.True(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("Microsoft.UI.Xaml.Media.Mode")!));
+        Assert.False(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("Lib.LibNeedsArgs")!));
+        Assert.False(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("App.Hidden")!));
+        Assert.False(XamlTypeSystem.IsXamlConstructible(app.GetTypeByMetadataName("App.NeedsArgs")!));
     }
 
     private static string[] CompleteLabels(string marked)
