@@ -119,3 +119,10 @@ namespace WinUiXaml.LanguageServer.Lsp;
 internal sealed partial class LspJsonContext : JsonSerializerContext
 {
 }
+
+internal static class LspJsonContextLimits
+{
+    /// <summary>Deepest nested result (outline or selection-range chain) a response may carry.
+    /// Each level costs two JSON levels, well under Utf8JsonWriter's default limit of 1000.</summary>
+    public const int MaxResultNesting = 100;
+}

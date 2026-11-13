@@ -33,18 +33,13 @@ internal static class XamlFormatter
 
         string unit = options.InsertSpaces ? new string(' ', Math.Max(1, options.TabSize)) : "\t";
 
-        int lineStart = 0;
-        int line = 0;
-        for (int i = 0; i <= text.Length; i++)
+        for (int line = 0; line < doc.LineCount; line++)
         {
-            if (i != text.Length && text[i] != '\n')
-            {
-                continue;
-            }
-
-            // The current line occupies [lineStart, i); a trailing '\r' (CRLF) sits just before i.
+            // Leading spaces/tabs stop at the line terminator, so the next line start bounds the scan.
+            int lineStart = doc.LineStart(line);
+            int lineEnd = line + 1 < doc.LineCount ? doc.LineStart(line + 1) : text.Length;
             int firstNonWs = lineStart;
-            while (firstNonWs < i && (text[firstNonWs] == ' ' || text[firstNonWs] == '\t'))
+            while (firstNonWs < lineEnd && (text[firstNonWs] == ' ' || text[firstNonWs] == '\t'))
             {
                 firstNonWs++;
             }
@@ -67,9 +62,6 @@ internal static class XamlFormatter
                     }
                 }
             }
-
-            lineStart = i + 1;
-            line++;
         }
 
         return edits;

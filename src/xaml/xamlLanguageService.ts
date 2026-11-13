@@ -9,9 +9,13 @@ import {
   LanguageClient,
   LanguageClientOptions,
   ServerOptions,
+  State,
   TransportKind,
   Executable,
+  type ErrorHandler,
+  type Message,
 } from "vscode-languageclient/node";
+import { reportFinalStops } from "./serverStopHandling";
 import { firstExistingPath } from "../winapp-cli-utils";
 import {
   buildDegradedNotification,
@@ -61,6 +65,7 @@ import {
   PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE,
   PROJECT_CONTEXT_STATUS_NOTIFICATION,
   ProjectContextStatus,
+  SERVER_STOPPED_STATUS_PRESENTATION,
   getRelevantProjectContextStatuses,
   getProjectContextStatusPresentation,
   isProjectContextState,
@@ -75,6 +80,7 @@ import {
   readXamlLanguageServerConfiguration,
   shouldEnableWinAppXamlFormatting,
   shouldRestartXamlLanguageServer,
+  XamlFormattingProvider,
   XamlStatusAction,
 } from "./xamlConfiguration";
 import { hasOpenXamlDocument } from "./xamlDemand";
@@ -97,6 +103,11 @@ import {
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
 let projectStatusItem: vscode.StatusBarItem | undefined;
+/** The formatter decision the running server was initialized with. */
+let clientFormattingEnabled: boolean | undefined;
+/** True after the client gave up restarting; demand-driven starts wait for an explicit restart. */
+let serverStopped = false;
+const CSHARP_EXTENSION_ID = "ms-dotnettools.csharp";
 const APPLY_GENERATED_EVENT_HANDLER_COMMAND = "winapp.xaml.applyGeneratedEventHandler";
 const PROMPT_TEXT_EDIT_COMMAND = "winapp.xaml.promptTextEdit";
 const APPLY_GUARDED_TEXT_EDITS_COMMAND = "winapp.xaml.applyGuardedTextEdits";
@@ -357,6 +368,12 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
         log("Workspace trust granted — restarting language server.");
         return restartClient(context);
       }
+    }),
+    vscode.extensions.onDidChange(() => {
+      if (formattingDecisionChanged()) {
+        log("C# extension set changed the XAML formatter choice; restarting language server.");
+        return restartClient(context);
+      }
     })
   );
 
@@ -424,6 +441,26 @@ function hasXamlDemand(): boolean {
   return hasOpenXamlDocument(vscode.workspace.textDocuments);
 }
 
+function computeWinAppFormattingEnabled(formattingProvider: XamlFormattingProvider): boolean {
+  return shouldEnableWinAppXamlFormatting(
+    formattingProvider,
+    vscode.extensions.getExtension(CSHARP_EXTENSION_ID) !== undefined,
+    vscode.extensions.getExtension(CSHARP_DEV_KIT_EXTENSION_ID) !== undefined,
+    vscode.workspace.getConfiguration("dotnet").get<boolean>("enableXamlTools", true)
+  );
+}
+
+/** Formatting capabilities are fixed at initialize, so a Dev Kit install or removal needs a restart. */
+function formattingDecisionChanged(): boolean {
+  if (!client || clientFormattingEnabled === undefined) {
+    return false;
+  }
+  const { formattingProvider } = readXamlLanguageServerConfiguration((section, defaultValue) =>
+    vscode.workspace.getConfiguration(XAML_SETTINGS_SECTION).get(section, defaultValue)
+  ).initializationOptions;
+  return computeWinAppFormattingEnabled(formattingProvider) !== clientFormattingEnabled;
+}
+
 function showXamlInfo(): void {
   const configuration = readXamlLanguageServerConfiguration((section, defaultValue) =>
     vscode.workspace.getConfiguration(XAML_SETTINGS_SECTION).get(section, defaultValue)
@@ -447,7 +484,8 @@ function showXamlInfo(): void {
     vscode.workspace.textDocuments.some((document) => document.languageId === "xaml"),
     projectContext
       ? { ...projectContext, restoreInFlight: restoresInFlight > 0 }
-      : undefined
+      : undefined,
+    serverStopped
   );
   void vscode.window
     .showInformationMessage<XamlStatusAction>(status.message, ...status.actions)
@@ -510,7 +548,25 @@ export async function deactivateXaml(): Promise<void> {
 
 /** Starts the server without interleaving with a stop. */
 async function startClient(context: vscode.ExtensionContext): Promise<void> {
-  return lifecycle.runExclusive(() => doStart(context));
+  // Opening a document must not resurrect a server the client gave up on; Restart does that.
+  return lifecycle.runExclusive(() => (serverStopped ? Promise.resolve() : doStart(context)));
+}
+
+/** Releases a client that stopped for good and reports it with a Restart action. */
+function handleServerStopped(
+  stopped: LanguageClient,
+  reason: string | undefined,
+  context: vscode.ExtensionContext
+): void {
+  client = undefined;
+  clientFormattingEnabled = undefined;
+  serverStopped = true;
+  disposeFileWatcher();
+  projectContextStatuses.clear();
+  void stopped.dispose().catch((err: unknown) => {
+    log(`Error disposing stopped language server: ${err instanceof Error ? err.message : String(err)}`);
+  });
+  notifyDegraded(reason ?? "The language server stopped.", "stopped", true, context);
 }
 
 /** Restarts the server as one exclusive lifecycle transition. */
@@ -567,20 +623,11 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     return;
   }
   const { diagnosticsLevel, formattingProvider } = serverConfiguration.initializationOptions;
-  const csharpExtensionInstalled =
-    vscode.extensions.getExtension("ms-dotnettools.csharp") !== undefined;
-  const csharpXamlToolsEnabled = vscode.workspace
-    .getConfiguration("dotnet")
-    .get<boolean>("enableXamlTools", true);
-  const formattingEnabled = shouldEnableWinAppXamlFormatting(
-    formattingProvider,
-    csharpExtensionInstalled,
-    csharpXamlToolsEnabled
-  );
+  const formattingEnabled = computeWinAppFormattingEnabled(formattingProvider);
   log(
     formattingEnabled
       ? "WinApp XAML formatting enabled."
-      : "WinApp XAML formatting disabled to avoid competing with the C# extension's XAML formatter."
+      : "WinApp XAML formatting disabled to avoid competing with the C# Dev Kit XAML formatter."
   );
 
   // Never evaluate projects in an untrusted workspace: MSBuild evaluation can execute attacker-controlled targets and tasks. Remain syntax-only until trust is granted. WINUI_XAML_FORCE_UNTRUSTED exercises this boundary in the integration harness.
@@ -669,12 +716,26 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     vscode.workspace.createFileSystemWatcher("**/obj/project.assets.json"),
   ];
 
+  // The default handler needs the client, so delegate to it once the client exists.
+  let defaultErrorHandler: ErrorHandler | undefined;
+  let finalStop: { reason: string | undefined } | undefined;
+  const errorHandler: ErrorHandler = reportFinalStops<Error, Message>(
+    {
+      error: (error, message, count) => defaultErrorHandler!.error(error, message, count),
+      closed: () => defaultErrorHandler!.closed(),
+    },
+    (reason) => {
+      finalStop = { reason };
+    }
+  );
+
   const clientOptions: LanguageClientOptions = {
     documentSelector: [
       { scheme: "file", language: "xaml" },
       { scheme: "untitled", language: "xaml" },
     ],
     outputChannel: output,
+    errorHandler,
     initializationOptions: { allowedRoots, diagnosticsLevel, formattingEnabled },
     synchronize: {
       fileEvents: fileWatchers,
@@ -723,6 +784,20 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     serverOptions,
     clientOptions
   );
+  defaultErrorHandler = candidate.createDefaultErrorHandler();
+  candidate.onDidChangeState(({ newState }) => {
+    // Only the adopted client matters; doStop clears `client` before disposing it.
+    if (client !== candidate) {
+      return;
+    }
+    if (newState === State.Starting) {
+      // An automatic restart after a crash: the old server's project states are stale.
+      clearProjectContextStatus();
+    } else if (newState === State.Stopped && finalStop && !lifecycle.isDisposing) {
+      // An automatic restart also passes through Stopped; only a reported final stop is terminal.
+      handleServerStopped(candidate, finalStop.reason, context);
+    }
+  });
   candidate.onNotification(
     PROJECT_RESTORE_NOTIFICATION,
     ({ projectPath }: { projectPath?: string }) => notifyProjectRestoreRequired(projectPath)
@@ -749,6 +824,8 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
   try {
     await candidate.start();
     client = candidate;
+    clientFormattingEnabled = formattingEnabled;
+    serverStopped = false;
     const latestDiagnosticsLevel = normalizeDiagnosticsLevel(
       vscode.workspace
         .getConfiguration(XAML_SETTINGS_SECTION)
@@ -1071,12 +1148,16 @@ function renderProjectContextStatus(): void {
     activeDocumentUri
   );
   const selected = selectProjectContextStatus(relevantStatuses);
-  const presentation = selected
-    ? getProjectContextStatusPresentation(selected, {
-        restoreInFlight: restoresInFlight > 0,
-      })
-    : undefined;
-  if (!projectStatusItem || !selected || !presentation) {
+  const presentation = serverStopped
+    ? activeDocumentUri === null
+      ? undefined
+      : SERVER_STOPPED_STATUS_PRESENTATION
+    : selected
+      ? getProjectContextStatusPresentation(selected, {
+          restoreInFlight: restoresInFlight > 0,
+        })
+      : undefined;
+  if (!projectStatusItem || !presentation) {
     projectStatusItem?.hide();
     return;
   }
@@ -1122,6 +1203,8 @@ async function stopClient(): Promise<void> {
 async function doStop(): Promise<void> {
   disposeFileWatcher();
   clearProjectContextStatus();
+  serverStopped = false;
+  clientFormattingEnabled = undefined;
   const current = client;
   client = undefined;
   if (!current) {

@@ -19,6 +19,7 @@ import {
   PROJECT_CONTEXT_LOADING_MESSAGE,
   PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_RESTORING_MESSAGE,
+  SERVER_STOPPED_MESSAGE,
 } from "../xaml/projectContextStatus";
 import {
   XAML_INTELLISENSE_UNAVAILABLE_PREFIX,
@@ -267,28 +268,31 @@ test("reads startup enablement, diagnostics, and formatter options together", ()
   });
 });
 
-test("avoids competing with C# XAML formatting unless the user opts in", () => {
+test("avoids competing with C# Dev Kit XAML formatting unless the user opts in", () => {
   assert.equal(normalizeFormattingProvider("unexpected"), "auto");
+  // provider, C# extension, C# Dev Kit, dotnet.enableXamlTools
+  assert.equal(shouldEnableWinAppXamlFormatting("auto", true, true, true), false);
+  assert.equal(shouldEnableWinAppXamlFormatting("auto", true, true, false), true);
+  assert.equal(shouldEnableWinAppXamlFormatting("auto", false, true, true), true);
+  assert.equal(shouldEnableWinAppXamlFormatting("winapp", true, true, true), true);
+  assert.equal(shouldEnableWinAppXamlFormatting("disabled", false, false, false), false);
+});
+
+// Regression for #359: the C# extension formats XAML only with Dev Kit installed.
+test("keeps WinApp formatting on when only the C# extension is installed", () => {
+  assert.equal(shouldEnableWinAppXamlFormatting("auto", true, false, true), true);
+  assert.equal(shouldEnableWinAppXamlFormatting("auto", true, false, false), true);
+});
+
+// Regression for #363: a server the client gave up on is reported as stopped with a restart action.
+test("reports a stopped server with restart and output actions", () => {
+  const status = getXamlStatus(true, false, true, true, { state: "loading" }, true);
   assert.equal(
-    shouldEnableWinAppXamlFormatting("auto", true, true),
-    false
+    status.message,
+    `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${SERVER_STOPPED_MESSAGE}`
   );
-  assert.equal(
-    shouldEnableWinAppXamlFormatting("auto", true, false),
-    true
-  );
-  assert.equal(
-    shouldEnableWinAppXamlFormatting("auto", false, true),
-    true
-  );
-  assert.equal(
-    shouldEnableWinAppXamlFormatting("winapp", true, true),
-    true
-  );
-  assert.equal(
-    shouldEnableWinAppXamlFormatting("disabled", false, false),
-    false
-  );
+  assert.deepEqual(status.actions, ["Restart Language Server", "Show Output"]);
+  assert.doesNotMatch(status.message, /Loading/);
 });
 
 test("transmits canonical diagnostic levels through mocked extension interactions", async () => {

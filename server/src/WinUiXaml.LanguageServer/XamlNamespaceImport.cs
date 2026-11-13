@@ -109,9 +109,7 @@ internal static class XamlNamespaceImport
 
     private static bool TryGetLineIndent(string text, int offset, out string indent)
     {
-        var lineStart = offset > 0
-            ? text.LastIndexOf('\n', offset - 1) + 1
-            : 0;
+        var lineStart = LineBreaks.LineStart(text, offset);
         var length = offset - lineStart;
         for (var index = 0; index < length; index++)
         {
@@ -127,6 +125,5 @@ internal static class XamlNamespaceImport
         return true;
     }
 
-    private static string DetectNewLine(string text) =>
-        text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+    private static string DetectNewLine(string text) => LineBreaks.Detect(text);
 }
