@@ -201,19 +201,17 @@ You can press F5 without creating `launch.json` first: WinApp contributes a defa
 | `workingDirectory` | string | workspace folder | Working directory for the application. |
 | `args` | string | | Command-line arguments to pass to the application. |
 | `outputAppxDirectory` | string | | Output directory for the loose-layout package. Defaults to an `AppX` folder inside the input folder. |
-| `useDevTools` | boolean | automatic | Override the CLI's [WinUI DevTools](#winui-devtools) choice: `true` turns DevTools on even when the CLI's saved default is off; `false` disables it. Omit to use CLI defaults. A WPF or Windows Forms app still starts, without DevTools, and a warning says why. |
-| `noOverlay` | boolean | `false` | Turn DevTools on headless: inspection and the VS Code panel work, but the in-app toolbar stays hidden. Like `useDevTools: true`, it overrides the CLI's saved default. Ignored when `useDevTools` is `false`. |
-| `devToolsInspector` | string | setting | Override `winapp.devTools.inspector`: `vscode` opens the editor panel; `native` leaves inspection to the app toolbar. |
+| `devTools` | string | CLI default | [WinUI DevTools](#winui-devtools) mode, the same as `winapp run --devtools`: `on` (with the in-app toolbar), `headless` (no toolbar; the VS Code panel still works), or `off`. Omit to use the CLI's default. An app that isn't WinUI 3 still starts, without DevTools, and a warning says why. |
 | `noDebug` | boolean | `false` | Launch the app without attaching a debugger. DevTools still works, and no debugger extension is required. Equivalent to **Run Without Debugging** (Ctrl+F5). |
 
 ### WinUI DevTools
 
-For supported **WinUI 3 projects**, **F5** also starts **WinUI DevTools**, a live view of the running app's XAML tree. The CLI enables it by default outside CI, respects its saved configuration, and falls back to a normal launch if automatic attachment fails. Set `useDevTools: true` to turn it on explicitly, including for build-output folders; a WinUI app then fails to launch if DevTools cannot attach, so you see why.
+For a **WinUI 3 app** (a `.csproj` with `UseWinUI`, or a C++ `.vcxproj` that uses the Windows App SDK and has XAML pages), **F5** also starts **WinUI DevTools**, a live view of the running app's XAML tree. It follows the CLI's saved default, which is on unless you run `winapp config set run.devtools off`, and the app still launches if DevTools can't attach. Set `devTools` to `on` or `headless` to request it explicitly, including for a build output folder; a WinUI app then fails to launch if DevTools can't attach, so you see why. Other app types, such as WPF, Windows Forms, or Electron, launch without DevTools, with a warning if you requested it.
 
 DevTools has two halves, and you can use either on its own:
 
-- **The in-app overlay** — a small toolbar drawn over your running app. Use it to point at an element on screen and highlight it.
-- **The DevTools panel in VS Code** — opens beside your code when the app starts. This is where you read and change the tree.
+- **The in-app overlay:** a small toolbar drawn over your running app. Use it to point at an element on screen and highlight it.
+- **The DevTools panel in VS Code:** opens beside your code when the app starts. This is where you read and change the tree.
 
 **In the panel:**
 
@@ -222,12 +220,12 @@ DevTools has two halves, and you can use either on its own:
 | **Visual tree** | The live element tree. Hovering highlights an element; selecting a row also synchronizes the engine selection. Expand a truncated branch to load its children. |
 | **Filter** | Type to match element types, names and their on-screen text; prefix with `#` to search names only. The selected element stays visible while filtering. |
 | **Pick element** (Ctrl+Shift+C) | Click an element in the running app to select it in the tree. |
-| **Track keyboard focus** | Follow focus through the app as you tab around it — useful for chasing down accessibility and tab-order bugs. |
+| **Track keyboard focus** | Follow focus through the app as you tab around it, useful for chasing down accessibility and tab-order bugs. |
 | **Layout adorners** | Draw margin, padding and alignment over the selected element, in the app and as a box model in the panel. |
 | **Just my XAML** | Hide framework-internal elements so the tree matches the markup you wrote. On by default. If an app has no XAML source information (DevTools attached after it started), the panel says so and shows the full tree. |
 | **Property grid** | Read and edit properties live. **Computed** shows every property's resolved value; **Set** shows only what was authored, grouped by where it came from. Colors open a themed picker with common presets, enums become dropdowns, and a bound property shows its path, mode and why it is or isn't resolving. |
-| **Go to source** | The properties header names the file and line that declared the selected element — click it to open that XAML in an adjacent editor group. |
-| **Comments** | Leave a note on an element. The engine anchors each one to the element's declaration site and tracks it as open, resolved or stale — so a note survives the element moving, and tells you when it can no longer find what you meant. |
+| **Go to source** | The properties header names the file and line that declared the selected element. Click it to open that XAML in an adjacent editor group. |
+| **Comments** | Leave a note on an element. The engine anchors each one to the element's declaration site and tracks it as open, resolved or stale, so a note survives the element moving, and tells you when it can no longer find what you meant. |
 
 **Launching without a debugger.** DevTools does not need one. Set `"noDebug": true` and you get the overlay and the panel with no debugger extension involved:
 
@@ -245,13 +243,13 @@ DevTools has two halves, and you can use either on its own:
 - **Attach to an existing app:** run **WinApp: Attach DevTools to Running App** from the Command Palette. Choose a running WinUI app; the extension uses the workspace project that built the running exe (or a matching project name), asks when ambiguous, and keeps the project folder an app already reports. This attaches DevTools, not a language debugger.
 - **Reopen a closed panel:** run **WinApp: Show DevTools Panel**. It brings back the panel for an app that still has DevTools attached.
 - **Comments without a running app:** run **WinApp: Open DevTools Comments**. Saved comments can be read, resolved, deleted, and opened in source without launching the app. Live DevTools panels also stay open after debugging stops, with live controls disabled and saved comments available. Comment creation still requires a live element selection.
-- **Choose an inspector:** set `winapp.devTools.inspector` to `vscode` (default) or `native`, or override it with `devToolsInspector` in a launch configuration. Native mode does not automatically open a VS Code panel. In VS Code mode, the extension registers as the app's external inspector: toolbar inspection, the comments list, **Open in DevTools**, and committed inspect picks reveal the corresponding view or element in VS Code without opening a duplicate native inspector.
+- **One inspector:** the extension registers as the app's inspector, so the toolbar's inspect button, its comments list, **Open in DevTools**, and picks in the app all open the VS Code panel instead of a separate inspector window.
 - Picking reveals the VS Code panel and clears its text filter. An element outside the loaded/authored tree is shown as an additional root so template parts and deeply nested elements remain inspectable.
-- DevTools inspects **XAML**, so it applies to WinUI 3 apps. Automatic mode leaves other app types and incompatible launch modes alone; the panel opens only after the CLI reports a successful attachment.
+- The panel opens only after the CLI reports that DevTools attached.
 - **Packaged apps need App execution aliases enabled** in Windows Settings for DevTools to attach.
-- Editing a property changes the running app only. It does not write back to your XAML — rebuild to keep a change.
+- Editing a property changes the running app only. It does not write back to your XAML; rebuild to keep a change.
 - The panel shows resource references and bindings read-only. Assigning a different resource key, editing a binding, or switching `x:Bind` to `{Binding}` live is not supported; change the XAML and restart the app.
-- Set `"noOverlay": true` to keep the VS Code panel but stop drawing the toolbar over your app, for example while recording a demo or taking screenshots.
+- Set `"devTools": "headless"` to keep the VS Code panel but stop drawing the toolbar over your app, for example while recording a demo or taking screenshots.
 
 > The `--detach` and `--no-launch` CLI options are deliberately not available in `launch.json`: both leave no running process for the debugger to attach to. Use **WinApp: Run Application With Options...** if you need them. The same applies to `--debug-output` and `--symbols` — `--debug-output` attaches the CLI's own debugger, and only one debugger can attach to a process at a time.
 
@@ -418,7 +416,7 @@ When you're done testing, use **WinApp: Unregister Package** to clean up sideloa
 
 Press **F5** on a WinUI 3 app and [WinUI DevTools](#winui-devtools) comes up with it: an overlay on the app and a panel in VS Code showing the live visual tree. Select an element to see its properties, edit one to try a change without rebuilding, or use **Pick element** to go the other way and find the markup behind something you can see on screen.
 
-You don't need a debugger for this. Set `"noDebug": true` in your launch configuration and you can inspect the UI without installing a debugger extension — useful for a quick look at someone else's app, or for watching focus move through a dialog you're making accessible.
+You don't need a debugger for this. Set `"noDebug": true` in your launch configuration and you can inspect the UI without installing a debugger extension. That is useful for a quick look at someone else's app, or for watching focus move through a dialog you're making accessible.
 
 ### Generate manifests and assets
 
@@ -501,9 +499,9 @@ For debugging, install the debugger extension that matches your app's language (
 | **Debugger doesn't attach** | The required debugger extension isn't installed. | Install the matching extension for your language — see [Supported debuggers](#integrated-debugging). |
 | **App launches but changes aren't visible** | `input` points at a build output folder, which WinApp launches as-is without building. | Point `input` at your `.csproj` or `.sln` so WinApp builds before launching, rebuild manually before pressing F5, or add a `preLaunchTask` (see the tip in [Integrated Debugging](#integrated-debugging)). |
 | **Certificate trust error when running** | The development certificate isn't installed or has expired. | Run **WinApp: Generate Certificate** and choose to also install it, or run **WinApp: Install Certificate** with your existing `.pfx` file. Both prompt for admin (UAC) when VS Code isn't elevated. |
-| **DevTools panel doesn't open on F5** | `useDevTools` is `false`, or the preferred inspector is `native`. | Enable DevTools and select the `vscode` inspector in settings or `devToolsInspector` in launch.json. |
-| **DevTools panel opens but never connects** | The app isn't a WinUI 3 app, the app is packaged and App execution aliases are off, or the app closed before DevTools attached. | DevTools inspects XAML, so only WinUI 3 apps have an engine to connect to; WPF and Windows Forms apps launch without it. For a packaged WinUI app, enable **App execution aliases** in Windows Settings and relaunch. The panel reports the reason it couldn't connect. |
-| **A property edit disappeared after rebuilding** | Edits in the property grid change the running app only. | Make the change in your XAML to keep it — the grid is for trying things out, not for authoring. |
+| **DevTools panel doesn't open on F5** | `devTools` is `off`, the app isn't a WinUI 3 app, or the CLI's saved default is off. | Set `"devTools": "on"` for a WinUI 3 app. If you requested DevTools for another app type, a warning explains why it was skipped. |
+| **DevTools panel opens but never connects** | The app is packaged and App execution aliases are off, or the app closed before DevTools attached. | Enable **App execution aliases** in Windows Settings and relaunch. The panel reports the reason it couldn't connect. |
+| **A property edit disappeared after rebuilding** | Edits in the property grid change the running app only. | Make the change in your XAML to keep it; the grid is for trying things out, not for authoring. |
 | **"Access denied" or permission errors** | Some operations (package registration) require elevation. Certificate install now prompts for admin automatically. | Approve the UAC prompt when it appears, or run VS Code as Administrator. |
 
 ## Feedback and Support

@@ -2,9 +2,9 @@
  * Build + workspace helpers for the DevTools E2E spec.
  *
  * The DevTools panel can only be reached through a real debug launch, so this
- * spec needs an actual WinUI app rather than a manifest fixture. The app source
- * lives in `src/test/fixtures/devtools-app` and is built on demand here — the
- * binaries are deliberately not committed.
+ * spec needs an actual WinUI app rather than a manifest fixture. It uses the shared
+ * WinUI fixture in `test/fixtures/xaml/fixture`, built on demand here and launched
+ * with `--devtools-page` so it opens on DevToolsPage.xaml.
  *
  * The launch uses `noDebug`, so no language-debugger extension (C# Dev Kit) is
  * required. That is what makes this spec runnable on a clean machine.
@@ -16,9 +16,10 @@ import * as os from 'os';
 import * as path from 'path';
 
 /** Source directory of the committed WinUI fixture app. */
-export const FIXTURE_APP_DIR = path.resolve(__dirname, '..', 'fixtures', 'devtools-app');
+export const FIXTURE_APP_DIR = path.resolve(__dirname, '..', '..', '..', 'test', 'fixtures', 'xaml', 'fixture');
 
-const FIXTURE_EXE = 'DevToolsFixtureApp.exe';
+const FIXTURE_EXE = 'SmokeFixture.exe';
+const FIXTURE_RID = process.arch === 'arm64' ? 'win-arm64' : 'win-x64';
 
 /** Repository root, three levels up from src/test/e2e. */
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -102,7 +103,7 @@ export function readOverlayState(): OverlayState | undefined {
  * by searching for the produced executable rather than hard-coded.
  */
 function findBuildOutput(): string | undefined {
-    const binDir = path.join(FIXTURE_APP_DIR, 'bin', 'Debug');
+    const binDir = path.join(FIXTURE_APP_DIR, 'bin');
     if (!fs.existsSync(binDir)) {
         return undefined;
     }
@@ -120,7 +121,8 @@ function findBuildOutput(): string | undefined {
             if (entry.isFile() && entry.name === FIXTURE_EXE) {
                 return dir;
             }
-            if (entry.isDirectory()) {
+            // AppX is the CLI's staged copy of the build output, not the output itself.
+            if (entry.isDirectory() && entry.name !== 'AppX') {
                 stack.push(path.join(dir, entry.name));
             }
         }
@@ -144,7 +146,7 @@ export function ensureFixtureAppBuilt(): string {
     }
 
     // No --source / --registry: the machine's configured feeds must be used.
-    const result = spawnSync('dotnet', ['build', '-c', 'Debug'], {
+    const result = spawnSync('dotnet', ['build', '-c', 'Debug', '-r', FIXTURE_RID], {
         cwd: FIXTURE_APP_DIR,
         encoding: 'utf-8',
         shell: true,
@@ -161,7 +163,7 @@ export function ensureFixtureAppBuilt(): string {
     const built = findBuildOutput();
     if (!built) {
         throw new Error(
-            `The fixture app built but ${FIXTURE_EXE} was not found under bin/Debug.`,
+            `The fixture app built but ${FIXTURE_EXE} was not found under bin.`,
         );
     }
     return built;
@@ -174,7 +176,7 @@ export function ensureFixtureAppBuilt(): string {
  * .vscode/launch.json into a committed fixture would dirty the repo on every
  * run. `inputFolder` is absolute, so the workspace itself can be empty.
  */
-export function createDevToolsWorkspace(inputFolder: string, options: { noOverlay?: boolean } = {}): string {
+export function createDevToolsWorkspace(inputFolder: string, options: { headless?: boolean } = {}): string {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devtools-e2e-'));
     const vscodeDir = path.join(tmpDir, '.vscode');
     fs.mkdirSync(vscodeDir, { recursive: true });
@@ -192,8 +194,8 @@ export function createDevToolsWorkspace(inputFolder: string, options: { noOverla
                     // Skips the debugger-extension requirement entirely, so this
                     // spec does not depend on C# Dev Kit being installed.
                     noDebug: true,
-                    useDevTools: true,
-                    ...(options.noOverlay ? { noOverlay: true } : {}),
+                    devTools: options.headless ? 'headless' : 'on',
+                    args: '--devtools-page',
                     unregisterOnExit: true,
                 },
             ],

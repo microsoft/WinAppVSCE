@@ -5,7 +5,7 @@ import { BUILD_OUTPUT_EXCLUDE_GLOB } from '../project-detection';
 import { getWinappOutputChannel, selectFolder } from '../winapp-host';
 import { DevToolsCli, parseApps } from './devtools-cli';
 import { DevToolsPanel } from './devtools-panel';
-import { inspectorPreference } from './launch-options';
+import { registerTrustedCommand } from '../workspace-trust';
 import { existingSourceRoot, matchSourceRoot } from './source-resolver';
 
 /** The running exe's path, which tells apart two projects that build the same exe name. */
@@ -37,9 +37,10 @@ async function chooseSourceRoot(processName?: string, exePath?: string): Promise
 }
 
 export function registerDevToolsCommands(context: vscode.ExtensionContext): void {
-    const cli = new DevToolsCli(context.extensionPath, message => getWinappOutputChannel().appendLine(message));
+    let devToolsCli: DevToolsCli | undefined;
+    const cli = () => devToolsCli ??= new DevToolsCli(context.extensionPath, message => getWinappOutputChannel().appendLine(message));
     const register = (name: string, run: () => Promise<void>) => {
-        context.subscriptions.push(vscode.commands.registerCommand(name, async () => {
+        context.subscriptions.push(registerTrustedCommand(name, async () => {
             try { await run(); }
             catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
@@ -51,7 +52,7 @@ export function registerDevToolsCommands(context: vscode.ExtensionContext): void
 
     register('winapp.attachDevTools', async () => {
         const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? context.extensionPath;
-        const apps = parseApps(await cli.run(['devtools', 'list', '--include-available'], cwd));
+        const apps = parseApps(await cli().run(['devtools', 'list', '--include-available'], cwd));
         if (!apps.length) {
             void vscode.window.showInformationMessage('No running WinUI apps were found.');
             return;
@@ -64,28 +65,23 @@ export function registerDevToolsCommands(context: vscode.ExtensionContext): void
         if (!picked) { return; }
         let sourceRoot = await chooseSourceRoot(picked.app.processName, await processImagePath(picked.app.processId));
         if (!sourceRoot) { return; }
-        const inspector = inspectorPreference(undefined,
-            vscode.workspace.getConfiguration('winapp.devTools', vscode.Uri.file(sourceRoot)).get('inspector'));
-        const surfaceArgs = inspector === 'native' ? ['--show-window'] : ['--overlay'];
         const attachArgs = ['devtools', 'attach', '--pid', String(picked.app.processId)];
         try {
-            await cli.run([...attachArgs, '--source-root', sourceRoot, ...surfaceArgs], sourceRoot);
+            await cli().run([...attachArgs, '--source-root', sourceRoot, '--overlay'], sourceRoot);
         } catch (error) {
             // An app launched from another folder keeps that folder; attach to it rather than fail.
             const existing = existingSourceRoot(error instanceof Error ? error.message : String(error));
             if (!existing) { throw error; }
             sourceRoot = existing;
-            await cli.run([...attachArgs, ...surfaceArgs], sourceRoot);
+            await cli().run([...attachArgs, '--overlay'], sourceRoot);
         }
-        if (inspector === 'vscode') {
-            await DevToolsPanel.show(picked.app.processId, context.extensionUri, vscode.ViewColumn.Active, sourceRoot);
-        }
+        await DevToolsPanel.show(picked.app.processId, context.extensionUri, vscode.ViewColumn.Active, sourceRoot);
     });
 
     register('winapp.showDevTools', async () => {
         if (DevToolsPanel.revealLive()) { return; }
         const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? context.extensionPath;
-        const apps = parseApps(await cli.run(['devtools', 'list'], cwd)).filter(app => app.attached);
+        const apps = parseApps(await cli().run(['devtools', 'list'], cwd)).filter(app => app.attached);
         if (!apps.length) {
             const attach = 'Attach to Running App';
             const choice = await vscode.window.showInformationMessage('No running app has DevTools attached.', attach);

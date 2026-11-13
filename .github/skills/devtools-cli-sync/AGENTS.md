@@ -166,11 +166,10 @@ Current contract, and why each part matters:
 - `--devtools` is a **valued** option taking `on | off | headless`. It is not a
   bare switch; if you pass it bare it swallows the next argument.
 - Omit the mode for automatic launches so CLI defaults and fail-open behavior apply.
-  Explicit `useDevTools: true` sends `on`; `false` sends `off`; `noOverlay` sends `headless`.
+  The `devTools` launch.json property (`on | headless | off`) is passed through as-is.
   Open the panel only when the launch JSON reports a successful attachment.
-- `headless` = engine running, overlay toolbar not drawn. That is what our
-  `noOverlay` launch.json property maps to, because the panel is a second client
-  and must keep the engine alive.
+- `headless` = engine running, overlay toolbar not drawn. The panel is a second
+  client and still works, so it must keep the engine alive.
 - Re-check `devtools list --include-available --json` and
   `devtools attach --pid <pid> --source-root <project>`. The extension infers
   a unique matching workspace project, otherwise prompts for the source root.

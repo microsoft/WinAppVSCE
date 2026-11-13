@@ -181,7 +181,7 @@ async function runDebugStep(step, result) {
     debuggerType: 'coreclr',
     inputFolder: step.inputFolder
   };
-  // Allow a test to set extra launch.json attributes (e.g. useDevTools) on the
+  // Allow a test to set extra launch.json attributes (e.g. devTools) on the
   // config that is handed to startDebugging.
   if (step.extraConfig && typeof step.extraConfig === 'object') {
     Object.assign(config, step.extraConfig);

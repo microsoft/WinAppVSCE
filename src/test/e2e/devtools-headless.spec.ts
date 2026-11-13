@@ -1,5 +1,5 @@
 /**
- * E2E: a `noOverlay` launch keeps the app toolbar hidden while the VS Code panel
+ * E2E: a `devTools: "headless"` launch keeps the app toolbar hidden while the VS Code panel
  * works. The engine shows the toolbar when the panel's first overlay call builds
  * it, so this pins the panel re-hiding it, against a real app and engine.
  */
@@ -33,7 +33,7 @@ test.beforeAll(async () => {
     if (dotnet.status !== 0) { launchFailure = 'the .NET SDK is not available'; return; }
     if (!cliSupportsDevTools()) { launchFailure = 'the winapp CLI in bin/ does not support "run --devtools"'; return; }
 
-    const workspace = createDevToolsWorkspace(ensureFixtureAppBuilt(), { noOverlay: true });
+    const workspace = createDevToolsWorkspace(ensureFixtureAppBuilt(), { headless: true });
     ctx = await launchVSCode(workspace, { openManifest: false });
     await ctx.page.keyboard.press('F5');
 });

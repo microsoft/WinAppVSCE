@@ -1,91 +1,55 @@
 /**
- * Pure launch-configuration logic for the DevTools integration.
- *
- * Lives outside extension.ts so the semantics of the `useDevTools` and
- * `noOverlay` launch.json properties are unit-testable. The extension host is
- * not importable from the unit suite, and these two flags decide whether the
- * feature engages at all, so they are worth testing directly rather than only
- * through a manual F5.
+ * Pure launch-configuration logic for the DevTools integration, kept out of
+ * extension.ts so the `devTools` launch.json property is unit-testable.
  */
+
+/** Mirrors `winapp run --devtools`. */
+export const DEVTOOLS_MODES = ['on', 'headless', 'off'] as const;
+export type DevToolsMode = typeof DEVTOOLS_MODES[number];
 
 /** The subset of a launch.json entry that the DevTools integration reads. */
 export interface DevToolsLaunchConfig {
-    /** Override the CLI's automatic DevTools choice for this configuration. */
-    useDevTools?: boolean;
+    /** Explicit DevTools mode; omitted leaves the choice to the CLI's default. */
+    devTools?: unknown;
 
-    /**
-     * Suppress the in-app overlay toolbar while keeping the engine running.
-     *
-     * The VS Code panel is a second client of the same engine, so a user who
-     * wants to inspect entirely from the editor can hide the floating toolbar
-     * without losing the panel.
-     */
-    noOverlay?: boolean;
-    devToolsInspector?: 'vscode' | 'native';
-
-    /**
-     * Run the app without attaching a debugger.
-     *
-     * Set by VS Code itself for "Run Without Debugging" (Ctrl+F5), and also
-     * writable directly in launch.json. Honouring it lets the app launch —
-     * with DevTools — without a language debugger extension installed at all,
-     * which is the only part of the flow that depends on C# Dev Kit.
-     */
+    /** Set by VS Code for "Run Without Debugging" (Ctrl+F5) or written in launch.json. */
     noDebug?: boolean;
 
-    /**
-     * The rest of the launch configuration, which we do not read here.
-     *
-     * Declared so a `vscode.DebugConfiguration` can be passed straight in: it
-     * carries an index signature of its own, and without one here TypeScript
-     * treats this as a weak type and rejects the assignment.
-     */
+    /** Lets a `vscode.DebugConfiguration` be passed straight in. */
     [key: string]: unknown;
 }
 
-/**
- * Whether DevTools should engage for a launch configuration.
- *
- * Both the CLI spawn arguments and the panel are gated on this, so they can
- * never disagree about whether the feature is on.
- */
+/** The explicit mode, or undefined when the CLI default applies. */
+export function devToolsMode(config: DevToolsLaunchConfig | undefined): DevToolsMode | undefined {
+    const mode = config?.devTools;
+    return (DEVTOOLS_MODES as readonly unknown[]).includes(mode) ? mode as DevToolsMode : undefined;
+}
+
+/** Whether the user explicitly asked for DevTools (on or headless). */
+export function requestsDevTools(config: DevToolsLaunchConfig | undefined): boolean {
+    const mode = devToolsMode(config);
+    return mode === 'on' || mode === 'headless';
+}
+
+/** Whether DevTools may engage; both the spawn arguments and the panel are gated on it. */
 export function shouldUseDevTools(config: DevToolsLaunchConfig | undefined): boolean {
-    return config?.useDevTools !== false;
+    return devToolsMode(config) !== 'off';
 }
 
-export function inspectorPreference(
-    config: DevToolsLaunchConfig | undefined,
-    setting: unknown = 'vscode',
-): 'vscode' | 'native' {
-    return (config?.devToolsInspector ?? setting) === 'native' ? 'native' : 'vscode';
-}
-
-/**
- * Whether to attach a language debugger to the launched app.
- *
- * False only for an explicit `noDebug`, so the default stays "attach". When
- * this is false the launch skips both the debugger-extension check and the
- * child debug session, which is what makes a DevTools-only run possible
- * without C# Dev Kit.
- */
+/** False only for an explicit `noDebug`, so the default stays "attach". */
 export function shouldAttachDebugger(config: DevToolsLaunchConfig | undefined): boolean {
     return config?.noDebug !== true;
 }
 
-/** Leave automatic launches to the CLI; explicit choices override its defaults. */
+/** Leave automatic launches to the CLI; an explicit mode is passed through as-is. */
 export function devToolsSpawnArgs(config: DevToolsLaunchConfig | undefined): string[] {
-    if (!shouldUseDevTools(config)) {
-        return ['--devtools', 'off'];
-    }
-
-    if (config?.noOverlay) { return ['--devtools', 'headless']; }
-    return config?.useDevTools === true ? ['--devtools', 'on'] : [];
+    const mode = devToolsMode(config);
+    return mode ? ['--devtools', mode] : [];
 }
 
 /**
- * Why an explicit DevTools launch was refused for the app's type (WPF or
- * Windows Forms), or undefined for any other failure. Such an app is relaunched
- * without DevTools rather than failing F5; the CLI names no error code, so its message is matched.
+ * Why the CLI refused an explicit DevTools launch for the app's type, or undefined.
+ * Covers app types the pre-launch check could not decide; the CLI names no error code.
  */
 export function unsupportedAppTypeReason(spawnArgs: string[], failure: string): string | undefined {
     const index = spawnArgs.indexOf('--devtools');

@@ -252,15 +252,6 @@
     "configuration": {
       "title": "WinApp",
       "properties": {
-        "winapp.devTools.inspector": {
-          "type": "string",
-          "enum": [
-            "vscode",
-            "native"
-          ],
-          "default": "vscode",
-          "description": "Preferred WinUI DevTools inspector. VS Code registers the editor panel as the app's inspector; native keeps inspection in the app."
-        },
         "winapp.appDirectories": {
           "type": "array",
           "items": {
@@ -355,7 +346,19 @@
         },
         {
           "command": "winapp.devToolsTogglePick",
-          "when": "activeWebviewPanelId == 'winapp.devToolsPanel'"
+          "when": "isWorkspaceTrusted && activeWebviewPanelId == 'winapp.devToolsPanel'"
+        },
+        {
+          "command": "winapp.attachDevTools",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.showDevTools",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.openDevToolsComments",
+          "when": "isWorkspaceTrusted"
         },
         {
           "command": "winapp.new",
@@ -583,22 +586,19 @@
                 "type": "string",
                 "description": "Both modes. Output directory for the loose layout package. Defaults to a directory named AppX inside the input directory."
               },
-              "useDevTools": {
-                "type": "boolean",
-                "description": "Override the CLI's automatic WinUI DevTools mode: true turns DevTools on even when the CLI's saved default is off, false disables it. When omitted, the CLI enables it for supported WinUI projects outside CI and falls back to launching normally if unavailable. WPF and Windows Forms apps always launch, without DevTools. The VS Code panel opens only after DevTools attaches."
-              },
-              "noOverlay": {
-                "type": "boolean",
-                "default": false,
-                "description": "Turn DevTools on headless: inspection and the VS Code panel work, but the in-app toolbar stays hidden. Like 'useDevTools: true', it overrides the CLI's saved default. Ignored when 'useDevTools' is false."
-              },
-              "devToolsInspector": {
+              "devTools": {
                 "type": "string",
                 "enum": [
-                  "vscode",
-                  "native"
+                  "on",
+                  "headless",
+                  "off"
                 ],
-                "description": "Override winapp.devTools.inspector for this launch. vscode routes app inspection requests to the editor panel; native uses the in-app inspector."
+                "enumDescriptions": [
+                  "Start WinUI DevTools with the in-app toolbar.",
+                  "Start WinUI DevTools without drawing the toolbar in the app. The VS Code panel still works.",
+                  "Launch without WinUI DevTools."
+                ],
+                "description": "WinUI DevTools mode for this launch, the same as 'winapp run --devtools'. When omitted, the CLI's default applies: on for WinUI 3 projects, unless changed with 'winapp config set run.devtools'. An app that isn't WinUI 3 launches without DevTools, with a warning if this is on or headless."
               },
               "noDebug": {
                 "type": "boolean",
@@ -654,7 +654,7 @@
     "check-devtools-schema": "npx tsx scripts/check-devtools-schema.ts",
     "check-cli-freshness": "npx tsx scripts/check-cli-freshness.ts",
     "verify-schemas": "node -e \"const fs=require('fs'),p=require('path'),d=p.join(__dirname,'schemas');if(!fs.existsSync(d)||fs.readdirSync(d).filter(f=>f.endsWith('.xsd')).length===0){console.error('ERROR: schemas/ contains no XSD files. Run npm run sync-schemas first.');process.exit(1);}console.log('schemas/ verified:',fs.readdirSync(d).filter(f=>f.endsWith('.xsd')).length,'XSD files');\"",
-    "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true,filter:(s)=>!/[\\\\\\\\/](bin|obj)([\\\\\\\\/]|$)/.test(s)})\" && mocha out/test/project-detection.test.js && node --test scripts/test/server-delivery.test.mjs scripts/test/get-build-number.test.mjs scripts/test/sync-schemas.test.mjs && npx tsx --test src/test/artifact-types.test.ts src/test/arch-detection.test.ts src/test/asset-copy-token-store.test.ts src/test/cert-utils.test.ts src/test/debugger-resolver.test.ts src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/flush-changes.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-path.test.ts src/test/manifest-validator.test.ts src/test/image-utils.test.ts src/test/project-resolver.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts src/test/shell-escape.test.ts src/test/cli-json-output.test.ts src/test/noop-debug-adapter.test.ts src/test/pack-result.test.ts src/test/pack-args.test.ts src/test/pack-cli-contract.test.ts src/test/new-command-utils.test.ts src/test/sparse-flow.test.ts src/test/sign-utils.test.ts src/test/sign-flow.test.ts src/test/tool-command-utils.test.ts src/test/xsd-parser.test.ts src/test/xml-context.test.ts src/test/intellisense-integration.test.ts src/test/intellisense-validation.test.ts src/test/schema-shared.test.ts src/test/semantic-validation.test.ts src/test/working-directory.test.ts src/test/run-target.test.ts src/test/project-runnability.test.ts src/test/run-options.test.ts src/test/launch-config.test.ts src/test/run-exit.test.ts src/test/process-tree.test.ts src/test/scan-roots.test.ts src/test/package-contributions.test.ts src/test/workspace-trust.test.ts src/test/run-cli-contract.test.ts src/test/csharp-dev-kit-notification.test.ts src/test/project-restore-notification.test.ts src/test/project-build-notification.test.ts src/test/notification-dismissal.test.ts src/test/xaml-generated-event-handler-save.test.ts src/test/xaml-prompted-text-edit.test.ts src/test/xaml-auto-restore-failure.test.ts src/test/xaml-attribute-suggestion-trigger.test.ts src/test/xaml-configuration.test.ts src/test/xaml-degraded-notification.test.ts src/test/xaml-dotnet-runtime.test.ts src/test/xaml-dotnet-host-usage.test.ts src/test/xaml-project-context-status.test.ts src/test/xaml-project-input-watcher.test.ts src/test/xaml-server-arch.test.ts src/test/xaml-server-lifecycle.test.ts src/test/xaml-workspace-activation.test.ts src/test/devtools-ndjson.test.ts src/test/devtools-protocol.test.ts src/test/devtools-source-resolver.test.ts src/test/devtools-webview.test.ts src/test/devtools-webview-dom.test.ts src/test/devtools-client.test.ts src/test/devtools-binding-handlers.test.ts src/test/devtools-launch-options.test.ts src/test/devtools-overlay.test.ts && npm run test:devtools-workflows && node --test scripts/test/cli-delivery.test.mjs",
+    "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true})\" && mocha out/test/project-detection.test.js && node --test scripts/test/server-delivery.test.mjs scripts/test/get-build-number.test.mjs scripts/test/sync-schemas.test.mjs && npx tsx --test src/test/artifact-types.test.ts src/test/arch-detection.test.ts src/test/asset-copy-token-store.test.ts src/test/cert-utils.test.ts src/test/debugger-resolver.test.ts src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/flush-changes.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-path.test.ts src/test/manifest-validator.test.ts src/test/image-utils.test.ts src/test/project-resolver.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts src/test/shell-escape.test.ts src/test/cli-json-output.test.ts src/test/noop-debug-adapter.test.ts src/test/pack-result.test.ts src/test/pack-args.test.ts src/test/pack-cli-contract.test.ts src/test/new-command-utils.test.ts src/test/sparse-flow.test.ts src/test/sign-utils.test.ts src/test/sign-flow.test.ts src/test/tool-command-utils.test.ts src/test/xsd-parser.test.ts src/test/xml-context.test.ts src/test/intellisense-integration.test.ts src/test/intellisense-validation.test.ts src/test/schema-shared.test.ts src/test/semantic-validation.test.ts src/test/working-directory.test.ts src/test/run-target.test.ts src/test/project-runnability.test.ts src/test/run-options.test.ts src/test/launch-config.test.ts src/test/run-exit.test.ts src/test/process-tree.test.ts src/test/scan-roots.test.ts src/test/package-contributions.test.ts src/test/workspace-trust.test.ts src/test/run-cli-contract.test.ts src/test/csharp-dev-kit-notification.test.ts src/test/project-restore-notification.test.ts src/test/project-build-notification.test.ts src/test/notification-dismissal.test.ts src/test/xaml-generated-event-handler-save.test.ts src/test/xaml-prompted-text-edit.test.ts src/test/xaml-auto-restore-failure.test.ts src/test/xaml-attribute-suggestion-trigger.test.ts src/test/xaml-configuration.test.ts src/test/xaml-degraded-notification.test.ts src/test/xaml-dotnet-runtime.test.ts src/test/xaml-dotnet-host-usage.test.ts src/test/xaml-project-context-status.test.ts src/test/xaml-project-input-watcher.test.ts src/test/xaml-server-arch.test.ts src/test/xaml-server-lifecycle.test.ts src/test/xaml-workspace-activation.test.ts src/test/devtools-ndjson.test.ts src/test/devtools-protocol.test.ts src/test/devtools-source-resolver.test.ts src/test/devtools-webview.test.ts src/test/devtools-webview-dom.test.ts src/test/devtools-client.test.ts src/test/devtools-binding-handlers.test.ts src/test/devtools-launch-options.test.ts src/test/devtools-overlay.test.ts && npm run test:devtools-workflows && node --test scripts/test/cli-delivery.test.mjs",
     "test:devtools-workflows": "tsx --test src/test/devtools-workflows.test.ts src/test/devtools-panel-workflows.test.ts"
   },
   "dependencies": {

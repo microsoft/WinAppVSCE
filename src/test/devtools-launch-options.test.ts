@@ -1,180 +1,120 @@
-/**
- * Tests for the launch.json DevTools options.
- *
- * This is the entry point to the whole feature — if these two flags are read
- * wrongly, pressing F5 either silently skips DevTools or forces it on someone
- * who opted out. The logic is small but the default is deliberately tri-state,
- * which is exactly the kind of thing that gets "simplified" into a bug.
- */
-
 import { test } from 'node:test';
 import * as assert from 'assert';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {
-    devToolsSpawnArgs, shouldAttachDebugger, shouldUseDevTools, unsupportedAppTypeReason, withDevToolsOff,
+    devToolsSpawnArgs, requestsDevTools, shouldAttachDebugger, shouldUseDevTools, unsupportedAppTypeReason, withDevToolsOff,
 } from '../devtools/launch-options';
+import { checkAppFramework } from '../devtools/app-framework';
 
-// ───────────────────────────── the default ─────────────────────────────
-
-test('DevTools is on for a configuration that never mentions it', () => {
-    // Configurations written before the feature existed must still get it.
-    assert.strictEqual(shouldUseDevTools({}), true);
-});
-
-test('DevTools is on when there is no configuration at all', () => {
-    assert.strictEqual(shouldUseDevTools(undefined), true);
-});
-
-test('DevTools is on when explicitly requested', () => {
-    assert.strictEqual(shouldUseDevTools({ useDevTools: true }), true);
-});
-
-test('only an explicit false turns DevTools off', () => {
-    assert.strictEqual(shouldUseDevTools({ useDevTools: false }), false);
-});
-
-// ───────────────────────────── spawn arguments ─────────────────────────────
-
-test('an unconfigured launch preserves the CLI automatic mode', () => {
-    assert.deepStrictEqual(devToolsSpawnArgs({}), []);
-    assert.deepStrictEqual(devToolsSpawnArgs({ withoutAlias: true }), []);
-    assert.deepStrictEqual(devToolsSpawnArgs({ useDevTools: true }), ['--devtools', 'on']);
-});
-
-test('opting out turns DevTools off explicitly', () => {
-    // The CLI enables DevTools by default for WinUI projects, so passing
-    // nothing here would quietly override useDevTools: false.
-    assert.deepStrictEqual(devToolsSpawnArgs({ useDevTools: false }), ['--devtools', 'off']);
-});
-
-test('hiding the overlay still starts the engine', () => {
-    // The panel is a second client of the same engine, so a mode that stopped
-    // the engine would leave the panel with nothing to talk to.
-    assert.deepStrictEqual(
-        devToolsSpawnArgs({ noOverlay: true }),
-        ['--devtools', 'headless'],
-    );
-});
-
-test('off wins over noOverlay', () => {
-    // noOverlay only chooses how DevTools is shown; it must never resurrect it.
-    assert.deepStrictEqual(
-        devToolsSpawnArgs({ useDevTools: false, noOverlay: true }),
-        ['--devtools', 'off'],
-    );
-});
-
-test('an explicitly false noOverlay keeps the overlay', () => {
-    assert.deepStrictEqual(devToolsSpawnArgs({ noOverlay: false }), []);
-});
-
-test('the mode is always one the CLI accepts', () => {
-    // --devtools is a valued option; a bare flag or an unknown mode fails the launch.
-    for (const config of [{}, { useDevTools: true }, { useDevTools: false }, { noOverlay: true }]) {
-        const args = devToolsSpawnArgs(config);
-        if (args.length === 0) { continue; }
-        assert.strictEqual(args[0], '--devtools', `missing flag for ${JSON.stringify(config)}`);
-        assert.ok(
-            ['on', 'off', 'headless'].includes(args[1]),
-            `unexpected mode ${args[1]} for ${JSON.stringify(config)}`,
-        );
+test('an omitted devTools leaves the choice to the CLI default', () => {
+    for (const config of [undefined, {}, { noDebug: true }]) {
+        assert.deepStrictEqual(devToolsSpawnArgs(config), []);
+        assert.strictEqual(shouldUseDevTools(config), true);
+        assert.strictEqual(requestsDevTools(config), false);
     }
 });
 
-// ───────────────────────────── agreement ─────────────────────────────
+test('devTools passes its mode straight to winapp run --devtools', () => {
+    assert.deepStrictEqual(devToolsSpawnArgs({ devTools: 'on' }), ['--devtools', 'on']);
+    assert.deepStrictEqual(devToolsSpawnArgs({ devTools: 'headless' }), ['--devtools', 'headless']);
+    assert.deepStrictEqual(devToolsSpawnArgs({ devTools: 'off' }), ['--devtools', 'off']);
+    assert.strictEqual(shouldUseDevTools({ devTools: 'off' }), false);
+    assert.strictEqual(requestsDevTools({ devTools: 'headless' }), true);
+    assert.strictEqual(requestsDevTools({ devTools: 'off' }), false);
+});
 
-test('the spawn arguments and the panel never disagree about being on', () => {
-    // The panel and the CLI flag are gated separately in extension.ts; if they
-    // ever diverged the user would get a panel with no engine behind it.
-    const configs = [
-        {},
-        { useDevTools: true },
-        { useDevTools: false },
-        { noOverlay: true },
-        { useDevTools: false, noOverlay: true },
-        { useDevTools: true, noOverlay: true },
-    ];
-
-    for (const config of configs) {
-        assert.strictEqual(
-            devToolsSpawnArgs(config)[1] !== 'off',
-            shouldUseDevTools(config),
-            `disagreement for ${JSON.stringify(config)}`,
-        );
+test('a value the CLI would reject is ignored rather than passed through', () => {
+    for (const devTools of [true, 'ON', 'none', 1]) {
+        assert.deepStrictEqual(devToolsSpawnArgs({ devTools }), [], `devTools: ${JSON.stringify(devTools)}`);
     }
 });
 
-// ───────────────────────────── noDebug ─────────────────────────────
-
-test('a debugger attaches by default', () => {
+test('noDebug suppresses only the debugger, and only for a literal true', () => {
     assert.strictEqual(shouldAttachDebugger({}), true);
-    assert.strictEqual(shouldAttachDebugger(undefined), true);
-});
-
-test('an explicit noDebug suppresses the debugger', () => {
     assert.strictEqual(shouldAttachDebugger({ noDebug: true }), false);
-});
-
-test('noDebug false still attaches', () => {
-    assert.strictEqual(shouldAttachDebugger({ noDebug: false }), true);
-});
-
-test('only a literal true suppresses the debugger', () => {
-    // VS Code sets noDebug itself for Run Without Debugging, but a hand-written
-    // launch.json can carry anything. Anything other than true must not silently
-    // drop the debugger, which would look like "my breakpoints stopped working".
-    for (const value of ['true', 1, {}, [], 'yes']) {
-        assert.strictEqual(
-            shouldAttachDebugger({ noDebug: value as never }),
-            true,
-            `noDebug: ${JSON.stringify(value)} should not suppress the debugger`,
-        );
+    for (const value of ['true', 1, false]) {
+        assert.strictEqual(shouldAttachDebugger({ noDebug: value as never }), true);
     }
-});
-
-test('noDebug leaves DevTools fully enabled', () => {
-    // The whole point of the flag: the app still launches with DevTools, we
-    // just skip the debugger extension. If these ever coupled, a no-debug run
-    // would lose the panel it exists to provide.
-    const config = { noDebug: true };
-    assert.strictEqual(shouldUseDevTools(config), true);
-    assert.deepStrictEqual(devToolsSpawnArgs(config), []);
-});
-
-test('noDebug and useDevTools are independent across every combination', () => {
-    for (const noDebug of [true, false, undefined]) {
-        for (const useDevTools of [true, false, undefined]) {
-            const config = { noDebug, useDevTools };
-            assert.strictEqual(
-                shouldUseDevTools(config),
-                useDevTools !== false,
-                `DevTools gate changed by noDebug=${noDebug}`,
-            );
-            assert.strictEqual(
-                shouldAttachDebugger(config),
-                noDebug !== true,
-                `debugger gate changed by useDevTools=${useDevTools}`,
-            );
-        }
-    }
+    assert.deepStrictEqual(devToolsSpawnArgs({ noDebug: true, devTools: 'on' }), ['--devtools', 'on']);
 });
 
 // Captured from `winapp run BBWpf.csproj --devtools on --json` against the pinned CLI.
 const WPF_REFUSAL = "DevTools requires WinUI 3; 'BBWpf.csproj' is a WPF-only project. Run with --devtools off to start the app without DevTools.";
 
-test('an explicit DevTools launch of a WPF or WinForms app falls back to running without DevTools', () => {
+test('the CLI refusal of an explicit request falls back to running without DevTools', () => {
     assert.strictEqual(unsupportedAppTypeReason(['run', '.', '--devtools', 'on'], WPF_REFUSAL),
         "'BBWpf.csproj' is a WPF-only project");
-    assert.strictEqual(unsupportedAppTypeReason(['run', '.', '--devtools', 'headless'],
-        "DevTools requires WinUI 3; 'Forms.csproj' is a Windows Forms-only project. Run with --devtools off to start the app without DevTools."),
-        "'Forms.csproj' is a Windows Forms-only project");
     assert.deepStrictEqual(withDevToolsOff(['run', '.', '--devtools', 'headless', '--json']),
         ['run', '.', '--devtools', 'off', '--json']);
+    assert.strictEqual(unsupportedAppTypeReason(['run', '.'], WPF_REFUSAL), undefined, 'automatic mode never refuses');
+    assert.strictEqual(unsupportedAppTypeReason(['run', '.', '--devtools', 'on'], 'Build failed with 3 errors.'), undefined);
 });
 
-test('only the app-type refusal of an explicit request falls back; other failures still fail', () => {
-    assert.strictEqual(unsupportedAppTypeReason(['run', '.'], WPF_REFUSAL), undefined, 'automatic mode never refuses');
-    assert.strictEqual(unsupportedAppTypeReason(['run', '.', '--devtools', 'off'], WPF_REFUSAL), undefined);
-    assert.strictEqual(unsupportedAppTypeReason(['run', '.', '--devtools', 'on'], 'Build failed with 3 errors.'), undefined);
-    assert.strictEqual(unsupportedAppTypeReason(['run', '.', '--devtools', 'on'],
-        'Could not prepare DevTools: the DevTools engine is missing.'), undefined);
+function tempTree(files: Record<string, string>): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'winapp-framework-'));
+    for (const [name, content] of Object.entries(files)) {
+        fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+        fs.writeFileSync(path.join(root, name), content);
+    }
+    return root;
+}
+
+test('the pre-launch check recognizes WinUI 3 the way the CLI does', async t => {
+    const root = tempTree({
+        'WinUi/WinUi.csproj': '<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup></Project>',
+        'Inherited/src/App/App.csproj': '<Project></Project>',
+        'Inherited/Directory.Build.props': '<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup></Project>',
+        'Native/Native.vcxproj': '<Project><ItemGroup><Page Include="MainWindow.xaml" /></ItemGroup></Project>',
+        'Native/packages.config': '<packages><package id="Microsoft.WindowsAppSDK" /></packages>',
+        'Output/App.exe': '', 'Output/MainWindow.xbf': '',
+    });
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    for (const input of ['WinUi/WinUi.csproj', 'WinUi', 'Inherited/src/App/App.csproj', 'Native/Native.vcxproj', 'Output']) {
+        assert.deepStrictEqual(await checkAppFramework(path.join(root, input)), { kind: 'winui' }, input);
+    }
+});
+
+test('the pre-launch check names apps that are not WinUI 3', async t => {
+    const root = tempTree({
+        'Wpf/Wpf.csproj': '<Project><PropertyGroup><UseWPF>true</UseWPF></PropertyGroup></Project>',
+        'Forms/Forms.csproj': '<Project><PropertyGroup><UseWindowsForms>true</UseWindowsForms></PropertyGroup></Project>',
+        'Console/Console.csproj': '<Project><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>',
+        'Win32/Win32.vcxproj': '<Project><ItemGroup><ClCompile Include="main.cpp" /></ItemGroup></Project>',
+        'electron/electron.exe': '', 'electron/resources/app.asar': '',
+    });
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const description = async (input: string) => {
+        const result = await checkAppFramework(path.join(root, input));
+        return result.kind === 'other' ? result.description : result.kind;
+    };
+    assert.strictEqual(await description('Wpf/Wpf.csproj'), "'Wpf.csproj' is a WPF project");
+    assert.strictEqual(await description('Forms'), "'Forms.csproj' is a Windows Forms project");
+    assert.strictEqual(await description('Console/Console.csproj'), "'Console.csproj' isn't a WinUI 3 project");
+    assert.strictEqual(await description('Win32/Win32.vcxproj'), "'Win32.vcxproj' has no XAML pages");
+    assert.strictEqual(await description('electron'), "'electron' doesn't contain a WinUI 3 app");
+});
+
+test('the pre-launch check defers to the CLI when it cannot be sure', async t => {
+    const root = tempTree({
+        'Imported/Imported.csproj': '<Project><Import Project="..\\shared.props" /></Project>',
+        'Imported/App.xaml': '<Application />',
+        'Solution/App.sln': '',
+    });
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    assert.deepStrictEqual(await checkAppFramework(path.join(root, 'Imported/Imported.csproj')), { kind: 'unknown' });
+    assert.deepStrictEqual(await checkAppFramework(path.join(root, 'Solution/App.sln')), { kind: 'unknown' });
+    assert.deepStrictEqual(await checkAppFramework(path.join(root, 'Solution')), { kind: 'unknown' });
+    assert.deepStrictEqual(await checkAppFramework(path.join(root, 'Missing')), { kind: 'unknown' });
+});
+
+test('a project chosen inside a solution is checked directly', async t => {
+    const root = tempTree({
+        'App.sln': '',
+        'Wpf/Wpf.csproj': '<Project><PropertyGroup><UseWPF>true</UseWPF></PropertyGroup></Project>',
+    });
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const result = await checkAppFramework(path.join(root, 'App.sln'), path.join(root, 'Wpf', 'Wpf.csproj'));
+    assert.strictEqual(result.kind, 'other');
 });

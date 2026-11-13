@@ -169,7 +169,7 @@ function walkArgs(args: string[]): Set<string> {
 
 describe('buildRunArgs matches the real winapp run schema', { skip: skipReason }, () => {
 	it('checks the complete debug launch arguments, including DevTools overrides', () => {
-		for (const config of [{}, { useDevTools: true }, { useDevTools: false }, { noOverlay: true }]) {
+		for (const config of [{}, { devTools: 'on' }, { devTools: 'headless' }, { devTools: 'off' }]) {
 			walkArgs([...buildRunArgs({ input: 'C:\\src\\App\\App.csproj', json: true }), ...devToolsSpawnArgs(config)]);
 		}
 	});

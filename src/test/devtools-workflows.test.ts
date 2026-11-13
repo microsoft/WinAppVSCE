@@ -3,7 +3,6 @@ import * as assert from 'node:assert/strict';
 import * as path from 'path';
 import { cliErrorText, parseApps, parseSavedComments } from '../devtools/devtools-cli';
 import { existingSourceRoot, matchSourceRoot } from '../devtools/source-resolver';
-import { inspectorPreference } from '../devtools/launch-options';
 import { findTreeNode, replaceSubtree, subtreeRoot } from '../devtools/tree-model';
 import { createDevToolsWorkspace } from './e2e/devtools-fixture';
 import { readFileSync, rmSync } from 'node:fs';
@@ -14,13 +13,6 @@ test('the live fixture asks the owning CLI to unregister on exit', () => {
         const launch = JSON.parse(readFileSync(path.join(workspace, '.vscode', 'launch.json'), 'utf8'));
         assert.equal(launch.configurations[0].unregisterOnExit, true);
     } finally { rmSync(workspace, { recursive: true, force: true }); }
-});
-
-test('inspector preference respects launch override, setting, and VS Code default', () => {
-    assert.equal(inspectorPreference(undefined), 'vscode');
-    assert.equal(inspectorPreference({}, 'native'), 'native');
-    assert.equal(inspectorPreference({ devToolsInspector: 'vscode' }, 'native'), 'vscode');
-    assert.equal(inspectorPreference({ devToolsInspector: 'native' }), 'native');
 });
 
 test('app discovery accepts attached and available apps but rejects malformed output', () => {

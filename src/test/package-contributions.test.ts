@@ -248,7 +248,7 @@ describe('package.json contributions', () => {
 		// keys the adapter itself consumes (including the DevTools launch keys).
 		const adapterOwned = new Set([
 			'input', 'inputFolder', 'debuggerType', 'workingDirectory', 'port',
-			'useDevTools', 'noOverlay', 'devToolsInspector', 'noDebug'
+			'devTools', 'noDebug'
 		]);
 		const declared = new Set(Object.keys(properties).filter(name => !adapterOwned.has(name)));
 

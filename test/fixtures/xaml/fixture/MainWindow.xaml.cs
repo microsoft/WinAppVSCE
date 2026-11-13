@@ -11,7 +11,7 @@ namespace SmokeFixture;
 /// </summary>
 public sealed partial class MainWindow : Window
 {
-    public MainWindow()
+    public MainWindow(Type? startPage = null)
     {
         InitializeComponent();
 
@@ -21,6 +21,6 @@ public sealed partial class MainWindow : Window
         AppWindow.SetIcon("Assets/AppIcon.ico");
 
         // Navigate the root frame to the landing page on startup.
-        RootFrame.Navigate(typeof(SmokePage));
+        RootFrame.Navigate(startPage ?? typeof(SmokePage));
     }
 }

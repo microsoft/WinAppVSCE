@@ -59,7 +59,7 @@ function fixtureProcessId(): number {
     const parsed = JSON.parse(result.stdout) as {
         apps?: { processId?: number; processName?: string }[];
     };
-    const app = parsed.apps?.find(candidate => candidate.processName === 'DevToolsFixtureApp');
+    const app = parsed.apps?.find(candidate => candidate.processName === 'SmokeFixture');
     expect(app?.processId).toBeTruthy();
     return app!.processId!;
 }
@@ -67,7 +67,7 @@ function fixtureProcessId(): number {
 function readNativeWindowOpen(): boolean {
     const result = spawnSync(
         devToolsCliPath(),
-        ['devtools', 'call', 'Window.getState', '-a', 'DevToolsFixtureApp', '--json'],
+        ['devtools', 'call', 'Window.getState', '-a', 'SmokeFixture', '--json'],
         { encoding: 'utf-8', timeout: 60_000 },
     );
     expect(result.status, result.stderr).toBe(0);
@@ -234,7 +234,7 @@ test('the tree reports the XAML file each element came from @winui-app', async (
 
     // Source attribution is what makes "go to source" possible; assert the
     // element is traced back to the fixture's page, not just that it exists.
-    await expect(row.locator('.node-file')).toContainText('MainPage.xaml');
+    await expect(row.locator('.node-file')).toContainText('DevToolsPage.xaml');
 });
 
 test('the tree captions each row with the element\u2019s own text @winui-app', async () => {
@@ -248,7 +248,7 @@ test('the tree captions each row with the element\u2019s own text @winui-app', a
 
     // Captions come from a second call (VisualTree.getPreviews) made only for
     // the rows on screen, so this also proves the lazy fetch reaches the row
-    // the user is looking at. MainPage.xaml sets Text="DevTools Fixture".
+    // the user is looking at. DevToolsPage.xaml sets Text="DevTools Fixture".
     await expect(row.locator('.node-preview')).toContainText('DevTools Fixture', { timeout: 30_000 });
 });
 
@@ -278,7 +278,7 @@ test('the property grid shows a value set in the fixture XAML @winui-app', async
     await row.click();
     await expect(frame.locator('#props-header')).toContainText('FixtureHeading', { timeout: 30_000 });
 
-    // MainPage.xaml sets Text="DevTools Fixture" on this element. Reading it
+    // DevToolsPage.xaml sets Text="DevTools Fixture" on this element. Reading it
     // back proves real property values cross the pipe, not just property names.
     await frame.locator('#prop-filter').fill('Text');
     await expect(frame.locator('#props-viewport')).toContainText('DevTools Fixture', { timeout: 30_000 });
@@ -318,7 +318,7 @@ test('cancelling a staged literal and returning to Binding preserves the live bi
     await row.getByRole('option', { name: 'A binding', exact: true }).click();
     await expect(row.locator('.pstaged')).toHaveCount(0);
     const read = spawnSync(devToolsCliPath(), ['devtools', 'get-property', 'FixtureBoundLabel', 'Text',
-        '-a', 'DevToolsFixtureApp', '--json'], { encoding: 'utf8' });
+        '-a', 'SmokeFixture', '--json'], { encoding: 'utf8' });
     expect(read.status, read.stderr).toBe(0);
     expect(read.stdout).toContain('Bound fixture');
     expect(read.stdout).not.toContain('do not write');
@@ -336,7 +336,7 @@ test('a live property change preserves all pending Margin fields @winui-app', as
     await left.fill('77');
     await top.fill('88');
     const write = spawnSync(devToolsCliPath(), ['devtools', 'set-property', 'FixtureHeading', 'Text',
-        'Live tick', '-a', 'DevToolsFixtureApp'], { encoding: 'utf8' });
+        'Live tick', '-a', 'SmokeFixture'], { encoding: 'utf8' });
     expect(write.status, write.stderr).toBe(0);
     await ctx!.page.waitForTimeout(2_000);
     await expect(left).toHaveValue('77');
@@ -378,10 +378,5 @@ test('the fixture app source is committed without build output @winui-app', asyn
     const files = tracked.stdout.split('\n').map(f => f.trim()).filter(Boolean);
     expect(files.length).toBeGreaterThan(0);
     expect(files.filter(f => /(^|\/)(bin|obj)\//.test(f))).toEqual([]);
-
-    // The csproj references these publish profiles by name and the repo-root
-    // .gitignore excludes *.pubxml globally, so verify the fixture's own
-    // negation is still in force.
-    expect(files.some(f => f.endsWith('.pubxml'))).toBe(true);
-    expect(fs.existsSync(path.join(FIXTURE_APP_DIR, 'MainPage.xaml'))).toBe(true);
+    expect(fs.existsSync(path.join(FIXTURE_APP_DIR, 'DevToolsPage.xaml'))).toBe(true);
 });

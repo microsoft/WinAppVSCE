@@ -45,9 +45,10 @@ import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provid
 import { activateXaml, deactivateXaml } from './xaml/xamlLanguageService';
 import { DevToolsPanel } from './devtools/devtools-panel';
 import {
-	devToolsSpawnArgs, inspectorPreference, shouldAttachDebugger, shouldUseDevTools,
+	devToolsSpawnArgs, requestsDevTools, shouldAttachDebugger, shouldUseDevTools,
 	unsupportedAppTypeReason, withDevToolsOff,
 } from './devtools/launch-options';
+import { checkAppFramework } from './devtools/app-framework';
 import { registerDevToolsCommands } from './devtools/commands';
 import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
 import { SchemaModel } from './manifest-schema/schema-model';
@@ -1385,6 +1386,14 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 	}
 }
 
+/** An explicit DevTools request for an app that isn't WinUI 3; the app still runs. */
+function warnDevToolsUnsupported(description: string): void {
+	getWinappOutputChannel().appendLine(`DevTools is not supported for this app: ${description}. Launching without DevTools.`);
+	void vscode.window.showWarningMessage(
+		`WinUI DevTools only works with WinUI 3 apps, and ${description}. The app was started without DevTools; `
+		+ 'remove "devTools" from this launch configuration to hide this warning.');
+}
+
 /**
  * The user dismissed a prompt. Not a failure, so it must not be reported as
  * one: an error toast for "I pressed Escape" is noise, and VS Code's own
@@ -1480,24 +1489,28 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// what the interactive picker resolved.
 			runOptions.project = resolveRunProject(runOptions.project, pickedProject);
 
-			// WinUI DevTools is enabled unless explicitly opted out, so
-			// `winapp devtools ...` and the panel can drive the running app.
-			const baseSpawnArgs = [...buildRunArgs(runOptions), ...devToolsSpawnArgs(config)];
+			// An explicit DevTools request for an app that isn't WinUI 3 still starts the app.
+			let devToolsArgs = devToolsSpawnArgs(config);
+			if (requestsDevTools(config)) {
+				const framework = await checkAppFramework(runOptions.input, runOptions.project);
+				if (framework.kind === 'other') {
+					devToolsArgs = ['--devtools', 'off'];
+					warnDevToolsUnsupported(framework.description);
+				}
+			}
+			const baseSpawnArgs = [...buildRunArgs(runOptions), ...devToolsArgs];
 
 			const outputChannel = getWinappOutputChannel();
 			let launched: Awaited<ReturnType<typeof launchRunProcess>>;
 			try {
 				launched = await launchRunProcess({ cliPath, args: baseSpawnArgs, cwd, outputChannel });
 			} catch (launchError) {
-				// DevTools is WinUI-only; an explicit request for another app type still starts the app.
+				// Covers app types the check above couldn't decide, such as a WPF project in a solution.
 				const reason = launchError instanceof WinAppRunFailure
 					? unsupportedAppTypeReason(baseSpawnArgs, launchError.message) : undefined;
 				if (!reason) { throw launchError; }
-				outputChannel.appendLine(`DevTools is not supported for this app: ${reason}. Relaunching without DevTools.`);
 				launched = await launchRunProcess({ cliPath, args: withDevToolsOff(baseSpawnArgs), cwd, outputChannel });
-				void vscode.window.showWarningMessage(
-					`WinUI DevTools only supports WinUI 3 apps, and ${reason}. The app was started without DevTools; `
-					+ 'remove "useDevTools" and "noOverlay" from this launch configuration to hide this warning.');
+				warnDevToolsUnsupported(reason);
 			}
 			const { processId, runProcess, warning, devToolsAttached } = launched;
 			// The app is running; this is a partial failure such as DevTools not attaching.
@@ -1579,8 +1592,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// DevTools panel for the same process. Failures here are reported
 			// inside the panel so a DevTools problem never takes down a working
 			// debug session.
-			if (devToolsAttached && shouldUseDevTools(config) && inspectorPreference(config,
-				vscode.workspace.getConfiguration('winapp.devTools', folder.uri).get('inspector')) === 'vscode') {
+			if (devToolsAttached && shouldUseDevTools(config)) {
 				void DevToolsPanel.show(
 					processId,
 					vscode.Uri.file(this.extensionPath),

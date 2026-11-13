@@ -30,15 +30,14 @@ const shownDocuments: Record<string, unknown>[] = [];
 const uri = (fsPath: string) => ({ fsPath, toString: () => fsPath });
 const registered = new Map<string, () => Promise<void>>();
 let projects: ReturnType<typeof uri>[] = [];
-let inspector = 'vscode';
 const stub = {
     ViewColumn: { Active: -1, Beside: -2 },
     Uri: { file: uri, joinPath: (base: { fsPath: string }, ...parts: string[]) => uri(path.join(base.fsPath, ...parts)) },
     Range: class { constructor(readonly startLine: number, readonly startColumn: number, readonly endLine: number, readonly endColumn: number) {} },
     workspace: {
-        workspaceFolders: [], fs: { stat: async () => ({}) },
+        workspaceFolders: [], isTrusted: true, fs: { stat: async () => ({}) },
         findFiles: async () => projects,
-        getConfiguration: () => ({ get: () => inspector }),
+        getConfiguration: () => ({ get: () => undefined }),
         onDidSaveTextDocument: () => disposable,
     },
     commands: {
@@ -296,17 +295,17 @@ test('source navigation opens a stable adjacent group, not another group on each
 test('attach discovers apps and passes the matching workspace project as source root', async t => {
     const root = path.resolve('workspace', 'Gallery');
     projects = [uri(path.join(root, 'Gallery.csproj')), uri(path.resolve('workspace', 'Other', 'Other.csproj'))];
-    inspector = 'native';
     const run = t.mock.method(DevToolsCli.prototype, 'run', async (args: string[]) =>
         args[1] === 'list' ? { apps: [{ processId: 123, processName: 'Gallery', attached: false }] } : { ok: true });
+    t.after(() => DevToolsPanel.disposeAll());
     commandsModule.registerDevToolsCommands({
         extensionPath: process.cwd(), extensionUri, subscriptions: [],
     } as never);
     await registered.get('winapp.attachDevTools')!();
     assert.deepEqual(run.mock.calls[1].arguments, [[
-        'devtools', 'attach', '--pid', '123', '--source-root', root, '--show-window',
+        'devtools', 'attach', '--pid', '123', '--source-root', root, '--overlay',
     ], root]);
-    inspector = 'vscode';
+    assert.equal(DevToolsPanel.knownSourceRoot(123), root);
 });
 
 test('attach keeps the project folder an app already reports instead of failing', async t => {
