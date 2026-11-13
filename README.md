@@ -120,9 +120,9 @@ You can press F5 without creating `launch.json` first: WinApp contributes a defa
 4. It launches your app via `winapp run` to give it package identity, using the manifest specified via `manifest` in `launch.json` or auto-detected by the CLI.
 5. A child debug session attaches to the running process using the debugger you specified.
 
-> **Point `input` at a project to get builds for free.** When `input` is a `.csproj`, `.sln`, or `.slnx`, `winapp run` restores and builds before launching, so your code changes are always reflected. When `input` is a build output folder, WinApp **does not** build; you must rebuild yourself (or use a `preLaunchTask`) after making code changes.
+> **Point `input` at a project to get builds for free.** When `input` is a `.csproj`, `.vcxproj`, `.sln`, or `.slnx`, `winapp run` restores and builds before launching, so your code changes are always reflected. When `input` is a build output folder, WinApp **does not** build; you must rebuild yourself (or use a `preLaunchTask`) after making code changes.
 
-> When `input` is a build output folder, you can automate the build step by adding a `preLaunchTask` to your `launch.json` configuration. This tells VS Code to run a build task before every debug session, so your changes are always compiled before launch. Apps without a project file, such as Electron, Rust, and C++ apps, always run this way, so a `preLaunchTask` is the way to keep their builds current.
+> When `input` is a build output folder, you can automate the build step by adding a `preLaunchTask` to your `launch.json` configuration. This tells VS Code to run a build task before every debug session, so your changes are always compiled before launch. Apps without a project file, such as Electron, Rust, and CMake-based C++ apps, always run this way, so a `preLaunchTask` is the way to keep their builds current.
 >
 > 1. Define a build task in `.vscode/tasks.json`. Any build command works; this example uses .NET, but `npm run build`, `cargo build`, or an MSBuild invocation work the same way:
 >    ```jsonc
@@ -180,7 +180,7 @@ You can press F5 without creating `launch.json` first: WinApp contributes a defa
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `input` | string | | What to run: a project (`.csproj`), a solution (`.sln`/`.slnx`), a directory containing one, or a build output folder (e.g., `${workspaceFolder}/bin/Debug/net8.0-windows10.0.22621`). If not set, you will be prompted to select a target. |
+| `input` | string | | What to run: a project (`.csproj` or C++ `.vcxproj`), a solution (`.sln`/`.slnx`), a directory containing one, or a build output folder (e.g., `${workspaceFolder}/bin/Debug/net8.0-windows10.0.22621`). If not set, you will be prompted to select a target. |
 | `inputFolder` | string | | **Deprecated.** Use `input`, which also accepts projects and solutions. Still honored for existing configurations; if both are set, `input` wins. |
 | `project` | string | | *Project mode only.* Selects which project to launch, by name or path, when `input` is a solution or a directory containing more than one runnable app project. |
 | `configuration` | string | `Debug` | *Project mode only.* Build configuration to use. |
@@ -248,7 +248,7 @@ When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer 
 | **Find All References / Rename** | For `x:Name` declarations and resource keys. Rename declines ambiguous external-dictionary references and theme variants rather than making partial edits. |
 | **Formatting** | Whole-document and range formatting. |
 | **Semantic tokens** | Type-aware colorization layered on top of the TextMate grammar. |
-| **Code actions** | Press **Ctrl+.** to import and qualify unresolved types, add namespace declarations, insert `x:DataType`, repair bindings, names, and Setter properties, or generate event handlers. |
+| **Code actions** | Press **Ctrl+.** to fix misspelled types, properties, and values, import and qualify unresolved types, add namespace declarations, insert `x:DataType`, repair bindings, names, and Setter properties, or generate event handlers. |
 
 The server starts automatically when you open a `.xaml` file. It ships as a self-contained native executable, so it runs whether or not .NET is installed — .NET is a requirement of the *project-aware* features, not of the editor.
 

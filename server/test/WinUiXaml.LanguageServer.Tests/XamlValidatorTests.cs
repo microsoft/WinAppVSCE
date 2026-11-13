@@ -530,6 +530,17 @@ public class XamlValidatorTests
     }
 
     [Fact]
+    public void MisspelledBooleanValue_SuggestsTrueOrFalse()
+    {
+        var diagnostic = Assert.Single(
+            Validate(Page("""IsEnabled="Flase" """)),
+            d => d.Code == XamlValidator.InvalidAttributeValueCode);
+
+        var data = Assert.IsType<DiagnosticData>(diagnostic.Data);
+        Assert.Equal("False", Assert.Single(data.Suggestions));
+    }
+
+    [Fact]
     public void MisspelledKnownThemeResource_IsReportedWithSuggestion()
     {
         var diagnostics = Validate(

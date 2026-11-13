@@ -304,6 +304,9 @@ internal sealed class DiagnosticData
 {
     [JsonPropertyName("bad")] public string Bad { get; set; } = string.Empty;
     [JsonPropertyName("suggestions")] public string[] Suggestions { get; set; } = System.Array.Empty<string>();
+
+    /// <summary>True when the suggestion completes a partial name or shares whole words with it rather than fixing a typo.</summary>
+    [JsonPropertyName("related")] public bool? Related { get; set; }
 }
 
 // --- Hover ------------------------------------------------------------------

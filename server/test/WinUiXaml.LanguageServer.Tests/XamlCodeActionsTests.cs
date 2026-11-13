@@ -450,6 +450,25 @@ public class XamlCodeActionsTests
     }
 
     [Fact]
+    public void WireShape_RelatedSuggestionsFromJson_AreListedInOrderWithoutAPreferredFix()
+    {
+        var data = new DiagnosticData
+        {
+            Bad = "BackgroundColor",
+            Suggestions = ["Background", "RowBackground", "BackgroundSizing"],
+            Related = true,
+        };
+        var json = JsonSerializer.SerializeToElement(data, LspJson.Options);
+        var ctx = Context(Diag(XamlValidator.UnknownAttributeCode, R(0, 1, 16), json));
+
+        var actions = XamlCodeActions.Compute(Uri, null, ctx);
+        Assert.Equal(
+            ["Change 'BackgroundColor' to 'Background'", "Change 'BackgroundColor' to 'RowBackground'", "Change 'BackgroundColor' to 'BackgroundSizing'"],
+            actions.Select(action => action.Title));
+        Assert.All(actions, action => Assert.Null(action.IsPreferred));
+    }
+
+    [Fact]
     public void MultipleDiagnostics_EachContributeIndependently()
     {
         var ctx = Context(
@@ -937,7 +956,7 @@ public class XamlCodeActionsTests
         Assert.Equal(2, actions.Count);
         Assert.Contains(actions, action => action.Title == "Import 'InfoCard' from 'Alpha.Controls'");
         Assert.Contains(actions, action => action.Title == "Import 'InfoCard' from 'Beta.Controls'");
-        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
+        Assert.All(actions, action => Assert.False(action.IsPreferred == true));
     }
 
     [Fact]
@@ -1009,7 +1028,7 @@ public class XamlCodeActionsTests
         var spelling = actions.Single(action => action.Title.StartsWith("Change ", System.StringComparison.Ordinal));
 
         Assert.True(import.IsPreferred);
-        Assert.NotEqual(true, spelling.IsPreferred);
+        Assert.False(spelling.IsPreferred == true);
     }
 
     [Theory]
@@ -1437,6 +1456,82 @@ public class XamlCodeActionsTests
         Assert.Equal("<Page xmlns=\"using:TestApp\" IsEnabled=\"False\"/>", ApplyEdit(doc, edit));
     }
 
+    [Fact]
+    public void MisspelledBooleanLiteral_PrefersSpellingOverDefault()
+    {
+        var typeSystem = BuildWinUiTypeSystem("""
+            namespace TestApp
+            {
+                public class Page : Microsoft.UI.Xaml.DependencyObject
+                {
+                    public bool IsEnabled { get; set; }
+                }
+            }
+            """);
+        var doc = new TextDocument(Uri, "<Page xmlns=\"using:TestApp\" IsEnabled=\"Ture\"/>");
+        var diagnostic = Assert.Single(
+            XamlValidator.Validate(doc, typeSystem),
+            item => item.Code == XamlValidator.InvalidAttributeValueCode);
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem));
+        Assert.Equal("Change 'Ture' to 'True'", action.Title);
+        Assert.True(action.IsPreferred);
+        Assert.Equal(
+            "<Page xmlns=\"using:TestApp\" IsEnabled=\"True\"/>",
+            ApplyEdit(doc, Assert.Single(action.Edit!.Changes[Uri])));
+    }
+
+    [Theory]
+    [InlineData("Visibility=\"Visbile/>\n")]
+    [InlineData("IsEnabled=\"Ture/>\n")]
+    [InlineData("IsEnabled=\"Ture Tag=\"x\"/>")]
+    public void UnterminatedValueSwallowingMarkup_OffersNoValueReplacement(string attribute)
+    {
+        var typeSystem = BuildWinUiTypeSystem("""
+            namespace TestApp
+            {
+                public enum Vis { Visible, Collapsed }
+                public class Page : Microsoft.UI.Xaml.DependencyObject
+                {
+                    public Vis Visibility { get; set; }
+                    public bool IsEnabled { get; set; }
+                }
+            }
+            """);
+        var doc = new TextDocument(Uri, "<Page xmlns=\"using:TestApp\" " + attribute);
+        var diagnostic = Assert.Single(
+            XamlValidator.Validate(doc, typeSystem),
+            item => item.Code == XamlValidator.InvalidAttributeValueCode);
+
+        Assert.Empty(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem));
+    }
+
+    [Fact]
+    public void RelatedPropertyName_IsAnUnpreferredRenameThatKeepsTheValue()
+    {
+        var typeSystem = BuildWinUiTypeSystem("""
+            namespace TestApp
+            {
+                public enum TableViewFrozenEdge { None, Leading, Trailing }
+                public class TableViewTemplateColumn : Microsoft.UI.Xaml.DependencyObject
+                {
+                    public TableViewFrozenEdge FrozenEdge { get; set; }
+                }
+            }
+            """);
+        var doc = new TextDocument(Uri, "<TableViewTemplateColumn xmlns=\"using:TestApp\" FrozenEdgeCount=\"1\"/>");
+        var diagnostic = Assert.Single(
+            XamlValidator.Validate(doc, typeSystem),
+            item => item.Code == XamlValidator.UnknownAttributeCode);
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem));
+        Assert.Equal("Change 'FrozenEdgeCount' to 'FrozenEdge'", action.Title);
+        Assert.Null(action.IsPreferred);
+        var fixedDoc = new TextDocument(Uri, ApplyEdit(doc, Assert.Single(action.Edit!.Changes[Uri])));
+        Assert.Equal("<TableViewTemplateColumn xmlns=\"using:TestApp\" FrozenEdge=\"1\"/>", fixedDoc.Text);
+        Assert.Empty(XamlValidator.Validate(fixedDoc, typeSystem));
+    }
+
     [Theory]
     [InlineData("byte", "0")]
     [InlineData("sbyte", "0")]
@@ -1515,7 +1610,7 @@ public class XamlCodeActionsTests
             .ToArray();
 
         Assert.Equal(2, actions.Length);
-        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
+        Assert.All(actions, action => Assert.False(action.IsPreferred == true));
     }
 
     [Fact]
