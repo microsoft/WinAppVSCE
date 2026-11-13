@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    In-VS integration test runner. Installs the product VSIX + the test-only agent VSIX into the dedicated
+    WinUIPreviewTest root suffix, launches devenv, and drives it over the agent's named pipe.
+    Run through ..\Test-VsIntegration.ps1 (hidden desktop), not directly.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>WinUIXamlPreview.IntegrationTests</AssemblyName>
+    <RootNamespace>WinUIXamlPreview.IntegrationTests</RootNamespace>
+    <PlatformTarget>x64</PlatformTarget>
+    <DefaultItemExcludes>$(DefaultItemExcludes);TestResults\**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="10.0.9" />
+  </ItemGroup>
+</Project>
