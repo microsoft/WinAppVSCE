@@ -5,6 +5,64 @@ namespace WinUiXaml.LanguageServer.Tests;
 public sealed class AsyncSingleFlightCacheTests
 {
     [Fact]
+    public async Task OnlyFinishedLoadsAreEligibleForExplicitFailureRetry()
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>(cacheFailures: true);
+        var release = new TaskCompletionSource<Value?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.False(cache.HasCompleted("page"));
+        var load = cache.GetOrStart("page", () => release.Task);
+        Assert.False(cache.HasCompleted("page"));
+        release.SetResult(null);
+        await load;
+        Assert.True(cache.HasCompleted("page"));
+        cache.Invalidate("page");
+        Assert.False(cache.HasCompleted("page"));
+    }
+
+    [Fact]
+    public async Task CachedFailureDoesNotReloadUntilAnExplicitInvalidation()
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>(cacheFailures: true);
+        var loads = 0;
+        Task<Value?> Fail()
+        {
+            loads++;
+            return Task.FromResult<Value?>(null);
+        }
+
+        for (var edit = 0; edit < 20; edit++)
+        {
+            Assert.Null(await cache.GetOrStart("page", Fail));
+        }
+        Assert.Equal(1, loads);
+        cache.Invalidate("page");
+        Assert.Null(await cache.GetOrStart("page", Fail));
+        Assert.Equal(2, loads);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedRefreshRetainsTheLastGoodContext(bool throws)
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>(cacheFailures: true);
+        var original = new Value("last good");
+        await cache.GetOrStart("page", () => Task.FromResult<Value?>(original));
+        cache.RestartAllPreservingLatest();
+        if (throws)
+        {
+            await Assert.ThrowsAsync<IOException>(() => cache.GetOrStart("page",
+                () => Task.FromException<Value?>(new IOException("locked"))));
+        }
+        else
+        {
+            Assert.Null(await cache.GetOrStart("page", () => Task.FromResult<Value?>(null)));
+        }
+        Assert.True(cache.TryGetStale("page", out var retained));
+        Assert.Same(original, retained);
+    }
+
+    [Fact]
     public async Task ConcurrentRequestsShareOneLoadPerKey()
     {
         var cache = new AsyncSingleFlightCache<string, Value>();

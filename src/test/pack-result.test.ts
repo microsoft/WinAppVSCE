@@ -11,6 +11,28 @@ import {
 } from '../pack-result';
 
 describe('parsePackagedArtifactPath', () => {
+	it('extracts an identity package path wrapped onto the following line', () => {
+		// Sparse packs emit a distinct marker and wrap exactly like the others.
+		const output = [
+			'Creating identity package...\r',
+			'  📦 Identity package: \r',
+			'C:\\Users\\me\\My Project\\sparse\\My App.identity.msix\r',
+			''
+		].join('\n');
+
+		assert.equal(
+			parsePackagedArtifactPath(output),
+			'C:\\Users\\me\\My Project\\sparse\\My App.identity.msix'
+		);
+	});
+
+	it('extracts an inline identity package path', () => {
+		assert.equal(
+			parsePackagedArtifactPath('  📦 Identity package: C:\\out\\Notepad.identity.msix\n'),
+			'C:\\out\\Notepad.identity.msix'
+		);
+	});
+
 	it('extracts a following-line path that contains spaces', () => {
 		const output = [
 			'Creating MSIX package...\r',
@@ -54,6 +76,62 @@ describe('parsePackagedArtifactPath', () => {
 		assert.equal(
 			parsePackagedArtifactPath(output),
 			'C:\\out\\MyApp_1.0.0_x64_arm64.msixbundle'
+		);
+	});
+
+	it('extracts the path from the "Bundle:" marker used by multi-folder runs', () => {
+		// A bundle run prints "📦 Bundle:" instead of "📦 Package:" — see
+		// PackageCommand.cs in microsoft/winappcli.
+		const output = [
+			'[1/2] Packing x64...',
+			'[2/2] Packing arm64...',
+			'Creating bundle...',
+			'  📦 Bundle: C:\\out\\MyApp_1.0.0.0_arm64_x64.msixbundle',
+			'✅ MSIX bundle creation completed.',
+			''
+		].join('\n');
+
+		assert.equal(
+			parsePackagedArtifactPath(output),
+			'C:\\out\\MyApp_1.0.0.0_arm64_x64.msixbundle'
+		);
+	});
+
+	it('extracts a wrapped following-line path after the "Bundle:" marker', () => {
+		// Verbatim output from a real `winapp pack publish\x64 publish\arm64
+		// --generate-cert` run against winappcli 0.6.1, including the
+		// Spectre.Console wrap that splits ".msixbundle" onto its own line.
+		const output = [
+			'Creating MSIX bundle...',
+			'  [1/2] Packing x64...',
+			'  [2/2] Packing arm64...',
+			'  ℹ  Creating bundle...',
+			'  📦 Bundle: ',
+			'C:\\Users\\me\\AppData\\Local\\Temp\\bundletest\\bundletest_1.0.0.0_arm64_x64',
+			'.msixbundle',
+			'  🔒 Bundle has been signed',
+			'✅ MSIX bundle creation completed.'
+		].join('\n');
+
+		assert.equal(
+			parsePackagedArtifactPath(output),
+			'C:\\Users\\me\\AppData\\Local\\Temp\\bundletest\\bundletest_1.0.0.0_arm64_x64.msixbundle'
+		);
+	});
+
+	it('does not mistake a slice progress line for the bundle artifact', () => {
+		// Slices are reported as "[1/2] Packing x64..." with no artifact marker,
+		// so only the final bundle path should ever be returned.
+		const output = [
+			'[1/2] Packing x64...',
+			'[2/2] Packing arm64...',
+			'  📦 Bundle: C:\\out\\MyApp_1.0.0.0_arm64_x64.msixbundle',
+			'🔒 Bundle has been signed'
+		].join('\n');
+
+		assert.equal(
+			parsePackagedArtifactPath(output),
+			'C:\\out\\MyApp_1.0.0.0_arm64_x64.msixbundle'
 		);
 	});
 
@@ -261,6 +339,19 @@ describe('planPackCompletion', () => {
 		);
 	});
 
+	it('surfaces an explicit CLI error in the failure notification', () => {
+		assert.deepEqual(
+			planPackCompletion({
+				code: 1,
+				output: 'Building project...\n❌ The selected project is not packageable.\n'
+			}),
+			{
+				kind: 'error',
+				message: 'Packaging failed: The selected project is not packageable.'
+			}
+		);
+	});
+
 	it('plans an error for unparseable successful output', () => {
 		assert.deepEqual(
 			planPackCompletion({ code: 0, output: '✅ MSIX package creation completed.\n' }),
@@ -281,8 +372,68 @@ describe('planPackCompletion', () => {
 				kind: 'success',
 				artifactPath: 'C:\\out\\CounterApp_1.0.0.0_x64.msix',
 				appName: 'CounterApp',
-				message: 'CounterApp packaged → CounterApp_1.0.0.0_x64.msix'
+				message: 'CounterApp packaged → CounterApp_1.0.0.0_x64.msix',
+				actions: [PACK_ACTIONS.reveal, PACK_ACTIONS.sign, PACK_ACTIONS.install]
 			}
+		);
+	});
+
+	it('plans success for a bundle run', () => {
+		// Regression guard: before the "📦 Bundle:" marker was recognised, a
+		// successful bundle parsed to undefined and was reported as a failure.
+		assert.deepEqual(
+			planPackCompletion({
+				code: 0,
+				output:
+					'Creating bundle...\n' +
+					'  📦 Bundle: C:\\out\\CounterApp_1.0.0.0_arm64_x64.msixbundle\n' +
+					'✅ MSIX bundle creation completed.\n'
+			}),
+			{
+				kind: 'success',
+				artifactPath: 'C:\\out\\CounterApp_1.0.0.0_arm64_x64.msixbundle',
+				appName: 'CounterApp',
+				message: 'CounterApp packaged → CounterApp_1.0.0.0_arm64_x64.msixbundle',
+				actions: [PACK_ACTIONS.reveal, PACK_ACTIONS.sign, PACK_ACTIONS.install]
+			}
+		);
+	});
+
+	it('offers Install for a normal package', () => {
+		const plan = planPackCompletion({
+			code: 0,
+			output: '  📦 Package: C:\\out\\CounterApp_1.0.0.0_x64.msix\n'
+		});
+		assert.equal(plan.kind, 'success');
+		assert.ok((plan as { actions: string[] }).actions.includes(PACK_ACTIONS.install));
+	});
+
+	it('suppresses Install for an identity-only package', () => {
+		// A sparse identity package contains no payload, so installing it would
+		// register an app whose executable lives outside the package.
+		const plan = planPackCompletion({
+			code: 0,
+			output: '  📦 Identity package: C:\\out\\sparse\\Notepad.identity.msix\n',
+			identityOnly: true
+		});
+		assert.equal(plan.kind, 'success');
+		assert.deepEqual(
+			(plan as { actions: string[] }).actions,
+			[PACK_ACTIONS.reveal, PACK_ACTIONS.sign]
+		);
+	});
+
+	it('parses the identity package marker as success, not failure', () => {
+		// Regression: the parser originally knew only '📦 Package:', so a
+		// successful sparse pack fell through to the failure branch.
+		const plan = planPackCompletion({
+			code: 0,
+			output: '  📦 Identity package: C:\\out\\sparse\\Notepad.identity.msix\n'
+		});
+		assert.equal(plan.kind, 'success');
+		assert.equal(
+			(plan as { artifactPath: string }).artifactPath,
+			'C:\\out\\sparse\\Notepad.identity.msix'
 		);
 	});
 });

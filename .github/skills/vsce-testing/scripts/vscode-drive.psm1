@@ -264,7 +264,10 @@ function Get-VSCodeState {
     param([Parameter(Mandatory)]$Ctx)
     $search = { param($q) (winapp ui search $q -w $Ctx.Hwnd --max 3 2>&1 | Out-String) }
     # A blocking modal captures input; it MUST be cleared before any palette/keyboard work.
-    $onSignIn = (((& $search 'Continue without Signing In') + (& $search 'Sign in to use GitHub Copilot')) -match 'Found [1-9]')
+    # "Sign in to use GitHub Copilot" also appears as a button inside the
+    # "Make It Yours" walkthrough. The sign-in modal is identified by its
+    # unique dismissal action so the walkthrough is not misclassified.
+    $onSignIn = ((& $search 'Continue without Signing In') -match 'Found [1-9]')
     $onWalkthrough = (((& $search 'Make It Yours') + (& $search 'Build with AI Agents') + (& $search 'Get Started with Accessibility')) -match 'Found [1-9]')
     $onTrust = ((& $search 'Do you trust the authors') -match 'Found [1-9]')
     $onWelcomeTab = ((& $search 'Welcome to Visual Studio Code') -match 'Found [1-9]')

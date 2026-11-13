@@ -91,8 +91,13 @@ if ($needsRestore) {
     }
 
     Write-Host "Downloading SDK packages via winapp restore..."
-    & $winappExe restore $repoRoot --quiet 2>&1 | Out-Null
+    $restoreOutput = & $winappExe restore $repoRoot --quiet 2>&1
     $restoreExitCode = $LASTEXITCODE
+
+    if ($restoreExitCode -ne 0) {
+        Write-Warning "'winapp restore' exited with code $restoreExitCode. Schema sync will continue only if all required SDK schema files are available."
+        $restoreOutput | ForEach-Object { Write-Warning "$_" }
+    }
 
     if ((-not (Test-Path $buildToolsBase) -or -not (Test-Path $sdkCppBase))) {
         throw "Required schema packages are missing after 'winapp restore' (exit code $restoreExitCode). Run 'winapp restore' manually or pass a valid -CliPath."
@@ -183,12 +188,15 @@ foreach ($file in $sdkCppFiles) {
 }
 
 # --- Report ---
-Write-Host "✅ Synced $copied XSD schema files to schemas/" -ForegroundColor Green
-Write-Host "   BuildTools: $buildToolsVersion ($buildToolsXsdDir)"
-Write-Host "   SDK.CPP:    $sdkCppVersion ($sdkCppXsdDir)"
-
 if ($errors.Count -gt 0) {
     Write-Warning "Some files were not found:"
     $errors | ForEach-Object { Write-Warning "  $_" }
     throw "Schema sync is incomplete; missing $($errors.Count) required XSD file(s)."
 }
+
+Write-Host "✅ Synced $copied XSD schema files to schemas/" -ForegroundColor Green
+Write-Host "   BuildTools: $buildToolsVersion ($buildToolsXsdDir)"
+Write-Host "   SDK.CPP:    $sdkCppVersion ($sdkCppXsdDir)"
+
+# Callers must observe the schema-sync result, not an earlier native command's exit code.
+exit 0

@@ -21,6 +21,29 @@ Pipeline runs may select a specific `CliReleaseTag`; leaving it empty uses the b
 `cli-version.json`. Production publishing requires `DoEsrp=true`, while `SkipPublish=true`
 produces artifacts without publishing.
 
+## Azure Artifacts feeds
+
+Both release build jobs use `.pipelines/templates/nuget-feed.yml` before restoring packages.
+References use a repository-rooted path with `@self` so the external 1ES template resolves
+them from this repository rather than its own.
+Following the WinApp CLI Azure pipelines, it installs `.pipelines/release-nuget.config` at
+repository and agent-user scope, clears inherited sources, and authenticates with
+`NuGetAuthenticate@1`. Only the `pde-oss_Internal` Azure Artifacts feed is enabled.
+User scope also covers temporary test projects outside the checkout. This setup runs only
+on release agents; local builds keep using the machine's configured feeds.
+
+Server tests pin xUnit to `2.3.1`, the highest currently approved version. Keep the exact
+version constraint until a newer version is approved and available through the release feed.
+Workspace test collections run serially to avoid integration-suite hangs with this runner;
+individual tests still exercise concurrent operations where required.
+
+## Server signing
+
+The ESRP task uses newline-separated minimatch patterns to sign the native server executables
+and managed generator host. Comma-separated patterns match neither file type. Keep the
+independent signature verification step enabled so unmatched or unsigned binaries block release;
+third-party DLLs retain their publisher signatures and are verified too.
+
 ## WinApp CLI bundle
 
 The release pipeline calls `scripts/download-cli.ps1` with its artifact staging directory as
@@ -35,6 +58,16 @@ and an authenticated GitHub account or token with access to that upstream Action
 CI artifacts expire. Replace this pin with a supported release containing external-inspector
 routing before production publication. An expired or inaccessible artifact fails explicitly;
 the downloader never substitutes a different build. Use `-Tag latest` only for deliberate testing.
+
+Schema sync reports success only after every required XSD is copied. If `winapp restore`
+returns nonzero, its diagnostics are logged as warnings; sync can still succeed when all
+required schemas are available. Missing packages or XSDs remain fatal.
+
+## Packaged extension E2E tests
+
+Install the VSIX using the downloaded VS Code's `bin\code.cmd`, not its GUI executable.
+The CLI reports installation diagnostics and an exit code. Keep `VSCODE_PATH` pointing
+to `Code.exe` and use the same isolated extensions directory for installation and E2E tests.
 
 ## Release checks
 

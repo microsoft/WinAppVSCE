@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
+using NuGet.Versioning;
 
 namespace WinUiXaml.Workspace
 {
@@ -69,6 +70,7 @@ namespace WinUiXaml.Workspace
             ImmutableArray<string> xamlFiles,
             string? applicationDefinitionPath,
             ImmutableArray<string> unresolvedProjectReferences,
+            ProjectInputSnapshot inputs,
             string? generatorFailure = null)
         {
             Compilation = compilation;
@@ -80,6 +82,7 @@ namespace WinUiXaml.Workspace
             XamlFiles = xamlFiles;
             ApplicationDefinitionPath = applicationDefinitionPath;
             GeneratorFailure = generatorFailure;
+            _inputs = inputs;
             UnresolvedProjectReferences = unresolvedProjectReferences.IsDefault
                 ? ImmutableArray<string>.Empty
                 : unresolvedProjectReferences;
@@ -107,6 +110,8 @@ namespace WinUiXaml.Workspace
         /// Non-null when the out-of-process generator host could not run, meaning generated members such as <c>[ObservableProperty]</c> are absent from an otherwise healthy compilation.
         /// </summary>
         public string? GeneratorFailure { get; }
+        private readonly ProjectInputSnapshot _inputs;
+        internal bool InputsChanged() => _inputs.HasChanges();
 
         /// <summary>Loads a single project by path.</summary>
         [System.Diagnostics.CodeAnalysis.DynamicDependency(
@@ -133,7 +138,29 @@ namespace WinUiXaml.Workspace
 
             // The MSBuild and generator work is spent waiting on child processes and parsing, so it
             // runs on the thread pool to keep the LSP dispatch loop responsive.
-            return Task.Run(() => Load(projectPath, properties, cancellationToken), cancellationToken);
+            return Task.Run(() =>
+            {
+                for (var attempt = 0; ; attempt++)
+                {
+                    try
+                    {
+                        var workspace = Load(projectPath, properties, cancellationToken);
+                        if (workspace.GeneratorFailure is null || attempt >= 2 ||
+                            workspace.GeneratorFailure.Contains("helper assembly not found", StringComparison.Ordinal))
+                        {
+                            return workspace;
+                        }
+                        Console.Error.WriteLine($"[winui-xaml-ls] retrying generated members: {workspace.GeneratorFailure}");
+                        workspace.Dispose();
+                    }
+                    catch (IOException ex) when (attempt < 2)
+                    {
+                        Console.Error.WriteLine($"[winui-xaml-ls] retrying project read: {ex.Message}");
+                    }
+                    cancellationToken.WaitHandle.WaitOne(250 * (attempt + 1));
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+            }, cancellationToken);
         }
 
         private static RoslynProjectWorkspace Load(
@@ -149,6 +176,7 @@ namespace WinUiXaml.Workspace
             var graph = new ProjectGraphContext(fullPath, properties);
             var (evaluation, arguments, unresolvedProjectReferences) =
                 AcquireProjectData(fullPath, properties, cancellationToken, graph);
+            graph.RecordBuildInputs(evaluation);
 
             cancellationToken.ThrowIfCancellationRequested();
             var commandLine = arguments.IsDefaultOrEmpty
@@ -195,6 +223,7 @@ namespace WinUiXaml.Workspace
                 evaluation.XamlFiles,
                 evaluation.ApplicationDefinition,
                 unresolvedProjectReferences,
+                new ProjectInputSnapshot(graph.KnownProjects, graph.BuildInputFiles, evaluation.MarkupCompilationFailed),
                 graph.GeneratorFailure);
         }
 
@@ -215,9 +244,7 @@ namespace WinUiXaml.Workspace
                     fullPath,
                     properties,
                     cancellationToken);
-                if (RequiresRestore(
-                        combined.Evaluation.ProjectAssetsFile,
-                        combined.Evaluation.HasPackageReferences))
+                if (RequiresRestore(combined.Evaluation))
                 {
                     throw new ProjectRestoreRequiredException(fullPath);
                 }
@@ -230,7 +257,7 @@ namespace WinUiXaml.Workspace
             catch (MsBuildUnavailableException ex)
             {
                 var evaluation = MsBuildCli.Evaluate(fullPath, properties, cancellationToken);
-                if (RequiresRestore(evaluation.ProjectAssetsFile, evaluation.HasPackageReferences) ||
+                if (RequiresRestore(evaluation) ||
                     IsMissingRestoreFailure(ex.Message))
                 {
                     throw new ProjectRestoreRequiredException(fullPath, ex);
@@ -259,17 +286,8 @@ namespace WinUiXaml.Workspace
                     continue;
                 }
 
-                try
-                {
-                    trees.Add(CSharpSyntaxTree.ParseText(
-                        SourceText.From(File.ReadAllText(path)), parseOptions, path));
-                }
-                catch (IOException)
-                {
-                }
-                catch (UnauthorizedAccessException)
-                {
-                }
+                trees.Add(CSharpSyntaxTree.ParseText(
+                    SourceText.From(File.ReadAllText(path)), parseOptions, path));
             }
         }
 
@@ -289,6 +307,19 @@ namespace WinUiXaml.Workspace
 
             public ImmutableHashSet<string>.Builder KnownProjects { get; }
             public ImmutableHashSet<string>.Builder GeneratorInputFiles { get; }
+            public HashSet<string> BuildInputFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+            public void RecordBuildInputs(MsBuildCli.Evaluation evaluation)
+            {
+                if (evaluation.ProjectAssetsFile is { } assets)
+                {
+                    BuildInputFiles.Add(assets);
+                }
+                if (!evaluation.BuildInputFiles.IsDefaultOrEmpty)
+                {
+                    BuildInputFiles.UnionWith(evaluation.BuildInputFiles);
+                }
+            }
 
             /// <summary>Projects on the current recursion path; re-entering one is a cycle.</summary>
             public HashSet<string> InProgress { get; }
@@ -320,6 +351,8 @@ namespace WinUiXaml.Workspace
                 GeneratorInputFiles.UnionWith(
                     commandLine.AdditionalFiles.Where(
                         path => !IsGeneratedBuildPath(path, projectDirectory)));
+                BuildInputFiles.UnionWith(GeneratorInputFiles);
+                BuildInputFiles.UnionWith(commandLine.Sources.Where(path => !IsGeneratedBuildPath(path, projectDirectory)));
             }
 
             private static bool IsGeneratedBuildPath(string path, string projectDirectory) =>
@@ -437,6 +470,7 @@ namespace WinUiXaml.Workspace
             CancellationToken cancellationToken)
         {
             var (evaluation, arguments, _) = AcquireProjectData(projectPath, properties, cancellationToken);
+            context.RecordBuildInputs(evaluation);
             if (arguments.IsDefaultOrEmpty)
             {
                 return null;
@@ -508,6 +542,73 @@ namespace WinUiXaml.Workspace
                 CacheReportsFailedRestore(Path.Combine(
                     Path.GetDirectoryName(projectAssetsFile)!,
                     "project.nuget.cache"));
+        }
+
+        internal static bool RequiresRestore(MsBuildCli.Evaluation evaluation)
+        {
+            if (RequiresRestore(evaluation.ProjectAssetsFile, evaluation.HasPackageReferences))
+            {
+                return true;
+            }
+            if (evaluation.ProjectAssetsFile is null || !File.Exists(evaluation.ProjectAssetsFile))
+            {
+                return false;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(evaluation.ProjectAssetsFile));
+                if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                    !document.RootElement.TryGetProperty("project", out var project) ||
+                    project.ValueKind != JsonValueKind.Object ||
+                    !project.TryGetProperty("frameworks", out var frameworks) ||
+                    frameworks.ValueKind != JsonValueKind.Object)
+                {
+                    return true;
+                }
+
+                var packages = evaluation.PackageReferences.IsDefault
+                    ? ImmutableArray<MsBuildCli.PackageReference>.Empty : evaluation.PackageReferences;
+                return !frameworks.EnumerateObject().Any(framework =>
+                {
+                    if (framework.Value.ValueKind != JsonValueKind.Object ||
+                        evaluation.TargetFramework is { Length: > 0 } selected &&
+                        !framework.Name.Equals(selected, StringComparison.OrdinalIgnoreCase) &&
+                        (!framework.Value.TryGetProperty("targetAlias", out var alias) ||
+                         alias.ValueKind != JsonValueKind.String ||
+                         !string.Equals(alias.GetString(), selected, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        return false;
+                    }
+                    if (!framework.Value.TryGetProperty("dependencies", out var dependencies))
+                    {
+                        return packages.IsEmpty;
+                    }
+                    if (dependencies.ValueKind != JsonValueKind.Object)
+                    {
+                        return false;
+                    }
+                    var restored = dependencies.EnumerateObject().ToArray();
+                    return restored.All(dependency =>
+                            dependency.Value.ValueKind == JsonValueKind.Object &&
+                            (dependency.Value.TryGetProperty("autoReferenced", out var automatic) &&
+                             automatic.ValueKind == JsonValueKind.True ||
+                             packages.Any(package => package.Name.Equals(dependency.Name, StringComparison.OrdinalIgnoreCase)))) &&
+                        packages.All(package => restored.Any(dependency =>
+                            dependency.Name.Equals(package.Name, StringComparison.OrdinalIgnoreCase) &&
+                            (string.IsNullOrEmpty(package.Version) ||
+                             dependency.Value.TryGetProperty("version", out var version) &&
+                             version.ValueKind == JsonValueKind.String &&
+                             VersionRange.TryParse(version.GetString() ?? "", out var restoredVersion) &&
+                             VersionRange.TryParse(package.Version, out var currentVersion) &&
+                             restoredVersion.Equals(currentVersion))));
+                });
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                Console.Error.WriteLine($"[winui-xaml-ls] could not validate restored dependencies: {ex.Message}");
+                return true;
+            }
         }
 
         private static bool AssetsContainRestoreErrors(string projectAssetsFile)

@@ -327,7 +327,7 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
             WinUiProperties);
 
         Assert.NotNull(lightweight);
-        Assert.NotNull(lightweight.Compilation.GetTypeByMetadataName(
+        Assert.NotNull(lightweight!.Compilation.GetTypeByMetadataName(
             "Microsoft.UI.Xaml.Controls.Button"));
         Assert.Empty(lightweight.Compilation.SyntaxTrees);
 
@@ -369,7 +369,7 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
 
         var resolution = await resolver.ResolveFrameworkAsync(xamlPath);
         Assert.NotNull(resolution);
-        Assert.NotNull(resolution.Compilation.GetTypeByMetadataName(
+        Assert.NotNull(resolution!.Compilation.GetTypeByMetadataName(
             "Microsoft.UI.Xaml.Controls.Button"));
     }
 
@@ -386,7 +386,7 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
 
         Assert.NotNull(first);
         Assert.NotNull(second);
-        Assert.NotSame(first.Compilation, second.Compilation);
+        Assert.NotSame(first!.Compilation, second!.Compilation);
     }
 
     [Fact]

@@ -120,14 +120,15 @@ describe("WinUI XAML red-team 70 (method hover returns/params adversarial)", fun
     assertNoMethodDetails(md, `buffer=${JSON.stringify(buffer)} caret=${caretOffset(buffer)}`);
   });
 
-  it("red-team 70 undocumented user handler has deterministic metadata prose", async () => {
+  it("red-team 70 a function call with missing required arguments has no hover", async () => {
     const buffer = page('<TextBlock Text="{x:Bind OnGo_C|lick()}" />');
     const md = await h.hoverAt(buffer);
-    assert.strictEqual(
-      md,
-      "```csharp\nvoid SmokePage.OnGo_Click(object sender, RoutedEventArgs e)\n```\n\nMethod `OnGo_Click` declared by `SmokeFixture.SmokePage`.",
-      `undocumented method hover must use deterministic metadata prose; buffer=${JSON.stringify(buffer)} caret=${caretOffset(buffer)}`
-    );
+    assert.strictEqual(md, "", `invalid function call must not show a valid signature; got: ${md}`);
+  });
+
+  it("red-team 70 F12 on a function call with missing arguments still opens the handler", async () => {
+    const locations = await h.definitionsAt(page('<TextBlock Text="{x:Bind OnGo_C|lick()}" />'));
+    assert.ok(locations.some((l) => /SmokePage\.xaml\.cs$/i.test(l.fsPath)), `expected code-behind; got ${JSON.stringify(locations)}`);
   });
 
   it("red-team 70 attached Grid.Row attribute hover stays attached-property summary-only", async () => {

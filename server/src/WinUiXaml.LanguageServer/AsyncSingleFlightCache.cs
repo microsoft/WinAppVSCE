@@ -9,9 +9,11 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
     private readonly Dictionary<TKey, TValue> _latest;
     private readonly Dictionary<TKey, TValue> _stale;
     private long _generation;
+    private readonly bool _cacheFailures;
 
-    public AsyncSingleFlightCache(IEqualityComparer<TKey>? comparer = null)
+    public AsyncSingleFlightCache(IEqualityComparer<TKey>? comparer = null, bool cacheFailures = false)
     {
+        _cacheFailures = cacheFailures;
         _entries = new Dictionary<TKey, Entry>(comparer);
         _ready = new Dictionary<TKey, TValue>(comparer);
         _latest = new Dictionary<TKey, TValue>(comparer);
@@ -56,6 +58,15 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
         lock (_gate)
         {
             return _ready.TryGetValue(key, out value!);
+        }
+    }
+
+    public bool HasCompleted(TKey key)
+    {
+        lock (_gate)
+        {
+            return _entries.TryGetValue(key, out var entry) &&
+                entry.Task.IsValueCreated && entry.Task.Value.IsCompleted;
         }
     }
 
@@ -169,8 +180,11 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
 
                 if (value is null)
                 {
-                    _entries.Remove(key);
-                    _stale.Remove(key);
+                    if (!_cacheFailures)
+                    {
+                        _entries.Remove(key);
+                        _stale.Remove(key);
+                    }
                 }
                 else
                 {
@@ -192,9 +206,12 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
             {
                 if (_entries.TryGetValue(key, out var current) && ReferenceEquals(current, entry))
                 {
-                    _entries.Remove(key);
+                    if (!_cacheFailures)
+                    {
+                        _entries.Remove(key);
+                        _stale.Remove(key);
+                    }
                     _ready.Remove(key);
-                    _stale.Remove(key);
                 }
             }
             throw;

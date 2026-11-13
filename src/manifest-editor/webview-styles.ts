@@ -31,6 +31,7 @@ ${getSharedControlStyles({
             background: var(--vscode-editor-background);
         }
         body { padding: 0; margin: 0; display: flex; flex-direction: column; overflow: hidden; }
+        body.workspace-untrusted .update-assets-btn { display: none; }
 
         /* ─── Tab bar ──────────────────────────────────────── */
         .tab-bar {

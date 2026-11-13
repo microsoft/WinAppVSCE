@@ -115,6 +115,24 @@ test('external updates preserve the active tab, app sub-tab and scroll position'
     expect(await panel.evaluate(el => el.scrollTop)).toBe(scrollBefore);
 });
 
+test('Regenerate Assets is hidden until the workspace is trusted', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, manifestData);
+    await page.click('.tab-btn[data-tab="applications"]');
+    await page.locator('.app-card').first().locator('.app-sub-tab[data-subtab="visual"]').click();
+    const button = page.locator('.update-assets-btn').first();
+    await expect(button).toBeVisible();
+
+    const postTrust = (trusted: boolean) => page.evaluate((t) => {
+        (globalThis as unknown as { postMessage(m: unknown, o: string): void })
+            .postMessage({ type: 'workspaceTrust', trusted: t }, '*');
+    }, trusted);
+    await postTrust(false);
+    await expect(button).toBeHidden();
+    await postTrust(true);
+    await expect(button).toBeVisible();
+});
+
 test('a parse error is shown as an overlay without discarding the editor or its state', async ({ page }) => {
     await loadEditor(page);
     await postUpdate(page, manifestData);

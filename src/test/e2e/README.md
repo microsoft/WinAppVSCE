@@ -56,7 +56,7 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (257 tests)
+## Test inventory (262 tests)
 
 ### `webview-state.spec.ts` — 19 tests
 
@@ -137,7 +137,7 @@ they never wrote.
 |---|------|-----------|
 | 1 | invalid inputFolder offers to open its debug configuration | Validation cancels debugging, shows the resource-neutral action, and opens the correct folder `launch.json` with its unique configuration content |
 
-### `run-target-picker.spec.ts` — 17 tests
+### `run-target-picker.spec.ts` — 22 tests
 
 Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which depends on VS Code's own `findFiles` indexing and workspace-folder resolution and so cannot be unit tested. Every test dismisses the picker with `cancelAndExpectNoFollowUp`, which presses `Escape` and then asserts the quick input is gone and no notification replaced it — so the CLI is never invoked, and a flow that swallowed the cancellation would fail rather than pass silently.
 
@@ -145,7 +145,7 @@ Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which de
 |---|------|-----------|
 | 1 | hides class libraries and test projects | Non-runnable projects are filtered out rather than offered as targets the CLI would reject |
 | 2 | falls back to build output when the only project is a library | With nothing runnable found, the build-output scan still supplies targets |
-| 3 | explains why an unbuilt native-only solution is not offered | A `.sln` containing only unsupported `.vcxproj` members and no built output reports that the solution was found and tells the user to build before browsing, rather than claiming no solution exists |
+| 3 | explains why an unbuilt native-only solution is not offered | A `.sln` containing only `.vcxproj` members, which discovery cannot list yet, and no built output reports that the solution was found and suggests building first or browsing to it, rather than claiming no solution exists |
 | 4 | falls back to native build output when a solution has no supported members | A `.sln` containing only `.vcxproj` members does not hide runnable `.exe` output from the bundled CLI's folder mode |
 | 5 | prefers the project over its own build output folder | A project and its `bin` output collapse to the project entry |
 | 6 | finds output for a project-less app without surfacing node_modules | Electron/Rust-shaped workspaces reach the `.exe` scan, and excluded directories stay excluded |
@@ -160,6 +160,11 @@ Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which de
 | 15 | F5 with no input in launch.json prompts for a run target | A `winapp` launch configuration that omits `input` falls through to the picker instead of failing with a missing-argument error |
 | 16 | With Options skips the build prompts in folder mode | A build-output target goes straight to the toggle prompt, and project-only toggles stay hidden there |
 | 17 | checking Download symbols also checks Capture debug output | Selecting the symbols toggle turns on the debug-output toggle it requires, so the pair cannot be submitted half-set |
+| 18 | project packaging collects architectures, configuration, and signing | Project mode exposes its architecture, configuration, signing, and self-contained choices |
+| 19 | project packaging resolves a solution to one concrete project | A solution input is resolved to an explicit `.csproj` before the architecture prompt |
+| 20 | existing-output packaging keeps multi-folder bundle selection | Multiple discovered build outputs can be selected together for an MSIX bundle |
+| 21 | existing-output packaging discovers folders across every workspace root | Build outputs from every folder in a multi-root workspace appear in one picker |
+| 22 | existing-output packaging preselects the sole discovered folder | The single common-case output is checked initially, so Enter continues the flow |
 
 > When matching the picker, assert on the full placeholder. The command palette's own placeholder is "Type the name of a command **to run**", so a loose `/to run/` match silently reads the palette's rows instead of the picker's.
 

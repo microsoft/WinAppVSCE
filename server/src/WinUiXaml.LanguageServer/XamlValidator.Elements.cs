@@ -272,7 +272,7 @@ internal static partial class XamlValidator
         {
             diagnostics.Add(Diag(doc, name.LocalNameSpan, SeverityWarning, UnknownAttributeCode,
                 $"'{name.LocalName}' is not a property or event of '{elementType.Name}'.",
-                SuggestData(name.LocalName, typeSystem.GetAttributeCandidateNames(elementType))));
+                SuggestPropertyNameData(name.LocalName, typeSystem.GetAttributeCandidateNames(elementType))));
             return;
         }
 
@@ -303,6 +303,14 @@ internal static partial class XamlValidator
         }
     }
 
+    // A missing closing quote swallows later markup into the value; replacing it would delete that markup.
+    internal static bool IsClosedLiteral(TextDocument doc, XamlAttributeValue value) =>
+        value.Quote is { } quote &&
+        value.Span.Length >= 2 && value.Span.End <= doc.Text.Length && doc.Text[value.Span.End - 1] == quote &&
+        value.Text.IndexOfAny(NonLiteralChars) < 0;
+
+    private static readonly char[] NonLiteralChars = ['"', '\'', '<', '>', '=', '\r', '\n'];
+
     private static void ValidateLiteralAttributeValue(
         XamlAttribute attribute,
         ITypeSymbol memberType,
@@ -330,13 +338,17 @@ internal static partial class XamlValidator
             SeverityError,
             InvalidAttributeValueCode,
             $"'{value.Text}' is not a valid value for '{attribute.Name.FullName}' ({targetType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}).",
-            targetType.TypeKind == TypeKind.Enum
-                ? SuggestData(
-                    value.Text,
-                    targetType.GetMembers().OfType<IFieldSymbol>()
-                        .Where(field => field.HasConstantValue)
-                        .Select(field => field.Name))
-                : null));
+            !IsClosedLiteral(doc, value)
+                ? null
+                : targetType.SpecialType == SpecialType.System_Boolean
+                    ? SuggestData(value.Text.Trim(), ["True", "False"])
+                    : targetType.TypeKind == TypeKind.Enum
+                        ? SuggestData(
+                            value.Text.Trim(),
+                            targetType.GetMembers().OfType<IFieldSymbol>()
+                                .Where(field => field.HasConstantValue)
+                                .Select(field => field.Name))
+                        : null));
     }
 
     /// <summary>Validates an Owner.Member attached-property attribute: resolves the owner type through the attribute's namespace and checks it actually exposes the member.</summary>
@@ -511,7 +523,7 @@ internal static partial class XamlValidator
                     scope,
                     typeSystem) &&
                 attribute.Value is { IsMarkupExtension: false } value &&
-                !IsIdentifier(value.Text))
+                !XamlRename.IsValidName(value.Text))
             {
                 diagnostics.Add(Diag(doc, value.InnerSpan, SeverityError, InvalidNameCode,
                     $"'{value.Text}' is not a valid XAML name."));

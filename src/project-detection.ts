@@ -210,6 +210,27 @@ export function deduplicateBuildOutputFolders(
 }
 
 /**
+ * Project-mode builds can leave an inner `publish` directory containing the
+ * executable but not the generated package manifest. That directory can run,
+ * but it is not a complete package layout and `winapp pack` rejects it.
+ *
+ * Keep other folder names eligible because non-.NET apps may use arbitrary
+ * output conventions and can resolve their manifest from the command cwd.
+ */
+export function isPackableDiscoveredOutput(
+	folderPath: string,
+	fileNames: readonly string[]
+): boolean {
+	if (path.basename(folderPath).toLowerCase() !== 'publish') {
+		return true;
+	}
+
+	const normalizedNames = fileNames.map(name => name.toLowerCase());
+	return normalizedNames.includes('appxmanifest.xml')
+		|| normalizedNames.includes('package.appxmanifest');
+}
+
+/**
  * VS Code-compatible glob exclude pattern for build-output scanning.
  */
 export const BUILD_OUTPUT_EXCLUDE_GLOB = `{${[...BUILD_OUTPUT_SKIP_DIRS].map(d => `**/${d}/**`).join(',')}}`;
@@ -370,16 +391,6 @@ export function classifyProjectRunnability(content: string): ProjectRunnability 
 
 	if (hasInlineTestMarkers(doc)) {
 		return 'test';
-	}
-
-	const nativeTypes = findElementsByLocalName(doc, 'ConfigurationType');
-	if (nativeTypes.length > 0) {
-		const unconditional = nativeTypes.filter(element => !hasAttributeOnSelfOrAncestor(element, 'Condition'));
-		if (unconditional.length === 0) { return 'unknown'; }
-		const nativeType = elementText(unconditional[unconditional.length - 1]).toLowerCase();
-		if (nativeType === 'application') { return 'app'; }
-		if (nativeType === 'dynamiclibrary' || nativeType === 'staticlibrary') { return 'library'; }
-		return 'unknown';
 	}
 
 	// A conditioned OutputType is exactly the "can't tell without MSBuild"

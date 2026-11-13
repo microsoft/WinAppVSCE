@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis.CSharp;
 using WinUiXaml.LanguageServer.Lsp;
 using WinUiXaml.Workspace;
 using WinUiXaml.Xaml;
@@ -24,9 +24,6 @@ internal sealed class RenameValidationException : RequestFailedException
 /// <summary>Computes textDocument/prepareRename and textDocument/rename for WinUI XAML.</summary>
 internal static class XamlRename
 {
-    // An x:Name backs a generated C# field, so it must be a legal identifier.
-    private static readonly Regex NamePattern = new(@"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
-
     // Keys are also inserted into unquoted markup-extension arguments.
     private static readonly char[] KeyForbidden = { '"', '\'', '<', '>', '&', '{', '}', ',', '=' };
 
@@ -117,6 +114,7 @@ internal static class XamlRename
 
         var trimmed = (newName ?? string.Empty).Trim();
         ValidateNewName(symbol.Kind, trimmed);
+        EnsureNoCollision(doc, offset, trimmed, symbol.Kind, typeSystem);
 
         var edits = occurrences
             .Select(o => new TextEdit { Range = o.Range, NewText = trimmed })
@@ -191,8 +189,7 @@ internal static class XamlRename
             if (!IsValidName(newName))
             {
                 throw new RenameValidationException(
-                    $"'{newName}' is not a valid x:Name. A name must start with a letter or underscore and " +
-                    "contain only letters, digits, and underscores.");
+                    $"'{newName}' is not a valid x:Name. Use a C# identifier that is not a reserved keyword.");
             }
 
             return;
@@ -207,21 +204,66 @@ internal static class XamlRename
         }
     }
 
-    internal static bool IsValidName(string value) => NamePattern.IsMatch(value);
+    internal static bool IsValidName(string value) =>
+        SyntaxFacts.IsValidIdentifier(value) &&
+        SyntaxFacts.GetKeywordKind(value) == SyntaxKind.None &&
+        !value.StartsWith('@');
+
+    internal static void EnsureNoCollision(
+        TextDocument doc, int offset, string newName, XamlRenameKind kind, XamlTypeSystem? typeSystem)
+    {
+        if (doc.Parsed.Root is not { } root)
+        {
+            return;
+        }
+
+        if (kind == XamlRenameKind.Name && typeSystem is not null)
+        {
+            var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset, typeSystem);
+            foreach (var scope in XamlSemanticFacts.GetNameScopes(root, typeSystem))
+            {
+                if (occurrences?.Any(occurrence => occurrence.IsDeclaration &&
+                    scope.Any(entry => entry.Attribute.Value is { } value &&
+                        doc.OffsetAt(occurrence.Range.Start) == value.InnerSpan.Start)) == true &&
+                    scope.Any(entry => entry.Name == newName &&
+                        !occurrences.Any(occurrence => occurrence.IsDeclaration &&
+                            doc.OffsetAt(occurrence.Range.Start) == entry.Attribute.Value!.InnerSpan.Start)))
+                {
+                    throw new RenameValidationException(
+                        $"The name '{newName}' already exists in the current name scope.");
+                }
+            }
+        }
+        else if (kind == XamlRenameKind.Key &&
+            XamlLanguageServer.FindRenameResourceDeclaration(doc, offset, typeSystem) is { } declaration)
+        {
+            var container = declaration.Parent as XamlElement;
+            if (container?.Content.OfType<XamlElement>().Any(entry =>
+                !ReferenceEquals(entry, declaration) &&
+                XamlSemanticFacts.GetResourceKeyAttribute(entry)?.Value is { IsMarkupExtension: false } value &&
+                value.Text.Trim() == newName) == true)
+            {
+                throw new RenameValidationException(
+                    $"The resource key '{newName}' already exists in the current dictionary.");
+            }
+        }
+    }
 
     internal static string SanitizeName(string value)
     {
         var characters = value.Select(character =>
-            character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'
-                ? character
-                : '_').ToArray();
+            SyntaxFacts.IsIdentifierPartCharacter(character) ? character : '_').ToArray();
         string result = new(characters);
         if (result.Length == 0)
         {
             return "Element";
         }
 
-        return char.IsLetter(result[0]) || result[0] == '_' ? result : "_" + result;
+        if (!SyntaxFacts.IsIdentifierStartCharacter(result[0]))
+        {
+            result = "_" + result;
+        }
+        return IsValidName(result) ? result : result + "_";
     }
 
     /// <summary>True when offset falls within range (inclusive on both ends, matching the caret-containment used elsewhere), so a caret at either boundary of the token resolves to that occurrence.</summary>

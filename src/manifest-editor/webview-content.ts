@@ -340,7 +340,7 @@ ${getEditorStyles(nonce)}
         <button class="btn" id="add-package-dep">+ Add Package Dependency</button>
 
         <div class="section-header section-header-spaced">Main Package Dependencies (uap3)</div>
-        <p class="page-description">Use this section to declare a dependency on a main package for optional packages. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap3-mainpackagedependency2">Learn more</a></p>
+        <p class="page-description">Use this section to declare a dependency on a main package for optional packages. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap3-mainpackagedependency">Learn more</a></p>
         <div id="main-package-dependencies" class="list-container"></div>
         <button class="btn" id="add-main-pkg-dep">+ Add Main Package Dependency</button>
 

@@ -138,6 +138,7 @@ internal sealed class TextDocumentSyncOptions
 
     /// <summary>0 = None, 1 = Full, 2 = Incremental.</summary>
     [JsonPropertyName("change")] public int Change { get; set; }
+    [JsonPropertyName("save")] public bool Save { get; set; }
 }
 
 // --- Geometry ---------------------------------------------------------------
@@ -193,6 +194,11 @@ internal sealed class TextDocumentItem
 internal sealed class DidOpenTextDocumentParams
 {
     [JsonPropertyName("textDocument")] public TextDocumentItem TextDocument { get; set; } = new();
+}
+
+internal sealed class DidSaveTextDocumentParams
+{
+    [JsonPropertyName("textDocument")] public TextDocumentIdentifier TextDocument { get; set; } = new();
 }
 
 internal sealed class DidChangeTextDocumentParams
@@ -294,6 +300,9 @@ internal sealed class DiagnosticData
 {
     [JsonPropertyName("bad")] public string Bad { get; set; } = string.Empty;
     [JsonPropertyName("suggestions")] public string[] Suggestions { get; set; } = System.Array.Empty<string>();
+
+    /// <summary>True when the suggestion completes a partial name or shares whole words with it rather than fixing a typo.</summary>
+    [JsonPropertyName("related")] public bool? Related { get; set; }
 }
 
 // --- Hover ------------------------------------------------------------------

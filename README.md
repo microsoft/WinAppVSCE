@@ -16,6 +16,13 @@ Try the WinApp extension today: [**VS Code Markplace**](https://marketplace.visu
 
 ## Features
 
+### Workspace Trust
+
+In an untrusted workspace, XAML syntax highlighting and manifest editing and
+IntelliSense remain available. WinApp CLI commands and the manifest editor's
+**Regenerate Assets** button are hidden, and the XAML language server stays off.
+Starting a WinApp debug session shows VS Code's trust prompt first.
+
 ### Command Palette
 
 All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **WinApp** to find CLI,
@@ -25,13 +32,16 @@ packaging, and language-service commands.
 |---------|-------------|
 | **WinApp: Create WinUI App** | Scaffold a new WinUI 3 app from an official Windows App SDK template. Pick a template, name it, and choose where it goes. Works with no folder open. Requires the .NET SDK. |
 | **WinApp: Initialize Project** | Set up a new project with the Windows SDK and/or Windows App SDK. Prompts for SDK channel (stable, preview, experimental, or none). |
+| **WinApp: Create Sparse Identity Manifest** | Generate an identity-only `appxmanifest.xml` for an existing executable, without installing SDKs or restructuring the project. Step 1 of the sparse packaging workflow. |
+| **WinApp: Create Sparse Identity Package** | Package a sparse identity manifest into an identity-only `.msix`. Step 2 of the sparse packaging workflow. |
+| **WinApp: Embed Identity into Executable** | Embed a generated sparse identity into an executable (or write it to a side-by-side `.manifest`). Step 3 of the sparse packaging workflow. |
 | **WinApp: Restore Packages** | Restore project packages and dependencies. |
 | **WinApp: Update Packages** | Update packages and dependencies to the latest versions. |
-| **WinApp: Run Application** | Build and run your app as a loose-layout packaged application with full package identity. Select a project (`.csproj`/`.vcxproj`), a solution (`.sln`/`.slnx`), or an already-built output folder. |
+| **WinApp: Run Application** | Build and run your app as a loose-layout packaged application with full package identity, which is great for testing APIs that require identity. Select a project (`.csproj`), a solution (`.sln`/`.slnx`), or an already-built output folder. |
 | **WinApp: Run Application With Options...** | Same as **Run Application**, but prompts for the build configuration, target architecture, and options such as cleaning app data, skipping the build, detaching, or unregistering on exit. |
 | **WinApp: Create Debug Identity** | Add sparse package identity to an existing executable so you can launch and debug it directly from VS Code with identity. |
 | **WinApp: Unregister Package** | Unregister a sideloaded development package (e.g., one registered via Run or Create Debug Identity). |
-| **WinApp: Create MSIX Package** | Package your application into an MSIX, with options to generate a certificate and bundle the runtime self-contained. If self-contained packaging appears to target a different architecture than your machine, WinApp shows a warning before continuing. On completion, a notification names the built package and offers **Reveal in Explorer**, **Sign**, and **Install** actions. |
+| **WinApp: Create MSIX Package or Bundle** | Build and package a `.csproj`, or package existing build output. Select multiple project architectures or build output folders to produce a multi-architecture `.msixbundle`. Project mode supports Release, Debug, and custom build configurations and can honor project signing, generate a development certificate, or create unsigned output. On completion, a notification names the artifact and offers **Reveal in Explorer**, **Sign**, and **Install** actions. |
 | **WinApp: Generate Manifest** | Generate an `AppxManifest.xml` from a template (packaged or sparse). |
 | **WinApp: Add Manifest Execution Alias** | Add an execution alias to the manifest so the packaged app can be launched from the command line. |
 | **WinApp: Update Manifest Assets** | Auto-generate all required app icon assets from a single source image (PNG, JPG, GIF, or BMP). |
@@ -57,9 +67,9 @@ When you run a project-context WinApp command (such as **Initialize Project**, *
 2. **Project at workspace root**: If a recognized project exists at the root, commands run there immediately.
 3. **Automatic scan**: Searches the workspace for compatible projects and prompts if multiple are found.
 
-Commands that already take an explicit target — such as **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
+Commands that already take an explicit target, such as **Create Sparse Identity Package** (sparse manifest), **Create Sparse Identity Manifest** and **Embed Identity into Executable** (executable pickers), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers), operate on the file or folder you select and do not run project detection.
 
-**Run Application and F5** discover runnable `.csproj`/`.vcxproj` projects and `.sln`/`.slnx` solutions, prompting when several are found. Otherwise they look for build output folders. **Browse** lets you select a target manually. A build output folder needs `Package.appxmanifest` or `AppxManifest.xml`; use **WinApp: Generate Manifest** if needed.
+**Run Application**, **F5**, and project-mode **Create MSIX Package or Bundle** share runnable `.csproj` and `.sln` discovery rather than the project-directory detection above. Run falls back to build output when no runnable project is available; packaging asks up front whether to build a project or package existing output. You can always pick something that wasn't listed with **Browse…**. Running or packaging a build output folder needs a `Package.appxmanifest` (or `AppxManifest.xml`) in it. Run **WinApp: Generate Manifest** if you don't have one.
 
 **Configuration (optional):**
 
@@ -110,9 +120,9 @@ You can press F5 without creating `launch.json` first: WinApp contributes a defa
 4. It launches your app via `winapp run` to give it package identity, using the manifest specified via `manifest` in `launch.json` or auto-detected by the CLI.
 5. A child debug session attaches to the running process using the debugger you specified.
 
-> **Point `input` at a project to get builds for free.** A `.csproj`, `.vcxproj`, `.sln`, or `.slnx` input builds before launch. A build output folder launches existing binaries; rebuild first or use a `preLaunchTask`.
+> **Point `input` at a project to get builds for free.** When `input` is a `.csproj`, `.vcxproj`, `.sln`, or `.slnx`, `winapp run` restores and builds before launching, so your code changes are always reflected. When `input` is a build output folder, WinApp **does not** build; you must rebuild yourself (or use a `preLaunchTask`) after making code changes.
 
-> For apps without a supported project file, such as Electron, Rust, or CMake-only projects, use a build output folder and a `preLaunchTask` to keep binaries current.
+> When `input` is a build output folder, you can automate the build step by adding a `preLaunchTask` to your `launch.json` configuration. This tells VS Code to run a build task before every debug session, so your changes are always compiled before launch. Apps without a project file, such as Electron, Rust, and CMake-based C++ apps, always run this way, so a `preLaunchTask` is the way to keep their builds current.
 >
 > 1. Define a build task in `.vscode/tasks.json`. Any build command works; this example uses .NET, but `npm run build`, `cargo build`, or an MSBuild invocation work the same way:
 >    ```jsonc
@@ -170,7 +180,7 @@ You can press F5 without creating `launch.json` first: WinApp contributes a defa
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `input` | string | | What to run: a project (`.csproj`/`.vcxproj`), a solution (`.sln`/`.slnx`), a directory containing one, or a build output folder. If omitted, the extension discovers targets and prompts when needed. |
+| `input` | string | | What to run: a project (`.csproj` or C++ `.vcxproj`), a solution (`.sln`/`.slnx`), a directory containing one, or a build output folder (e.g., `${workspaceFolder}/bin/Debug/net8.0-windows10.0.22621`). If not set, you will be prompted to select a target. |
 | `inputFolder` | string | | **Deprecated.** Use `input`, which also accepts projects and solutions. Still honored for existing configurations; if both are set, `input` wins. |
 | `project` | string | | *Project mode only.* Selects which project to launch, by name or path, when `input` is a solution or a directory containing more than one runnable app project. |
 | `configuration` | string | `Debug` | *Project mode only.* Build configuration to use. |
@@ -289,7 +299,7 @@ When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer 
 | **Find All References / Rename** | For `x:Name` declarations and resource keys. Rename declines ambiguous external-dictionary references and theme variants rather than making partial edits. |
 | **Formatting** | Whole-document and range formatting. |
 | **Semantic tokens** | Type-aware colorization layered on top of the TextMate grammar. |
-| **Code actions** | Press **Ctrl+.** to import and qualify unresolved types, add namespace declarations, insert `x:DataType`, repair bindings, names, and Setter properties, or generate event handlers. |
+| **Code actions** | Press **Ctrl+.** to fix misspelled types, properties, and values, import and qualify unresolved types, add namespace declarations, insert `x:DataType`, repair bindings, names, and Setter properties, or generate event handlers. |
 
 The server starts automatically when you open a `.xaml` file. It ships as a self-contained native executable, so it runs whether or not .NET is installed — .NET is a requirement of the *project-aware* features, not of the editor.
 
@@ -417,7 +427,44 @@ Use **WinApp: Generate Manifest** to create an `Package.appxmanifest` from a tem
 
 ### Package and sign
 
-Use **WinApp: Create MSIX Package** to package your application. If you choose **self-contained** packaging and the selected build output path appears to target a different architecture than your machine, WinApp shows a warning before continuing so you can avoid bundling the wrong Windows App SDK runtime. When packaging finishes, a completion notification names the built `.msix` and offers three actions: **Reveal in Explorer** (open the package in File Explorer), **Sign** (sign the just-built package), and **Install** (sideload it via `Add-AppxPackage`). Use **WinApp: Sign File** to sign MSIX/APPX packages, `.exe` files, and `.dll` files with a `.pfx` certificate.
+Use **WinApp: Create MSIX Package or Bundle** to package either a .NET `.csproj` or existing build output. A single target produces an `.msix`; selecting multiple architectures or build output folders produces an `.msixbundle`.
+
+When packaging finishes, you can reveal, sign, or install the generated package. Use **WinApp: Sign File** to sign MSIX/APPX packages, `.exe` files, and `.dll` files with a `.pfx` certificate.
+
+Use **WinApp: Create Sparse Identity Package** for an identity-only manifest. It produces a `.identity.msix` and offers **Reveal** and **Sign**, but not the normal **Install** action because registration also requires the external application location.
+
+### Give an existing app package identity (sparse packaging)
+
+Sparse packaging grants package identity to an app that already builds and ships as a plain desktop executable, with no project restructuring, SDK install, or deployment change. The app keeps running from its normal install location; only a small identity package is registered alongside it.
+
+Run these three commands in order:
+
+1. **WinApp: Create Sparse Identity Manifest**: Pick the executable you want to grant identity to. WinApp generates an identity-only `appxmanifest.xml` plus placeholder `Assets/` in a `sparse/` folder beside the project. Package name, publisher, and version are inferred from the executable's file version info; open the generated manifest in the **AppxManifest Editor** if you want to change them. If a manifest is already there, WinApp asks before overwriting it.
+2. **WinApp: Create Sparse Identity Package**: Select the generated `sparse/appxmanifest.xml`. This produces a `.identity.msix`. Sign it with **WinApp: Sign File** (or let the pack step generate a development certificate). To trust that generated certificate, run **WinApp: Install Certificate**, which handles the required administrator prompt.
+3. **WinApp: Embed Identity into Executable**: Point at the same executable. WinApp records the package identity so Windows will associate the running process with the registered package.
+
+> **Important:** Embedding identity into an `.exe` rewrites the binary in place, which invalidates any existing Authenticode signature. WinApp displays a reminder while embedding; sign the executable *after* embedding, not before. Choosing a side-by-side `.manifest` target instead leaves the binary untouched.
+
+For local testing, finish the workflow by deploying the generated assets beside
+the executable and registering the identity package against that external
+location:
+
+```powershell
+Copy-Item .\sparse\Assets -Destination .\bin\Release\Assets -Recurse -Force
+Add-AppxPackage -Path .\MyApp.identity.msix `
+  -ExternalLocation (Resolve-Path .\bin\Release)
+```
+
+The external location must be the directory that contains the executable and
+the `Assets\` layout referenced by the sparse manifest. This is why sparse
+packages offer **Reveal** and **Sign**, but not the normal **Install** action:
+registration requires the application-specific external location. Production
+installers should copy the app, assets, and identity MSIX, then perform the same
+external-location registration. Unregister during cleanup with:
+
+```powershell
+Get-AppxPackage -Name <manifest Identity Name> | Remove-AppxPackage
+```
 
 ### Access Windows SDK tools
 

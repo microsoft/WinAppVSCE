@@ -7,8 +7,14 @@ import type { WorkspaceRoot } from './workspace';
 /** The extension-only target classification is never passed to the CLI. */
 export type RunTargetKind = 'project' | 'solution' | 'folder' | 'unknown';
 
-/** Project file extensions the CLI can build in project mode. */
-export const PROJECT_FILE_EXTENSIONS = ['.csproj', '.vcxproj'] as const;
+/** .NET project file extensions the extension discovers and the CLI builds in project mode. */
+export const PROJECT_FILE_EXTENSIONS = ['.csproj'] as const;
+
+/**
+ * C++ projects the CLI builds in project mode since winapp 0.8.0. Accepted when
+ * named explicitly but not yet discovered: runnability detection reads only .NET markers.
+ */
+export const NATIVE_PROJECT_FILE_EXTENSIONS = ['.vcxproj'] as const;
 
 /**
  * .NET file-based apps run in project mode but are deliberately excluded from
@@ -59,6 +65,9 @@ export function classifyRunTargetFile(filePath: string): RunTargetKind | undefin
 	if ((PROJECT_FILE_EXTENSIONS as readonly string[]).includes(extension)) {
 		return 'project';
 	}
+	if ((NATIVE_PROJECT_FILE_EXTENSIONS as readonly string[]).includes(extension)) {
+		return 'project';
+	}
 	if ((FILE_BASED_APP_EXTENSIONS as readonly string[]).includes(extension)) {
 		return 'project';
 	}
@@ -75,7 +84,8 @@ export function classifyRunTargetEntries(entryNames: readonly string[]): RunTarg
 		if ((SOLUTION_FILE_EXTENSIONS as readonly string[]).includes(extension)) {
 			return 'solution';
 		}
-		if ((PROJECT_FILE_EXTENSIONS as readonly string[]).includes(extension)) {
+		if ((PROJECT_FILE_EXTENSIONS as readonly string[]).includes(extension)
+			|| (NATIVE_PROJECT_FILE_EXTENSIONS as readonly string[]).includes(extension)) {
 			hasProject = true;
 		} else if (extension === '.exe') {
 			hasExecutable = true;
@@ -354,9 +364,8 @@ export function dedupeSolutionMembers(
 }
 
 /**
- * The bundled CLI accepts only .NET projects in solution mode. A native-only
- * solution therefore cannot run as a solution, but its built output can still
- * run in folder mode. Dropping it here keeps that fallback reachable.
+ * Discovery reads only .NET solution members, so a native-only solution has no
+ * project to prompt for. Dropping it keeps its built output reachable in folder mode.
  */
 export function filterSolutionsWithoutMembers(
 	candidates: readonly RunTargetCandidate[],
