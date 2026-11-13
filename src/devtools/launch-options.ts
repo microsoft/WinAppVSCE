@@ -46,23 +46,3 @@ export function devToolsSpawnArgs(config: DevToolsLaunchConfig | undefined): str
     const mode = devToolsMode(config);
     return mode ? ['--devtools', mode] : [];
 }
-
-/**
- * Why the CLI refused an explicit DevTools launch for the app's type, or undefined.
- * Covers app types the pre-launch check could not decide; the CLI names no error code.
- */
-export function unsupportedAppTypeReason(spawnArgs: string[], failure: string): string | undefined {
-    const index = spawnArgs.indexOf('--devtools');
-    if (index === -1 || spawnArgs[index + 1] === 'off') { return undefined; }
-    const match = /^DevTools requires WinUI 3;\s*(.+?)\.(?:\s+Run with --devtools off\b.*)?$/i.exec(failure.trim());
-    return match ? match[1] : undefined;
-}
-
-/** The same launch with DevTools turned off. */
-export function withDevToolsOff(spawnArgs: string[]): string[] {
-    const index = spawnArgs.indexOf('--devtools');
-    if (index === -1) { return [...spawnArgs, '--devtools', 'off']; }
-    const next = [...spawnArgs];
-    next[index + 1] = 'off';
-    return next;
-}

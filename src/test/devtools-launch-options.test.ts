@@ -4,9 +4,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
-    devToolsSpawnArgs, requestsDevTools, shouldAttachDebugger, shouldUseDevTools, unsupportedAppTypeReason, withDevToolsOff,
+    devToolsSpawnArgs, requestsDevTools, shouldAttachDebugger, shouldUseDevTools,
 } from '../devtools/launch-options';
-import { checkAppFramework } from '../devtools/app-framework';
+import { checkAppFramework, type PropertyEvaluator } from '../devtools/app-framework';
 
 test('an omitted devTools leaves the choice to the CLI default', () => {
     for (const config of [undefined, {}, { noDebug: true }]) {
@@ -40,18 +40,6 @@ test('noDebug suppresses only the debugger, and only for a literal true', () => 
     assert.deepStrictEqual(devToolsSpawnArgs({ noDebug: true, devTools: 'on' }), ['--devtools', 'on']);
 });
 
-// Captured from `winapp run BBWpf.csproj --devtools on --json` against the pinned CLI.
-const WPF_REFUSAL = "DevTools requires WinUI 3; 'BBWpf.csproj' is a WPF-only project. Run with --devtools off to start the app without DevTools.";
-
-test('the CLI refusal of an explicit request falls back to running without DevTools', () => {
-    assert.strictEqual(unsupportedAppTypeReason(['run', '.', '--devtools', 'on'], WPF_REFUSAL),
-        "'BBWpf.csproj' is a WPF-only project");
-    assert.deepStrictEqual(withDevToolsOff(['run', '.', '--devtools', 'headless', '--json']),
-        ['run', '.', '--devtools', 'off', '--json']);
-    assert.strictEqual(unsupportedAppTypeReason(['run', '.'], WPF_REFUSAL), undefined, 'automatic mode never refuses');
-    assert.strictEqual(unsupportedAppTypeReason(['run', '.', '--devtools', 'on'], 'Build failed with 3 errors.'), undefined);
-});
-
 function tempTree(files: Record<string, string>): string {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'winapp-framework-'));
     for (const [name, content] of Object.entries(files)) {
@@ -61,60 +49,67 @@ function tempTree(files: Record<string, string>): string {
     return root;
 }
 
+// Stands in for `dotnet msbuild -getProperty`, keyed by project file name.
+const evaluated = (byName: Record<string, Record<string, string>>): PropertyEvaluator =>
+    async file => byName[path.basename(file)];
+
 test('the pre-launch check recognizes WinUI 3 the way the CLI does', async t => {
     const root = tempTree({
         'WinUi/WinUi.csproj': '<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup></Project>',
-        'Inherited/src/App/App.csproj': '<Project></Project>',
-        'Inherited/Directory.Build.props': '<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup></Project>',
+        'Imported/Imported.csproj': '<Project><Import Project="..\\shared.props" /></Project>',
         'Native/Native.vcxproj': '<Project><ItemGroup><Page Include="MainWindow.xaml" /></ItemGroup></Project>',
-        'Native/packages.config': '<packages><package id="Microsoft.WindowsAppSDK" /></packages>',
         'Output/App.exe': '', 'Output/MainWindow.xbf': '',
     });
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    for (const input of ['WinUi/WinUi.csproj', 'WinUi', 'Inherited/src/App/App.csproj', 'Native/Native.vcxproj', 'Output']) {
-        assert.deepStrictEqual(await checkAppFramework(path.join(root, input)), { kind: 'winui' }, input);
+    const evaluate = evaluated({ 'Imported.csproj': { UseWinUI: 'true' } });
+    for (const input of ['WinUi/WinUi.csproj', 'WinUi', 'Imported/Imported.csproj', 'Native/Native.vcxproj', 'Output']) {
+        assert.deepStrictEqual(await checkAppFramework(path.join(root, input), undefined, evaluate), { kind: 'winui' }, input);
     }
 });
 
-test('the pre-launch check names apps that are not WinUI 3', async t => {
+test('the pre-launch check names every app that is not WinUI 3', async t => {
     const root = tempTree({
         'Wpf/Wpf.csproj': '<Project><PropertyGroup><UseWPF>true</UseWPF></PropertyGroup></Project>',
-        'Forms/Forms.csproj': '<Project><PropertyGroup><UseWindowsForms>true</UseWindowsForms></PropertyGroup></Project>',
+        'Inherited/Inherited.csproj': '<Project></Project>',
         'Console/Console.csproj': '<Project><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>',
         'Win32/Win32.vcxproj': '<Project><ItemGroup><ClCompile Include="main.cpp" /></ItemGroup></Project>',
         'electron/electron.exe': '', 'electron/resources/app.asar': '',
     });
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const evaluate = evaluated({ 'Inherited.csproj': { UseWindowsForms: 'true' }, 'Console.csproj': {} });
     const description = async (input: string) => {
-        const result = await checkAppFramework(path.join(root, input));
+        const result = await checkAppFramework(path.join(root, input), undefined, evaluate);
         return result.kind === 'other' ? result.description : result.kind;
     };
     assert.strictEqual(await description('Wpf/Wpf.csproj'), "'Wpf.csproj' is a WPF project");
-    assert.strictEqual(await description('Forms'), "'Forms.csproj' is a Windows Forms project");
+    assert.strictEqual(await description('Inherited'), "'Inherited.csproj' is a Windows Forms project");
     assert.strictEqual(await description('Console/Console.csproj'), "'Console.csproj' isn't a WinUI 3 project");
     assert.strictEqual(await description('Win32/Win32.vcxproj'), "'Win32.vcxproj' has no XAML pages");
     assert.strictEqual(await description('electron'), "'electron' doesn't contain a WinUI 3 app");
 });
 
-test('the pre-launch check defers to the CLI when it cannot be sure', async t => {
+test('a solution is judged by the app the CLI will run', async t => {
+    const sln = (members: string[]) => members.map(member =>
+        `Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "${path.parse(member).name}", "${member}", "{00000000-0000-0000-0000-000000000000}"\nEndProject`).join('\n');
+    const wpf = '<Project><PropertyGroup><OutputType>WinExe</OutputType><UseWPF>true</UseWPF></PropertyGroup></Project>';
+    const winui = '<Project><PropertyGroup><OutputType>WinExe</OutputType><UseWinUI>true</UseWinUI></PropertyGroup></Project>';
+    const library = '<Project><PropertyGroup><OutputType>Library</OutputType><UseWinUI>true</UseWinUI></PropertyGroup></Project>';
     const root = tempTree({
-        'Imported/Imported.csproj': '<Project><Import Project="..\\shared.props" /></Project>',
-        'Imported/App.xaml': '<Application />',
-        'Solution/App.sln': '',
+        'WpfOnly/App.sln': sln(['Wpf\\Wpf.csproj', 'Controls\\Controls.csproj']),
+        'WpfOnly/Wpf/Wpf.csproj': wpf, 'WpfOnly/Controls/Controls.csproj': library,
+        'Mixed/App.sln': sln(['Wpf\\Wpf.csproj', 'WinUi\\WinUi.csproj']),
+        'Mixed/Wpf/Wpf.csproj': wpf, 'Mixed/WinUi/WinUi.csproj': winui,
     });
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    assert.deepStrictEqual(await checkAppFramework(path.join(root, 'Imported/Imported.csproj')), { kind: 'unknown' });
-    assert.deepStrictEqual(await checkAppFramework(path.join(root, 'Solution/App.sln')), { kind: 'unknown' });
-    assert.deepStrictEqual(await checkAppFramework(path.join(root, 'Solution')), { kind: 'unknown' });
-    assert.deepStrictEqual(await checkAppFramework(path.join(root, 'Missing')), { kind: 'unknown' });
+    const evaluate = evaluated({});
+    assert.deepStrictEqual(await checkAppFramework(path.join(root, 'WpfOnly', 'App.sln'), undefined, evaluate),
+        { kind: 'other', description: "'Wpf.csproj' is a WPF project" }, 'a WinUI library does not make the app WinUI');
+    assert.strictEqual((await checkAppFramework(path.join(root, 'WpfOnly'), undefined, evaluate)).kind, 'other');
+    assert.strictEqual((await checkAppFramework(path.join(root, 'Mixed', 'App.sln'), 'Wpf', evaluate)).kind, 'other');
+    assert.strictEqual((await checkAppFramework(path.join(root, 'Mixed', 'App.sln'), 'WinUi.csproj', evaluate)).kind, 'winui');
 });
 
-test('a project chosen inside a solution is checked directly', async t => {
-    const root = tempTree({
-        'App.sln': '',
-        'Wpf/Wpf.csproj': '<Project><PropertyGroup><UseWPF>true</UseWPF></PropertyGroup></Project>',
-    });
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const result = await checkAppFramework(path.join(root, 'App.sln'), path.join(root, 'Wpf', 'Wpf.csproj'));
-    assert.strictEqual(result.kind, 'other');
+test('only an unreadable input is left to the CLI', async () => {
+    assert.deepStrictEqual(await checkAppFramework(path.join(os.tmpdir(), 'winapp-missing-input'), undefined, evaluated({})),
+        { kind: 'unknown' });
 });

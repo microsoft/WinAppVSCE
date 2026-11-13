@@ -46,7 +46,6 @@ import { activateXaml, deactivateXaml } from './xaml/xamlLanguageService';
 import { DevToolsPanel } from './devtools/devtools-panel';
 import {
 	devToolsSpawnArgs, requestsDevTools, shouldAttachDebugger, shouldUseDevTools,
-	unsupportedAppTypeReason, withDevToolsOff,
 } from './devtools/launch-options';
 import { checkAppFramework } from './devtools/app-framework';
 import { registerDevToolsCommands } from './devtools/commands';
@@ -1501,17 +1500,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			const baseSpawnArgs = [...buildRunArgs(runOptions), ...devToolsArgs];
 
 			const outputChannel = getWinappOutputChannel();
-			let launched: Awaited<ReturnType<typeof launchRunProcess>>;
-			try {
-				launched = await launchRunProcess({ cliPath, args: baseSpawnArgs, cwd, outputChannel });
-			} catch (launchError) {
-				// Covers app types the check above couldn't decide, such as a WPF project in a solution.
-				const reason = launchError instanceof WinAppRunFailure
-					? unsupportedAppTypeReason(baseSpawnArgs, launchError.message) : undefined;
-				if (!reason) { throw launchError; }
-				launched = await launchRunProcess({ cliPath, args: withDevToolsOff(baseSpawnArgs), cwd, outputChannel });
-				warnDevToolsUnsupported(reason);
-			}
+			const launched = await launchRunProcess({ cliPath, args: baseSpawnArgs, cwd, outputChannel });
 			const { processId, runProcess, warning, devToolsAttached } = launched;
 			// The app is running; this is a partial failure such as DevTools not attaching.
 			if (warning) {
