@@ -50,6 +50,14 @@ public partial class App : Application
     /// <param name="args">Details about the launch request and process.</param>
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
+        // The DevTools E2E specs inspect one window showing DevToolsPage.
+        if (Environment.GetCommandLineArgs().Contains("--devtools-page"))
+        {
+            _mainWindow = new MainWindow(typeof(DevToolsPage));
+            _mainWindow.Activate();
+            return;
+        }
+
         _mainWindow = new MainWindow();
         _mainWindow.Activate();
 

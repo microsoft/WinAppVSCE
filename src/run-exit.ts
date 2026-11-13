@@ -31,7 +31,12 @@ export interface RunExit {
 	code: number | null;
 	/** The user cancelled the progress notification. */
 	cancelled: boolean;
+	/** The CLI's own one-line reason (its JSON `Error`), when it reported one. */
+	detail?: string;
 }
+
+/** A toast holds a sentence, not a stack trace or build log. */
+const MAX_DETAIL_LENGTH = 300;
 
 /**
  * Turns a finished `winapp run` into the error to reject with.
@@ -40,14 +45,20 @@ export interface RunExit {
  * reported one has already resolved, so every outcome here is a failure of
  * some kind.
  */
-export function classifyRunExit({ code, cancelled }: RunExit): Error {
+export function classifyRunExit({ code, cancelled, detail }: RunExit): Error {
 	if (cancelled) {
 		return new DebugLaunchCancelled();
 	}
+	const reason = summarizeDetail(detail);
 	if (code !== 0) {
-		// The full output is already in the channel; a toast is the wrong
-		// place for a build log.
-		return new WinAppRunFailure(`winapp run failed with exit code ${code}.`);
+		// The full output is already in the channel; only the CLI's own reason belongs in a toast.
+		return new WinAppRunFailure(reason ?? `winapp run failed with exit code ${code}.`);
 	}
-	return new WinAppRunFailure('winapp run exited before reporting a process ID to attach to.');
+	return new WinAppRunFailure(reason ?? 'winapp run exited before reporting a process ID to attach to.');
+}
+
+function summarizeDetail(detail: string | undefined): string | undefined {
+	const text = detail?.replace(/\s+/g, ' ').trim();
+	if (!text) { return undefined; }
+	return text.length > MAX_DETAIL_LENGTH ? `${text.slice(0, MAX_DETAIL_LENGTH - 1)}\u2026` : text;
 }
