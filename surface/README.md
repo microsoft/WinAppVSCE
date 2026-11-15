@@ -261,8 +261,7 @@ entry/index, cancellation without fallback/runnable paths, and retention and
 validation of any already-committed generation.
 It preserves `%TEMP%\wxpf\Foundation-*\results.json` (override the root with
 `-CacheRoot`; kept short so deep checkouts stay under MAX_PATH) as test evidence and leaves
-no owned child processes. It never uses the default user cache. See
-[`docs/previewer-migration.md`](../docs/previewer-migration.md) for current results.
+no owned child processes. It never uses the default user cache.
 
 The full wire contract/test boundary is in [`protocol/README.md`](protocol/README.md).
 Protocol v1 has no request IDs/stale-result guarantees or version enforcement;

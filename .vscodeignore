@@ -44,4 +44,3 @@ dist/server/**/*.obj
 winapp.yaml
 surface/**
 vs-extension/**
-docs/previewer-migration.md
