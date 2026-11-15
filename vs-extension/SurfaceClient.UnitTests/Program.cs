@@ -278,6 +278,29 @@ internal static partial class Program
             WaitFor(() => cleaned.Count > 0, 5000);
             Check("restore after obj\\ deleted is seen", cleaned.TryPeek(out var e) && e);
         }
+
+        // BB-003: the first build of a never-built project (no bin\) produces a DLL, which is a rebuild.
+        var d5 = NewDir("pow5");
+        var csproj5 = Csproj(d5, "Unbuilt");
+        var built = new System.Collections.Concurrent.ConcurrentQueue<bool>();
+        using (ProjectOutputWatcher.Create(csproj5, null, quiet, built.Enqueue, _ => { }))
+        {
+            Write(Path.Combine(d5, "bin", "x64", "Debug", "net8.0", "Unbuilt.dll"), "a");
+            WaitFor(() => built.Count > 0, 5000);
+            Check("first build of an unbuilt project is seen", built.TryPeek(out var f) && !f);
+        }
+
+        // BB-019: building another configuration (a new output folder) is seen too, not only the loaded DLL.
+        var d6 = NewDir("pow6");
+        var csproj6 = Csproj(d6, "App");
+        var dll6 = Write(Path.Combine(d6, "bin", "x64", "Debug", "App.dll"), "a");
+        var config = new System.Collections.Concurrent.ConcurrentQueue<bool>();
+        using (ProjectOutputWatcher.Create(csproj6, dll6, quiet, config.Enqueue, _ => { }))
+        {
+            Write(Path.Combine(d6, "bin", "x64", "Release", "App.dll"), "b");
+            WaitFor(() => config.Count > 0, 5000);
+            Check("first build of another configuration is seen", config.TryPeek(out var g) && !g);
+        }
     }
 
     private static bool WaitFor(Func<bool> cond, int ms)

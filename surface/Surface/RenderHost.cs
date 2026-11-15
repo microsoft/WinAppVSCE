@@ -93,6 +93,10 @@ internal sealed class RenderHost
     /// </summary>
     public void Initialize()
     {
+        // BB-005: Window.Activate() below hands the system foreground to these off-screen windows (typed keys in VS
+        // were lost). Remember who had it so OnHiddenWindowActivated can give it back.
+        _startupForeground = GetForegroundWindow();
+
         // Anchor: sole purpose is to keep the Application message loop alive for the entire
         // server lifetime, independent of anything we do to the render window.
         _anchor = new Window();
@@ -101,6 +105,7 @@ internal sealed class RenderHost
         SetToolWindowStyle(anchorHwnd);
         SetCloaked(anchorHwnd, true);
         _anchor.AppWindow.Move(new PointInt32(-32000, -32000));
+        _anchor.Activated += (_, e) => OnHiddenWindowActivated(anchorHwnd, e);
         _anchor.Activate();
 
         // Reusable render window: cloaked + parked off-screen, activated once, kept warm.
@@ -114,10 +119,48 @@ internal sealed class RenderHost
         _dpiScale = GetDpiForWindow(renderHwnd) / 96.0;
         _renderWindow.AppWindow.Move(new PointInt32(-32000, -32000));
         _renderWindow.AppWindow.Resize(new SizeInt32(800, 600));
+        _renderWindow.Activated += (_, e) => OnHiddenWindowActivated(renderHwnd, e);
         _renderWindow.Activate();
 
         App.Log($"RenderHost ready (anchor + warm render window; dpiScale {_dpiScale:0.##}).");
     }
+
+    private IntPtr _startupForeground;
+
+    /// <summary>
+    /// An off-screen top-level window (the anchor, or the render window while it isn't reparented into the IDE)
+    /// must never hold the foreground: return it to the window that had it when the surface started.
+    /// </summary>
+    private void OnHiddenWindowActivated(IntPtr hwnd, WindowActivatedEventArgs e)
+    {
+        try
+        {
+            var prev = _startupForeground;
+            if (e.WindowActivationState == WindowActivationState.Deactivated ||
+                (GetWindowLongPtr(hwnd, GWL_STYLE).ToInt64() & WS_CHILD) != 0 ||
+                GetForegroundWindow() != hwnd || prev == IntPtr.Zero || prev == hwnd || !IsWindow(prev))
+            {
+                return;
+            }
+
+            if (SetForegroundWindow(prev))
+            {
+                App.Log("Returned the foreground to the IDE after a hidden window activated.");
+            }
+        }
+        catch (Exception ex) { App.Log($"Foreground hand-back failed: {ex.Message}"); }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindow(IntPtr hWnd);
 
     /// <summary>
     /// The design-time XAML cleaning hook (S4 §10). Delegates to <see cref="XamlCleaner"/> to turn a

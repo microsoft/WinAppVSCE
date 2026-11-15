@@ -330,6 +330,18 @@ namespace Surface.Tests
                 "  </Grid>\n" +
                 "</Page>";
             Eq("no counterpart -> nearest matching ancestor", "4", XamlErrorText.MapToSource(withPlaceholder, rawWithCustom, 3, 6)?.Line.ToString());
+
+            // BB-002: the template's <?xml?> line is dropped by the cleaner; line 1 must stay occupied so WinUI
+            // (which doesn't count leading blank lines) reports the same line numbers as the user's file.
+            const string withProlog =
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" +
+                "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\">\r\n" +
+                "  <Button />\r\n" +
+                "</Page>";
+            var cleanedProlog = XamlCleaner.Clean(withProlog);
+            Check("prolog-cleaned output doesn't start with whitespace", !char.IsWhiteSpace(cleanedProlog[0]), cleanedProlog);
+            Eq("root keeps its line after the prolog is dropped", "<Page",
+                cleanedProlog.Split('\n')[1].Substring(0, 5));
         }
 
         private static void KnownWinUiTypeList()

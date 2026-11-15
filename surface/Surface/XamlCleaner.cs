@@ -371,7 +371,10 @@ internal static class XamlCleaner
                 }
             }
 
-            return doc.ToString(SaveOptions.DisableFormatting);
+            // ToString drops the <?xml?> declaration but keeps the line break after it. WinUI doesn't count leading
+            // whitespace lines, so every error would point one line early; an empty comment keeps line 1 occupied.
+            var cleaned = doc.ToString(SaveOptions.DisableFormatting);
+            return cleaned.Length > 0 && char.IsWhiteSpace(cleaned[0]) ? "<!---->" + cleaned : cleaned;
         }
         catch
         {

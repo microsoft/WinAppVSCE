@@ -252,6 +252,7 @@ namespace WinUIXamlPreview.Editor
             catch (Exception ex) { Log.Write("Caret sync subscribe failed: " + ex.Message); }
 
             PreviewPackageState.PopOutChanged += OnPopOutChanged;
+            CollapsedChanged += OnCollapsedChanged;
             if (PreviewPackageState.PoppedOut)
             {
                 _preview.Suspend();
@@ -388,6 +389,23 @@ namespace WinUIXamlPreview.Editor
                 ApplyCollapsedState();
             }
             catch (Exception ex) { Log.Write("Toggle collapse failed: " + ex); }
+
+            // Hide is global (BB-006): every other open margin follows, so none stays expanded but frozen.
+            try { CollapsedChanged?.Invoke(this); }
+            catch (Exception ex) { Log.Write("CollapsedChanged handler failed: " + ex); }
+        }
+
+        private static event Action<XamlPreviewMargin>? CollapsedChanged;
+
+        private void OnCollapsedChanged(XamlPreviewMargin source)
+        {
+            if (_disposed || ReferenceEquals(source, this))
+            {
+                return;
+            }
+
+            try { ApplyCollapsedState(); }
+            catch (Exception ex) { Log.Write("Collapse sync failed: " + ex); }
         }
 
         private void ApplyCollapsedState()
@@ -883,6 +901,7 @@ namespace WinUIXamlPreview.Editor
             _disposed = true;
             Testing.TestHooks.UnregisterMargin(this);
             PreviewPackageState.PopOutChanged -= OnPopOutChanged;
+            CollapsedChanged -= OnCollapsedChanged;
             if (_hostControl != null)
             {
                 _hostControl.SizeChanged -= OnHostSizeChanged;

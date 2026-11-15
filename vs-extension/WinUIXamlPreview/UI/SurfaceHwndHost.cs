@@ -135,10 +135,22 @@ namespace WinUIXamlPreview.UI
             _surfaceHwnd = IntPtr.Zero;
         }
 
+        // Stand-in child returned from BuildWindowCore when there's no live surface to host (see there).
+        private IntPtr _placeholderHwnd;
+
         protected override HandleRef BuildWindowCore(HandleRef hwndParent)
         {
             // Mixed-mode DPI hosting so a PerMonitorV2 WinUI child composes crisply inside VS's host.
             NativeMethods.SetThreadDpiHostingBehavior(NativeMethods.DPI_HOSTING_BEHAVIOR.MIXED);
+
+            // HwndHost.BuildWindow throws (and that exception takes down devenv) unless we return a live child of
+            // hwndParent. WPF defers the build while the host is collapsed, so by the time it runs the surface may
+            // have been retired (MarkSurfaceDead after a spare promotion) or its process may have exited. Either
+            // way the replacement surface (or crash recovery) re-hosts into a new SurfaceHwndHost.
+            if (!_surfaceAlive || _surfaceHwnd == IntPtr.Zero || !NativeMethods.IsWindow(_surfaceHwnd))
+            {
+                return BuildPlaceholder(hwndParent, "surface already retired or gone");
+            }
 
             // Turn the surface's top-level window into a borderless child of the tool window.
             long style = NativeMethods.GetWindowLongPtr(_surfaceHwnd, NativeMethods.GWL_STYLE).ToInt64();
@@ -148,6 +160,11 @@ namespace WinUIXamlPreview.UI
             NativeMethods.SetWindowLongPtr(_surfaceHwnd, NativeMethods.GWL_STYLE, new IntPtr(style));
 
             NativeMethods.SetParent(_surfaceHwnd, hwndParent.Handle);
+            if (NativeMethods.GetParent(_surfaceHwnd) != hwndParent.Handle)
+            {
+                return BuildPlaceholder(hwndParent, "SetParent failed");
+            }
+
             // Place the child where the holder actually is BEFORE showing it. hwndParent is the VS (main or
             // floating) window's HwndSource, so (0,0) is VS's top-left corner: the child would flash there until
             // WPF's first layout pass moved it into the pane (visible on every new HWND, e.g. a theme swap).
@@ -155,6 +172,17 @@ namespace WinUIXamlPreview.UI
             NativeMethods.MoveWindow(_surfaceHwnd, x, y, _pixelW, _pixelH, true);
             NativeMethods.ShowWindow(_surfaceHwnd, NativeMethods.SW_SHOWNA);
             return new HandleRef(this, _surfaceHwnd);
+        }
+
+        private HandleRef BuildPlaceholder(HandleRef hwndParent, string reason)
+        {
+            _surfaceAlive = false;
+            _surfaceHwnd = IntPtr.Zero;
+            _placeholderHwnd = NativeMethods.CreateWindowEx(0, "STATIC", null,
+                (int)(NativeMethods.WS_CHILD | NativeMethods.WS_VISIBLE), 0, 0, _pixelW, _pixelH,
+                hwndParent.Handle, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            Logging.Log.Write($"Native host built with a placeholder ({reason}).");
+            return new HandleRef(this, _placeholderHwnd);
         }
 
         /// <summary>The holder's top-left in parent-HWND device pixels; far off-screen if not yet resolvable (WPF's
@@ -182,6 +210,13 @@ namespace WinUIXamlPreview.UI
         protected override void DestroyWindowCore(HandleRef hwnd)
         {
             LayoutUpdated -= OnLayoutUpdated;
+            if (_placeholderHwnd != IntPtr.Zero)
+            {
+                NativeMethods.DestroyWindow(_placeholderHwnd);
+                _placeholderHwnd = IntPtr.Zero;
+                return;
+            }
+
             // Detach only when the surface is still alive (mode switch / control unload); the surface
             // owns the window and re-cloaks it on ExitNative. If the process is dead, do nothing.
             if (_surfaceAlive && _surfaceHwnd != IntPtr.Zero)
@@ -220,6 +255,10 @@ namespace WinUIXamlPreview.UI
         [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
         [DllImport("user32.dll", SetLastError = true)] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
         [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "CreateWindowExW")]
+        public static extern IntPtr CreateWindowEx(int dwExStyle, string lpClassName, string? lpWindowName, int dwStyle,
+            int x, int y, int nWidth, int nHeight, IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
+        [DllImport("user32.dll", SetLastError = true)] public static extern bool DestroyWindow(IntPtr hWnd);
         [DllImport("user32.dll", SetLastError = true, EntryPoint = "GetWindowLongPtrW")] public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll", SetLastError = true, EntryPoint = "SetWindowLongPtrW")] public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
         [DllImport("user32.dll")] public static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);

@@ -20,7 +20,8 @@ internal sealed class ProjectOutputWatcher : IDisposable
     private readonly List<(string Dir, string Filter, bool Recursive)> _specs = new();
     private bool _rearm;
     private readonly string[] _assetsCandidates;
-    private readonly string? _userDll;
+    private readonly string _binDir;
+    private readonly string _dllName;
     private readonly TimeSpan _quiet;
     private readonly Action<bool> _onSettled;
     private readonly Action<string> _log;
@@ -38,7 +39,10 @@ internal sealed class ProjectOutputWatcher : IDisposable
             Path.Combine(projectDir, "obj", ProjectFiles.AssetsFileName),
             Path.Combine(projectDir, "obj", Path.GetFileNameWithoutExtension(csproj), ProjectFiles.AssetsFileName),
         };
-        _userDll = userDll;
+        // Watch every build of the assembly under bin, not just the one the preview loaded: the first build of a
+        // never-built project (BB-003) or of another configuration (BB-019) lands in a folder that didn't exist yet.
+        _binDir = Path.Combine(projectDir, "bin");
+        _dllName = !string.IsNullOrEmpty(userDll) ? Path.GetFileName(userDll)! : Path.GetFileNameWithoutExtension(csproj) + ".dll";
         _quiet = quiet;
         _onSettled = onSettled;
         _log = log;
@@ -47,15 +51,7 @@ internal sealed class ProjectOutputWatcher : IDisposable
         _dllBaseline = DllFingerprint();
 
         Watch(Path.Combine(projectDir, "obj"), ProjectFiles.AssetsFileName, recursive: true);
-        if (!string.IsNullOrEmpty(userDll))
-        {
-            Watch(Path.GetDirectoryName(userDll)!, Path.GetFileName(userDll), recursive: false);
-        }
-        else
-        {
-            // Not built yet: the default assembly name is the project file name.
-            Watch(Path.Combine(projectDir, "bin"), Path.GetFileNameWithoutExtension(csproj) + ".dll", recursive: true);
-        }
+        Watch(_binDir, _dllName, recursive: true);
     }
 
     /// <summary>Null when there's no owning project or nothing can be watched.</summary>
@@ -155,7 +151,17 @@ internal sealed class ProjectOutputWatcher : IDisposable
         catch (Exception ex) { _log("Project output change handler failed: " + ex.Message); }
     }
 
-    private string DllFingerprint() => string.IsNullOrEmpty(_userDll) ? "" : Fingerprint(new[] { _userDll! });
+    private string DllFingerprint()
+    {
+        try
+        {
+            if (!Directory.Exists(_binDir)) return "";
+            var dlls = Directory.EnumerateFiles(_binDir, _dllName, SearchOption.AllDirectories)
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
+            return string.Join("|", dlls.Select(f => f + "=" + Fingerprint(new[] { f })));
+        }
+        catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { return "?"; }
+    }
 
     internal static string Fingerprint(IEnumerable<string> files) => string.Join("|", files.Select(f =>
     {
