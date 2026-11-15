@@ -104,6 +104,9 @@ namespace WinUIXamlPreview.UI
         private volatile ViewMsg? _lastView;
         private bool _carryViewOnPromote;
         private bool _suspended; // released in favour of the preview tool window (Suspend/Resume)
+        private bool _resumeOnVisible; // resumed while hidden (background tab, collapsed margin): start once shown
+        private int _startGen; // bumps per StartPreviewAsync so a superseded start bails after its yield
+        private HwndMsg? _lastHosted; // build hints of the hosted render, carried with a parked surface
 
         // ---- version-matched fidelity upgrade (nov-vsix-wire) --------------
         // The instant launch is ALWAYS the bundled 2.2.0 host. When the target project references a different
@@ -157,6 +160,11 @@ namespace WinUIXamlPreview.UI
                     return;
                 }
                 if (_settingsSyncDeferred) { OnPreviewSettingsChanged(); }
+                if (_resumeOnVisible && IsLoaded && !_suspended)
+                {
+                    _resumeOnVisible = false;
+                    ShowDocument(_pinnedPath ?? PreviewPackageState.GetActiveXamlPath());
+                }
                 ArmFocusGuard();
             };
         }
@@ -328,9 +336,10 @@ namespace WinUIXamlPreview.UI
             }
 
             Log.Write("Preview suspended (shown in the preview window); releasing its surface.");
-            _suspended = true;
             PreviewerSelection.Forget(_pinnedPath);
-            DisposeClient();
+            ParkOrDisposeClient();
+            _suspended = true;
+            _resumeOnVisible = false;
             _currentPath = null;
             _hasFrame = false;
             FrameImage.Source = null;
@@ -347,9 +356,15 @@ namespace WinUIXamlPreview.UI
 
             Log.Write("Preview resumed.");
             _suspended = false;
-            if (IsLoaded)
+            if (IsLoaded && IsVisible)
             {
                 ShowDocument(_pinnedPath ?? PreviewPackageState.GetActiveXamlPath());
+            }
+            else
+            {
+                // A background tab (or a collapsed margin) restarts only once it is actually shown, instead of
+                // every open .xaml tab relaunching a surface the moment the preview window closes.
+                _resumeOnVisible = true;
             }
         }
 
@@ -362,7 +377,7 @@ namespace WinUIXamlPreview.UI
                 _tracker.DocumentRenamed -= OnTrackerDocumentRenamed;
             }
 
-            DisposeClient();
+            ParkOrDisposeClient();
         }
 
         private void OnTrackerDocumentRenamed(object? sender, DocumentRenamedEventArgs e) => OnDocumentRenamed(e.OldPath, e.NewPath);
@@ -462,6 +477,7 @@ namespace WinUIXamlPreview.UI
                 return;
             }
 
+            _resumeOnVisible = false;
             if (!string.IsNullOrEmpty(path))
             {
                 _emptyDebounce.Stop(); // a real document wins over a pending "no document"
@@ -527,6 +543,15 @@ namespace WinUIXamlPreview.UI
         private async System.Threading.Tasks.Task StartPreviewAsync(string path)
         {
             DisposeClient();
+            var gen = ++_startGen;
+
+            // Let a preview that is going away in the same UI operation (dock switch, Window, closing the preview
+            // window, redocking) park its surface first, so this start can adopt it instead of launching a new one.
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
+            if (_disposed || _suspended || gen != _startGen || !IsCurrent(path))
+            {
+                return;
+            }
 
             string xaml;
             string? userDll;
@@ -562,6 +587,10 @@ namespace WinUIXamlPreview.UI
                 surfaceExe = recover.Value.Exe;
                 recoverPri = recover.Value.Pri;
                 Log.Write($"Recovery: relaunching on the active version-matched host ({surfaceExe}); skipping the bundled leg + upgrade.");
+            }
+            else if (TryAdoptParked(path, xaml, userDll, userAppXaml, plan))
+            {
+                return;
             }
 
             if (surfaceExe == null)
@@ -2208,29 +2237,12 @@ namespace WinUIXamlPreview.UI
                     // msg is informational only: the child is never sized to it.
                     if (_nativeHost == null || _nativeHost.SurfaceHwnd != hwnd)
                     {
-                        // First/new HWND (first entry, theme swap, spare promotion): swap the new host in
-                        // directly in place of the old one — no collapse/teardown gap in between — and start
-                        // the child at the pane's size so there's no canvas-size frame before WPF's layout.
-                        var (paneW, paneH) = GetPanePixelSize(pxW, pxH);
-                        var old = _nativeHost;
-                        var host = new SurfaceHwndHost(hwnd, paneW, paneH);
-                        FrameImage.Visibility = Visibility.Collapsed;
-                        FrameImage.Source = null;
-                        NativeHostHolder.Width = double.NaN;
-                        NativeHostHolder.Height = double.NaN;
-                        NativeHostHolder.Visibility = Visibility.Visible;
-                        NativeHostHolder.Child = host;
-                        _nativeHost = host;
-                        ArmHangWatchdog(source, hwnd);
-                        ArmFocusGuard();
-                        if (old != null)
-                        {
-                            try { old.Dispose(); } catch { }
-                        }
                         // The sticky canvas size was already sent ahead of EnterNative (SendStickyCanvasSize),
                         // so this first host is already at the right size — no follow-up re-host needed.
+                        HostNativeWindow(source, hwnd, pxW, pxH);
                     }
                     // else: same warm window re-hosted after an edit — nothing to do client-side.
+                    _lastHosted = msg;
 
                     // Swap to the native view (hide the image path).
                     FrameImage.Visibility = Visibility.Collapsed;
@@ -2260,6 +2272,31 @@ namespace WinUIXamlPreview.UI
                     SetStatus("Failed to host native surface.", spinner: false, detail: ex.Message, severity: BannerSeverity.Error, offerReload: true);
                 }
             });
+        }
+
+        /// <summary>
+        /// Host a new surface HWND (first entry, theme swap, spare promotion, adopted parked surface): swap the new
+        /// host in directly in place of the old one — no collapse/teardown gap in between — and start the child at
+        /// the pane's size so there's no canvas-size frame before WPF's layout.
+        /// </summary>
+        private void HostNativeWindow(SurfaceClient source, IntPtr hwnd, int pxW, int pxH)
+        {
+            var (paneW, paneH) = GetPanePixelSize(pxW, pxH);
+            var old = _nativeHost;
+            var host = new SurfaceHwndHost(hwnd, paneW, paneH);
+            FrameImage.Visibility = Visibility.Collapsed;
+            FrameImage.Source = null;
+            NativeHostHolder.Width = double.NaN;
+            NativeHostHolder.Height = double.NaN;
+            NativeHostHolder.Visibility = Visibility.Visible;
+            NativeHostHolder.Child = host;
+            _nativeHost = host;
+            ArmHangWatchdog(source, hwnd);
+            ArmFocusGuard();
+            if (old != null)
+            {
+                try { old.Dispose(); } catch { }
+            }
         }
 
         private void OnNativeExited()
@@ -2749,6 +2786,172 @@ namespace WinUIXamlPreview.UI
             NativeHostHolder.Height = double.NaN;
         }
 
+        // ---- parking: hand a live surface to the next preview of the same document ----
+        //
+        // Moving the preview (dock right/bottom reopens the document; Window / closing the window moves it between
+        // the margin and the tool window; redocking the tool window reloads its content) tears one PreviewControl's
+        // surface down and starts another for the same file. Instead of killing a rendered surface and cold-starting
+        // a new one (~1 s of blank "Starting preview…"), park it briefly and let the next preview re-host its window.
+
+        /// <summary>Park the live, rendered surface (if any) for the next preview of this document; dispose the rest.</summary>
+        private void ParkOrDisposeClient()
+        {
+            var parked = TryCreateParked();
+            if (parked != null)
+            {
+                DetachClient(parked.Client);
+                _client = null; // DisposeClient must not kill it
+                TeardownNativeHost(surfaceDead: false); // detach the window (parked off-screen, still alive)
+            }
+
+            DisposeClient();
+            if (parked != null)
+            {
+                SurfaceParking.Park(parked);
+            }
+        }
+
+        private ParkedSurface? TryCreateParked()
+        {
+            var client = _client;
+            var host = _nativeHost;
+            var path = _currentPath;
+            if (client == null || host == null || !_hasNative || string.IsNullOrEmpty(path) || client.IsFaulted
+                || host.SurfaceHwnd == IntPtr.Zero || _retiringClient != null || _session.PromotedRenderPending
+                || _session.ThemeSwapPending || PreviewPackageState.ShutdownToken.IsCancellationRequested)
+            {
+                return null;
+            }
+
+            string? xaml = null;
+            try { xaml = ReadDocumentText(path!); }
+            catch (Exception ex) { Log.Write("Park: could not read the document (" + ex.Message + ")."); }
+
+            double dpi = 0;
+            try { dpi = VisualTreeHelper.GetDpi(this).DpiScaleX; } catch { }
+
+            return new ParkedSurface
+            {
+                Path = path!,
+                Client = client,
+                Hwnd = host.SurfaceHwnd,
+                PixelWidth = _lastHosted?.PixelWidth ?? 0,
+                PixelHeight = _lastHosted?.PixelHeight ?? 0,
+                SurfaceExe = _activeSurfaceExe,
+                UserDll = _activeUserDll,
+                UserAppXaml = _activeUserAppXaml,
+                Project = _activeProject,
+                Theme = _activeTheme,
+                UserPri = _activeUserPri,
+                UserDllWriteTime = ParkedSurface.DllStamp(_activeUserDll),
+                SampleData = client.SampleData,
+                DesignMode = _appliedDesignMode,
+                CanvasWidth = _appliedCanvasWidth,
+                CanvasHeight = _appliedCanvasHeight,
+                DpiScale = dpi,
+                Xaml = xaml,
+                View = _lastView,
+                ContentPropMap = _contentPropMap,
+                LastHosted = _lastHosted,
+            };
+        }
+
+        /// <summary>
+        /// Adopt a parked surface for <paramref name="path"/> when it was launched for the same project and still
+        /// matches the current settings: re-host its window, restore its render state, and catch it up on any edit
+        /// made in between. False (nothing changed) when there is none; the caller then cold-starts.
+        /// </summary>
+        private bool TryAdoptParked(string path, string xaml, string? userDll, string? userAppXaml, HostSelection? plan)
+        {
+            double dpi = 0;
+            try { dpi = VisualTreeHelper.GetDpi(this).DpiScaleX; } catch { }
+            var theme = PreviewOptions.Theme;
+            var sample = PreviewOptions.DesignTimeData;
+            var design = PreviewOptions.DesignMode;
+            double cw = PreviewOptions.CanvasWidth, ch = PreviewOptions.CanvasHeight;
+
+            var p = SurfaceParking.TryTake(path, c =>
+                !c.Client.IsFaulted && NativeMethods.IsWindow(c.Hwnd)
+                && string.Equals(c.UserDll, userDll, StringComparison.OrdinalIgnoreCase)
+                && c.UserDllWriteTime == ParkedSurface.DllStamp(userDll)
+                && string.Equals(c.UserAppXaml, userAppXaml, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(c.Theme, theme, StringComparison.Ordinal)
+                && c.SampleData == sample && c.DesignMode == design
+                && c.CanvasWidth == cw && c.CanvasHeight == ch
+                && Math.Abs(c.DpiScale - dpi) < 0.01);
+            if (p == null)
+            {
+                return false;
+            }
+
+            var client = p.Client;
+            try
+            {
+                _activeSurfaceExe = p.SurfaceExe;
+                _activeUserDll = p.UserDll;
+                _activeUserAppXaml = p.UserAppXaml;
+                _activeProject = p.Project;
+                _activeTheme = p.Theme;
+                _activeUserPri = p.UserPri;
+                _session.OnNewDocument();
+                _heldError = null;
+                client.DocumentPathSource = () => _currentPath ?? _pinnedPath;
+                AttachClient(client);
+                _client = client;
+                _session.OnNewActiveClient();
+                _nativeSupported = true;
+                _lastView = p.View;
+                _contentPropMap = p.ContentPropMap;
+                _lastHosted = p.LastHosted;
+
+                HostNativeWindow(client, p.Hwnd, Math.Max(1, p.PixelWidth), Math.Max(1, p.PixelHeight));
+                _hasNative = true;
+                PerfEnd("adopted");
+                OnRenderSucceeded();
+                HideStatus();
+                if (p.LastHosted is { } hint)
+                {
+                    UpdateBuildHint(hint.MissingKeys, hint.UnmappedTypes, hint.DesignValuesSkipped, hint.PlaceholderTypes);
+                    UpdateNewerTypesNote(hint.NewerTypes);
+                }
+
+                try { ContentPropMapChanged?.Invoke(); }
+                catch (Exception ex) { Log.Write("ContentPropMapChanged handler failed: " + ex.Message); }
+
+                Log.Write($"Adopted the parked surface for '{path}' (pid={client.ProcessId}); no restart needed.");
+
+                // The document changed while the surface was parked (e.g. a dock switch discarded unsaved edits).
+                if (!string.Equals(p.Xaml, xaml, StringComparison.Ordinal))
+                {
+                    ReloadCurrent();
+                }
+
+                // Same as a cold start on the bundled host: kick (or rejoin) the version-matched upgrade.
+                _fidelityPlan = p.UserPri == null ? plan : null;
+                if (p.UserPri == null)
+                {
+                    KickFidelityUpgrade(plan);
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Adopting the parked surface failed; starting a new one: " + ex);
+                Telemetry.PreviewTelemetry.LogException("AdoptParked", ex);
+                if (ReferenceEquals(_client, client))
+                {
+                    DisposeClient();
+                }
+                else
+                {
+                    p.Dispose();
+                }
+
+                return false;
+            }
+        }
+
         private void DisposeClient()
         {
             // We're intentionally tearing this client down; a Closed event it raises during teardown
@@ -2819,7 +3022,7 @@ namespace WinUIXamlPreview.UI
             _resizeDebounce.Stop();
             _emptyDebounce.Stop();
             StopFocusGuard();
-            DisposeClient();
+            ParkOrDisposeClient();
         }
     }
 }

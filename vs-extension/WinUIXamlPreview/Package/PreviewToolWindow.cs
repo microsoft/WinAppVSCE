@@ -61,8 +61,9 @@ namespace WinUIXamlPreview
 
         protected override void OnClose()
         {
-            PreviewPackageState.SetPoppedOut(false);
+            // Park the window's surface before the margins resume, so the active tab's margin adopts it.
             _preview.Dispose();
+            PreviewPackageState.SetPoppedOut(false);
 
             // The shell keeps this pane and reshows it on the next "Window" click; give it a live control
             // (the disposed one can never render again).

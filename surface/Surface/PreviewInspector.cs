@@ -628,6 +628,7 @@ internal static class PreviewInspector
     private static string Num(double d) =>
         d.ToString(d == Math.Floor(d) ? "0" : "0.##", CultureInfo.InvariantCulture);
 
+    // Opaque colors read as the familiar #RRGGBB; translucent ones keep their alpha.
     private static string FormatColor(Color c) =>
-        $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
+        c.A == 0xFF ? $"#{c.R:X2}{c.G:X2}{c.B:X2}" : $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
 }

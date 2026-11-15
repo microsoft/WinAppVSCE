@@ -11,6 +11,26 @@ internal static partial class Program
 {
     private static void SessionTests()
     {
+        // ---- parking lot (live surface handoff between previews) ----
+        {
+            var lot = new ParkingLot<string>(capacity: 2);
+            Check("park: nothing displaced", lot.Park(@"C:\a.xaml", "a1").Count == 0);
+            Eq("take: other path", null, lot.TryTake(@"C:\b.xaml", _ => true));
+            Eq("take: rejected stays parked", null, lot.TryTake(@"C:\a.xaml", _ => false));
+            Eq("take: path is case-insensitive", "a1", lot.TryTake(@"c:\A.XAML", _ => true));
+            Eq("take: only once", null, lot.TryTake(@"C:\a.xaml", _ => true));
+
+            lot.Park(@"C:\a.xaml", "a1");
+            var replaced = lot.Park(@"C:\a.xaml", "a2");
+            Check("park: same path replaces", replaced.Count == 1 && replaced[0] == "a1");
+            lot.Park(@"C:\b.xaml", "b1");
+            var evicted = lot.Park(@"C:\c.xaml", "c1");
+            Check("park: over capacity drops the oldest", evicted.Count == 1 && evicted[0] == "a2", string.Join(",", evicted));
+            Check("remove: present", lot.Remove("b1"));
+            Check("remove: already gone", !lot.Remove("b1"));
+            Eq("clear: returns the rest", 1, lot.Clear().Count);
+        }
+
         // ---- spare warming / staleness ----
         {
             var s = new PreviewSessionState();
