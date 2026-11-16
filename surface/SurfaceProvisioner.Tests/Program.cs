@@ -214,6 +214,27 @@ try
     string owned;
     using (var stage = new BuildStage(root)) { owned = stage.Root; Check(Directory.Exists(owned), "owned short staging created"); }
     Check(!Directory.Exists(owned) && Directory.Exists(root), "only owned stage cleaned");
+    {
+        // BB-077: a dead build's stage + lease is reclaimed; a live stage and unrelated folders are not.
+        var dead = Path.Combine(root, "0123456789abcdef");
+        Directory.CreateDirectory(Path.Combine(dead, "obj"));
+        File.WriteAllText(Path.Combine(dead, "obj", "x.dll"), "");
+        File.WriteAllText(dead + ".lease", "");
+        var noLease = Path.Combine(root, "fedcba9876543210");
+        Directory.CreateDirectory(noLease);
+        Directory.SetLastWriteTimeUtc(noLease, DateTime.UtcNow.AddHours(-2));
+        var unrelated = Path.Combine(root, "keepme");
+        Directory.CreateDirectory(unrelated);
+        Directory.SetLastWriteTimeUtc(unrelated, DateTime.UtcNow.AddHours(-2));
+        using (var live = new BuildStage(root))
+        {
+            Check(!Directory.Exists(dead) && !File.Exists(dead + ".lease"), "abandoned stage and lease swept");
+            Check(!Directory.Exists(noLease), "old lease-less stage swept");
+            Check(Directory.Exists(unrelated), "non-stage folder untouched");
+            Check(BuildStage.SweepStale(root) == 0 && Directory.Exists(live.Root), "live stage survives a sweep");
+        }
+        Directory.Delete(unrelated);
+    }
     var sourceTree = Path.Combine(root, "tree");
     Directory.CreateDirectory(Path.Combine(sourceTree, "obj"));
     File.WriteAllText(Path.Combine(sourceTree, "asset.png"), "pixels");
@@ -598,6 +619,19 @@ try
     var retired = false;
     for (var i = 0; i < 20 && !retired; i++) { retired = HostPayload.TryRetire(busy, deleteAttempts: 10); if (!retired) Thread.Sleep(250); }
     Check(retired && !Directory.Exists(busy), "run dir retired once its process exits");
+
+    var inPlaceHost = Path.Combine(root, "inplace-host");
+    Directory.CreateDirectory(Path.Combine(inPlaceHost, "Pages"));
+    File.WriteAllText(Path.Combine(inPlaceHost, "Surface.exe"), "host");
+    File.WriteAllText(Path.Combine(inPlaceHost, "Pages", "Badge.xbf"), "project A");
+    File.WriteAllLines(Path.Combine(inPlaceHost, HostPayload.StagedLedgerName), new[] { @"C:\a\A.dll", @"Pages\Badge.xbf", @"..\outside" });
+    var linkedRun = Path.Combine(root, "linked-run");
+    HostPayload.CreateLinkedRunCopy(inPlaceHost, linkedRun);
+    Check(File.Exists(Path.Combine(linkedRun, "Surface.exe")) && !File.Exists(Path.Combine(linkedRun, "Pages", "Badge.xbf"))
+        && !File.Exists(Path.Combine(linkedRun, HostPayload.StagedLedgerName)),
+        "linked run copy skips files staged by an in-place host (BB-010)");
+    Check(!HostPayload.ReadStagedLedger(inPlaceHost, out var ledgerOwner).Contains(@"..\outside") && ledgerOwner == @"C:\a\A.dll",
+        "staged ledger ignores paths outside the host");
 
     var lockPath = Path.Combine(root, "locks", "shared");
     var psi = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardInput = true, UseShellExecute = false };

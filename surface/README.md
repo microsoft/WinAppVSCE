@@ -80,11 +80,29 @@ runs, and there is no app `Window`.
 | Window backdrop (`Window.SystemBackdrop` Mica/DesktopAcrylic) behind a page with no opaque background | Approximated: the preview canvas paints `ApplicationPageBackgroundThemeBrush` (no wallpaper tint) |
 | Storyboards begun by code-behind (`Begin()` in `Loaded`, etc.) | Not started; shows the initial frame |
 | `{x:Bind}` values, resources added in `App.xaml.cs` | Placeholders (see sample data) |
+| `Window` / `WindowEx` root | Its content, hosted as a `UserControl` (no title bar or `SystemBackdrop`) |
+| `x:Uid` strings | Read from `Strings\<DefaultLanguage>\Resources.resw` (falls back to en-US, then any language) |
 
 The approximated cases are logged once per render as `FIDELITY:` lines in
 `preview.log` (`Surface/FidelityNotes.cs`). The off-screen frame-stream path
 (`RenderTargetBitmap`) is not used by the VS preview; it cannot capture
 backdrops.
+
+### Known limitation: `DesignModeEnabled` is false
+
+`Windows.ApplicationModel.DesignMode.DesignModeEnabled` (and `DesignMode2Enabled`)
+reports the real process state, which is false in the preview host. A custom control
+that skips runtime-only work behind that check (DI lookups, settings, hardware,
+network) runs that work in the preview; if it throws, the control is shown as a
+placeholder with its type name. The preview sets `WINUI_XAML_DESIGN_MODE=1` in its
+process, so check both:
+
+```csharp
+bool designMode = Windows.ApplicationModel.DesignMode.DesignModeEnabled
+    || Environment.GetEnvironmentVariable("WINUI_XAML_DESIGN_MODE") == "1";
+```
+
+Built-in WinUI controls are unaffected.
 
 ## Provisioner CLI contract (v1)
 

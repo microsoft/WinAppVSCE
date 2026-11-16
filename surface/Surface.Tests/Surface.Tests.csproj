@@ -42,6 +42,7 @@
     <Compile Include="..\Surface\SampleChartFiller.cs" Link="Production\SampleChartFiller.cs" />
     <Compile Include="..\Surface\KnownWinUiTypes.cs" Link="Production\KnownWinUiTypes.cs" />
     <Compile Include="..\Surface\PageDictionaries.cs" Link="Production\PageDictionaries.cs" />
+    <Compile Include="..\Surface\UidStrings.cs" Link="Production\UidStrings.cs" />
     <EmbeddedResource Include="..\Surface\KnownWinUiTypes.txt" LogicalName="Surface.KnownWinUiTypes.txt" />
   </ItemGroup>
 

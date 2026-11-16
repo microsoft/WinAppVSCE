@@ -19,6 +19,56 @@ internal static class Paths
     /// <summary>The <c>surface\out\</c> directory where JPEGs are written.</summary>
     public static string OutDir => Path.Combine(SurfaceRoot, "out");
 
+    /// <summary>
+    /// BB-049: <c>%LOCALAPPDATA%\WinUIXamlPreview\surface</c>, next to the extension's preview.log. An installed
+    /// surface has no repo above it, so <see cref="SurfaceRoot"/> would put logs in the root of %LOCALAPPDATA%.
+    /// </summary>
+    public static string LogDir { get; } = ResolveLogDir();
+
+    /// <summary>Per-file cap; a larger log is moved to <c>name.1.log</c> at startup.</summary>
+    public const long MaxLogBytes = 5L * 1024 * 1024;
+
+    public static string LogFile(string name) => Path.Combine(LogDir, name);
+
+    /// <summary>Moves <paramref name="path"/> to <c>name.1.ext</c> once it is over <see cref="MaxLogBytes"/>.</summary>
+    public static void RotateIfLarge(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists || info.Length <= MaxLogBytes)
+            {
+                return;
+            }
+
+            var backup = Path.Combine(
+                Path.GetDirectoryName(path) ?? string.Empty,
+                Path.GetFileNameWithoutExtension(path) + ".1" + Path.GetExtension(path));
+            File.Move(path, backup, overwrite: true);
+        }
+        catch
+        {
+            // another surface is writing it; the next start rotates
+        }
+    }
+
+    private static string ResolveLogDir()
+    {
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "WinUIXamlPreview",
+                "surface");
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+        catch
+        {
+            return Path.GetTempPath();
+        }
+    }
+
     /// <summary>The current process architecture as an MSBuild platform folder name.</summary>
     public static string Platform =>
         RuntimeInformation.ProcessArchitecture switch

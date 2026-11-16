@@ -9,7 +9,7 @@ using WinUIXamlPreview.Protocol;
 namespace WinUIXamlPreview.UI
 {
     /// <summary>
-    /// A live, already-rendered surface whose preview went away (dock switch reopens the document, the preview
+    /// A live, already-rendered surface whose preview went away (dock switch moves the panel, the preview
     /// moved to or from the tool window, the tool window was redocked). Its window is detached and parked off-screen,
     /// so the next preview of the same document can re-host it instead of cold-starting a new process.
     /// </summary>

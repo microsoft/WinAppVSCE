@@ -209,14 +209,18 @@ internal static partial class Program
             var s = new PreviewSessionState();
             Check("risky: unknown doc", !s.IsRisky(@"C:\a\Page.xaml"));
             Check("risky: null path", !s.IsRisky(null));
+            Eq("death before first frame: recover", ActiveDeathAction.Recover, s.OnActiveDied(@"C:\a\Page.xaml", false, false));
+            Check("death before first frame: not risky", !s.IsRisky(@"C:\a\Page.xaml"));
+            s.OnUserReload();
+            s.OnRenderSucceeded();
             Eq("death: recover", ActiveDeathAction.Recover, s.OnActiveDied(@"C:\a\Page.xaml", false, false));
             Check("death: doc learned risky (case-insensitive)", s.IsRisky(@"c:\A\page.XAML"));
             Eq("death: recover 2", ActiveDeathAction.Recover, s.OnActiveDied(@"C:\a\Page.xaml", false, false));
             Eq("death: recover 3", ActiveDeathAction.Recover, s.OnActiveDied(@"C:\a\Page.xaml", false, false));
             Eq("death: budget spent → give up", ActiveDeathAction.GiveUp, s.OnActiveDied(@"C:\a\Page.xaml", false, false));
             Check("death: exhausted", s.Restarts.Exhausted);
-            Eq("disconnected detail: gave up", "Auto-restart gave up after 3 attempts. boom",
-                PreviewErrorText.DisconnectedDetail("boom", s.Restarts.Exhausted, s.Restarts.MaxAttempts));
+            Eq("disconnected detail: gave up", true,
+                PreviewErrorText.DisconnectedDetail(s.Restarts.Exhausted, s.Restarts.MaxAttempts).StartsWith("The preview stopped 3 times in a row"));
             s.OnUserReload();
             Eq("reload refunds the budget", 0, s.Restarts.Attempts);
             Eq("death: recovers again after reload", ActiveDeathAction.Recover, s.OnActiveDied(@"C:\a\Page.xaml", false, false));
@@ -250,7 +254,7 @@ internal static partial class Program
             Check("protocol mismatch: not marked risky", !s.IsRisky("p"));
             Eq("no document: give up", ActiveDeathAction.GiveUp, s.OnActiveDied(null, false, false));
             Eq("no document: budget untouched", 0, s.Restarts.Attempts);
-            Eq("disconnected detail: plain reason", "boom", PreviewErrorText.DisconnectedDetail("boom", s.Restarts.Exhausted, s.Restarts.MaxAttempts));
+            Check("disconnected detail: no transport jargon", !PreviewErrorText.DisconnectedDetail(s.Restarts.Exhausted, s.Restarts.MaxAttempts).Contains("socket"));
         }
 
         // ---- risky docs persist across sessions (RiskyDocStore) ----
@@ -261,6 +265,7 @@ internal static partial class Program
             {
                 var s1 = new PreviewSessionState(new RiskyDocStore(file, () => now));
                 Check("store: unknown doc not risky", !s1.IsRisky(@"C:\a\Page.xaml"));
+                s1.OnRenderSucceeded();
                 s1.OnActiveDied(@"C:\a\Page.xaml", false, false);
 
                 // A later VS session (fresh state + store instance) still knows the doc crashed.
@@ -391,6 +396,18 @@ internal static partial class Program
         Eq("format: only placeholder → fallback", "Line 1, col 1 — The XAML could not be loaded.",
             PreviewErrorText.FormatXamlError("The text associated with this error code could not be found.", 1, 1));
 
+        // ---- BB-060/061: page code that ends the surface ----
+        Eq("app fatal: layout cycle marker", WinUIXamlPreview.Protocol.AppFatalCause.LayoutCycle,
+            WinUIXamlPreview.Protocol.AppFatal.FromStderr("[12:00:01] ERROR: page layout never settled (layout cycle): a control …"));
+        Eq("app fatal: layout code threw marker", WinUIXamlPreview.Protocol.AppFatalCause.LayoutCodeThrew,
+            WinUIXamlPreview.Protocol.AppFatal.FromStderr("ERROR: app layout code threw during measure/arrange (at Foo.MeasureOverride)"));
+        Eq("app fatal: unrelated line", WinUIXamlPreview.Protocol.AppFatalCause.None,
+            WinUIXamlPreview.Protocol.AppFatal.FromStderr("FATAL: unhandled exception in the preview host: x"));
+        Check("app fatal detail: names the layout cycle",
+            PreviewErrorText.AppFatalDetail(WinUIXamlPreview.Protocol.AppFatalCause.LayoutCycle).Contains("layout cycle"));
+        Check("app fatal detail: hang says not restarted",
+            PreviewErrorText.AppFatalDetail(WinUIXamlPreview.Protocol.AppFatalCause.Unresponsive).Contains("not restarted"));
+
         // ---- unbuilt-project build hint ----
         var someKeys = new[] { "PillCornerRadius", "AccentBrush" };
         var someTypes = new[] { "Contoso.Controls.StatusPill", "Contoso.Controls.StatusPill", "Contoso.Controls.Gauge" };
@@ -417,6 +434,21 @@ internal static partial class Program
             BuildHint.DescribeBuilt(new[] { "K1", "K2", "K3", "K4", "K5" }, null));
         Check("unbuilt hint counts forced placeholders too",
             BuildHint.Describe(true, null, null, new[] { "A.Heavy" })!.Contains("1 custom control shown as placeholders (Heavy)"));
+
+        // ---- BB-024 / BB-015 notes ----
+        Eq("arch note",
+            "The project is built for x86, but the preview runs as ARM64, so its custom controls can't load. Build it for ARM64 or AnyCPU.",
+            BuildHint.ArchNote("x86", "ARM64"));
+        Check("arch note: loadable → none", BuildHint.ArchNote(null, "x64") == null);
+        Eq("reasons note: dedupes, caps and truncates",
+            "Error: A threw InvalidOperationException: boom; B threw X: y (+1 more).",
+            BuildHint.ReasonsNote(new[] { "A threw InvalidOperationException: boom", "A threw InvalidOperationException: boom", "B threw X: y", "C threw Z" }));
+        Check("reasons note: long reason truncated",
+            BuildHint.ReasonsNote(new[] { new string('x', 500) })!.Length < 220);
+        Check("reasons note: none → null", BuildHint.ReasonsNote(null) == null && BuildHint.ReasonsNote(new[] { " " }) == null);
+        Check("library note: no App.xaml + missing keys", BuildHint.LibraryNote(true, someKeys)!.Contains("no App.xaml"));
+        Check("library note: no missing keys → none", BuildHint.LibraryNote(true, new string[0]) == null);
+        Check("library note: has App.xaml → none", BuildHint.LibraryNote(false, someKeys) == null);
 
         // ---- WinUI types newer than the bundled host ----
         Check("newer types: none → no hint", NewerTypesHint.Describe(new string[0], "2.2.0", "2.2.2", false, false) == null);

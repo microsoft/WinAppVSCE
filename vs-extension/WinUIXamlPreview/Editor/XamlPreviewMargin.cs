@@ -30,12 +30,11 @@ namespace WinUIXamlPreview.Editor
     // "native VS Design" feel. It attaches to VS's built-in XAML editor via MEF and adds nothing to the
     // text buffer, so the XAML language service / IntelliSense are untouched by construction.
     //
-    // Two providers export the SAME margin, one per dock container (Right vertical split / Bottom
-    // horizontal split). Only the provider whose container matches the persisted PreviewOptions.Location
-    // returns a real margin; the other returns null. The margin is cached per text view so a single
-    // Surface.exe backs each tab even if CreateMargin is re-entered (e.g. Open With), and it disposes with
-    // the view. Flipping the layout persists the new location and reopens the file so the other provider
-    // runs.
+    // Two providers, one per dock container (Right vertical split / Bottom horizontal split), each return a
+    // slot of the SAME per-view preview, which is cached so a single Surface.exe backs each tab even if
+    // CreateMargin is re-entered (e.g. Open With). The panel lives in the slot matching PreviewOptions.Location;
+    // the other slot is empty. Dock Right/Bottom moves the panel between slots in every open tab, without
+    // reopening the document (BB-001: the reopen prompted to save and "Don't Save" lost the edits).
 
     [Export(typeof(IWpfTextViewMarginProvider))]
     [Name("WinUIXamlPreviewMargin.Right")]
@@ -83,18 +82,21 @@ namespace WinUIXamlPreview.Editor
     /// The docked panel that hosts a <see cref="PreviewControl"/> pinned to this tab's .xaml file, with a
     /// draggable resize grip, a themed in-tab toolbar, and a Right/Bottom layout toggle.
     /// </summary>
-    internal sealed partial class XamlPreviewMargin : IWpfTextViewMargin
+    internal sealed partial class XamlPreviewMargin : IDisposable
     {
         public const string MarginName = "WinUIXamlPreviewMargin";
 
         private readonly IWpfTextView _textView;
         private readonly FrameworkElement? _hostControl;
-        private readonly PreviewLocation _location;
+        private PreviewLocation _location;
+        private readonly Dictionary<PreviewLocation, MarginSlot> _slots = new Dictionary<PreviewLocation, MarginSlot>();
         private readonly Grid _root;
         private readonly PreviewControl _preview;
         private readonly DockPanel _content;
         private readonly Border _grip;
         private readonly FrameworkElement _collapsedBar;
+        private TextBlock _collapsedLabel = null!;
+        private Button _dockButton = null!;
         private PreviewToolbar _toolbar = null!;
         private string? _path;
         private ITextDocument? _textDocument;
@@ -122,18 +124,14 @@ namespace WinUIXamlPreview.Editor
         private double _dragStartSize;
 
         /// <summary>
-        /// Returns the shared margin for this view when <paramref name="location"/> matches the persisted
-        /// preference, else null. Cached per text view (one Surface.exe per tab); never throws into the editor.
+        /// Returns this view's slot for <paramref name="location"/>'s dock container. Both containers get a slot;
+        /// the preview panel sits in the one matching the persisted preference. The preview is cached per text
+        /// view (one Surface.exe per tab); never throws into the editor.
         /// </summary>
         public static IWpfTextViewMargin? TryCreate(IWpfTextViewHost host, ITextDocumentFactoryService docFactory, PreviewLocation location)
         {
             try
             {
-                if (PreviewOptions.Location != location)
-                {
-                    return null; // the other container owns the margin right now
-                }
-
                 // Only attach to WinUI 3 XAML. WPF and UWP share WinUI's default namespace URI, so they can't
                 // be told apart from the markup alone — we inspect the owning project. A non-WinUI document gets
                 // no margin (and, returning null, no cached surface) so the previewer never shows for WPF/UWP.
@@ -153,10 +151,11 @@ namespace WinUIXamlPreview.Editor
                 // prewarm here too (deduped per project; the preview open joins the in-flight attempt).
                 Protocol.IdentityPrewarm.ForDocument(path, "margin", Log.Write);
 
-                // Leak-safe singleton: one margin (one surface) per view even under re-entrant CreateMargin.
-                return host.TextView.Properties.GetOrCreateSingletonProperty(
+                // Leak-safe singleton: one preview (one surface) per view even under re-entrant CreateMargin.
+                var margin = host.TextView.Properties.GetOrCreateSingletonProperty(
                     typeof(XamlPreviewMargin),
-                    () => new XamlPreviewMargin(host, docFactory, location));
+                    () => new XamlPreviewMargin(host, docFactory, PreviewOptions.Location));
+                return margin._slots[location];
             }
             catch (Exception ex)
             {
@@ -186,33 +185,20 @@ namespace WinUIXamlPreview.Editor
             _content.Children.Add(toolbar);
             _content.Children.Add(_preview);
 
-            _grip = BuildGrip(vertical: location == PreviewLocation.Right);
-            _collapsedBar = BuildCollapsedBar(vertical: location == PreviewLocation.Right);
-
-            if (location == PreviewLocation.Right)
-            {
-                _root.Width = PreviewOptions.RightWidth;
-                _root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                _root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                Grid.SetColumn(_grip, 0);
-                Grid.SetColumn(_content, 1);
-                Grid.SetColumn(_collapsedBar, 0);
-                Grid.SetColumnSpan(_collapsedBar, 2);
-            }
-            else
-            {
-                _root.Height = PreviewOptions.BottomHeight;
-                _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                _root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-                Grid.SetRow(_grip, 0);
-                Grid.SetRow(_content, 1);
-                Grid.SetRow(_collapsedBar, 0);
-                Grid.SetRowSpan(_collapsedBar, 2);
-            }
+            _grip = BuildGrip();
+            _collapsedBar = BuildCollapsedBar();
 
             _root.Children.Add(_grip);
             _root.Children.Add(_content);
             _root.Children.Add(_collapsedBar);
+            // BB-004: Tab cycles through the preview's buttons instead of escaping into the rest of VS;
+            // Esc hands focus back to the code.
+            KeyboardNavigation.SetTabNavigation(_root, KeyboardNavigationMode.Cycle);
+            _root.KeyDown += OnRootKeyDown;
+            _textView.GotAggregateFocus += OnTextViewGotFocus;
+            s_lastFocused = this;
+            _slots[PreviewLocation.Right] = new MarginSlot(this, PreviewLocation.Right);
+            _slots[PreviewLocation.Bottom] = new MarginSlot(this, PreviewLocation.Bottom);
 
             // Pin the preview to THIS tab's document so it doesn't chase the active tab.
             _textDocument = ResolveDocument(textView, docFactory);
@@ -253,17 +239,17 @@ namespace WinUIXamlPreview.Editor
 
             PreviewPackageState.PopOutChanged += OnPopOutChanged;
             CollapsedChanged += OnCollapsedChanged;
+            LocationChanged += OnLocationChanged;
             if (PreviewPackageState.PoppedOut)
             {
                 _preview.Suspend();
             }
 
-            ApplyCollapsedState();
             if (_hostControl != null)
             {
                 _hostControl.SizeChanged += OnHostSizeChanged;
             }
-            FitToEditor();
+            ApplyLayout();
             Testing.TestHooks.RegisterMargin(this);
         }
 
@@ -307,24 +293,32 @@ namespace WinUIXamlPreview.Editor
 
         private FrameworkElement BuildToolbar()
         {
-            var toggleTarget = _location == PreviewLocation.Right ? "Bottom" : "Right";
-            var dockMoniker = _location == PreviewLocation.Right ? KnownMonikers.DockBottom : KnownMonikers.DockRight;
-            var dockLabel = $"Dock {toggleTarget}";
-
-            _toolbar = new PreviewToolbar(_preview, tb => new List<PreviewToolbar.ToolbarItem>
+            _toolbar = new PreviewToolbar(_preview, tb =>
             {
-                new PreviewToolbar.ToolbarItem(
-                    tb.MakeButton(dockMoniker, dockLabel, $"Move the preview to the {toggleTarget.ToLowerInvariant()} (reopens this file)", OnToggleLayoutClick, "PreviewDockToggle"),
-                    2, () => tb.MakeOverflowCommand(dockMoniker, dockLabel, OnToggleLayoutClick, "PreviewOverflowDock")),
-                new PreviewToolbar.ToolbarItem(
-                    tb.MakeButton(KnownMonikers.NewWindow, "Window", "Move the preview into a separate tool window", OnPopOutClick, "PreviewWindowButton"),
-                    1, () => tb.MakeOverflowCommand(KnownMonikers.NewWindow, "Window", OnPopOutClick, "PreviewOverflowWindow")),
-                new PreviewToolbar.ToolbarItem(
-                    tb.MakeButton(KnownMonikers.Collapse, "Hide", "Collapse the preview to a thin strip — click the strip to reopen it", OnHideClick, "PreviewHideButton"),
-                    0, null),
+                _dockButton = tb.MakeButton(DockMoniker(), DockLabel(), DockTooltip(), OnToggleLayoutClick, "PreviewDockToggle");
+                return new List<PreviewToolbar.ToolbarItem>
+                {
+                    new PreviewToolbar.ToolbarItem(
+                        _dockButton,
+                        2, () => tb.MakeOverflowCommand(DockMoniker(), DockLabel(), OnToggleLayoutClick, "PreviewOverflowDock")),
+                    new PreviewToolbar.ToolbarItem(
+                        tb.MakeButton(KnownMonikers.NewWindow, "Window", "Move the preview into a separate tool window", OnPopOutClick, "PreviewWindowButton"),
+                        1, () => tb.MakeOverflowCommand(KnownMonikers.NewWindow, "Window", OnPopOutClick, "PreviewOverflowWindow")),
+                    new PreviewToolbar.ToolbarItem(
+                        tb.MakeButton(KnownMonikers.Collapse, "Hide", "Collapse the preview to a thin strip — click the strip to reopen it", OnHideClick, "PreviewHideButton"),
+                        0, null),
+                };
             });
             return _toolbar.Element;
         }
+
+        private string DockTarget() => _location == PreviewLocation.Right ? "Bottom" : "Right";
+
+        private ImageMoniker DockMoniker() => _location == PreviewLocation.Right ? KnownMonikers.DockBottom : KnownMonikers.DockRight;
+
+        private string DockLabel() => "Dock " + DockTarget();
+
+        private string DockTooltip() => $"Move the preview to the {DockTarget().ToLowerInvariant()}";
 
         private void OnPopOutClick(object sender, RoutedEventArgs e)
         {
@@ -347,11 +341,8 @@ namespace WinUIXamlPreview.Editor
                 {
                     _preview.Suspend();
                 }
-                else
-                {
-                    _preview.Resume();
-                }
 
+                // Closing the window resumes the preview unless it's hidden (ApplyCollapsedState decides).
                 ApplyCollapsedState();
             }
             catch (Exception ex) { Log.Write("Pop-out state change failed: " + ex); }
@@ -425,16 +416,66 @@ namespace WinUIXamlPreview.Editor
                 _root.Height = collapsed ? CollapsedStripSize : PreviewOptions.BottomHeight;
             }
 
-            // Re-render on expand if edits arrived while hidden (we skip live-edit renders while collapsed).
-            if (!collapsed && _liveEdit.OnExpanded())
+            // Re-render on expand if edits arrived while hidden (we skip live-edit renders while collapsed). A
+            // preview resumed from Hide renders the current buffer anyway, so it needs no extra reload.
+            if (collapsed)
             {
-                try { _preview.Reload(); } catch (Exception ex) { Log.Write("Reload-on-expand failed: " + ex); }
+                // BB-063: a hidden preview releases its surface (parked briefly, so a quick Show re-adopts it).
+                if (!PreviewPackageState.PoppedOut)
+                {
+                    _preview.Suspend(hidden: true);
+                }
+            }
+            else
+            {
+                var resumed = _preview.Resume();
+                if (_liveEdit.OnExpanded() && !resumed)
+                {
+                    try { _preview.Reload(); } catch (Exception ex) { Log.Write("Reload-on-expand failed: " + ex); }
+                }
             }
         }
 
         private const double CollapsedStripSize = 26;
 
-        private FrameworkElement BuildCollapsedBar(bool vertical)
+        // ---- keyboard access (BB-004) ---------------------------------------
+        //
+        // The margin sits beside the editor, outside VS's Tab order, so it's reached through the
+        // "Focus WinUI XAML Preview Toolbar" command (no default key binding; users can bind one).
+
+        private static XamlPreviewMargin? s_lastFocused;
+
+        private void OnTextViewGotFocus(object sender, EventArgs e) => s_lastFocused = this;
+
+        /// <summary>Moves keyboard focus into the most recently focused editor's preview toolbar.</summary>
+        internal static bool FocusActiveToolbar() => s_lastFocused?.FocusToolbar() ?? false;
+
+        internal static bool HasActiveMargin => s_lastFocused != null && !PreviewPackageState.PoppedOut;
+
+        internal bool FocusToolbar()
+        {
+            if (_disposed || PreviewPackageState.PoppedOut || !_root.IsVisible)
+            {
+                return false;
+            }
+
+            if (PreviewOptions.Collapsed)
+            {
+                return _collapsedBar.Focus();
+            }
+
+            return _content.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
+        }
+
+        private void OnRootKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None)
+            {
+                e.Handled = _textView.VisualElement.Focus();
+            }
+        }
+
+        private FrameworkElement BuildCollapsedBar()
         {
             // A single stretch button along the docked edge: the whole strip is the "reopen" affordance.
             var label = new TextBlock
@@ -445,38 +486,22 @@ namespace WinUIXamlPreview.Editor
                 VerticalAlignment = VerticalAlignment.Center,
             };
             label.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+            _collapsedLabel = label;
 
-            if (vertical)
-            {
-                // Rotate the label so it reads bottom-to-top in the narrow vertical strip.
-                label.LayoutTransform = new RotateTransform(-90);
-            }
-
-            var button = new Button
+            var button = PreviewChrome.KeyboardOnlyFocus(new Button
             {
                 Content = label,
                 ToolTip = "Show the WinUI preview",
                 Cursor = Cursors.Hand,
-                Focusable = false,
                 Padding = new Thickness(2),
                 BorderThickness = new Thickness(0),
-            };
+            });
             button.SetResourceReference(Control.BackgroundProperty, EnvironmentColors.CommandShelfBackgroundGradientBrushKey);
             AutomationProperties.SetAutomationId(button, "PreviewShowButton");
             AutomationProperties.SetName(button, "Show the WinUI preview");
             button.Click += OnShowClick;
-
-            if (vertical)
-            {
-                button.HorizontalAlignment = HorizontalAlignment.Stretch;
-                button.VerticalAlignment = VerticalAlignment.Stretch;
-            }
-            else
-            {
-                button.HorizontalAlignment = HorizontalAlignment.Stretch;
-                button.VerticalAlignment = VerticalAlignment.Stretch;
-            }
-
+            button.HorizontalAlignment = HorizontalAlignment.Stretch;
+            button.VerticalAlignment = VerticalAlignment.Stretch;
             return button;
         }
 
@@ -573,7 +598,7 @@ namespace WinUIXamlPreview.Editor
                 // If the caret is already inside this element, the selection originated from the caret (#2's
                 // echo) — leave it be so the two directions don't fight over the caret.
                 int caret = _textView.Caret.Position.BufferPosition.Position;
-                if (_caretSync.IsEchoOfCaret(sel.Path!, caret, start, end))
+                if (_caretSync.IsEchoOfCaret(sel.Path!, caret, start, end, map.PathForOffset(caret)))
                 {
                     return;
                 }
@@ -700,67 +725,151 @@ namespace WinUIXamlPreview.Editor
 
         private void OnToggleLayoutClick(object sender, RoutedEventArgs e)
         {
-            var target = _location == PreviewLocation.Right ? PreviewLocation.Bottom : PreviewLocation.Right;
-            PreviewOptions.Location = target;
-            Log.Write($"Preview layout -> {target}; reopening document to apply.");
-            ReopenDocument();
+            try
+            {
+                var target = _location == PreviewLocation.Right ? PreviewLocation.Bottom : PreviewLocation.Right;
+                PreviewOptions.Location = target;
+                Log.Write($"Preview layout -> {target}.");
+                SetLocation(target);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Dock toggle failed: " + ex);
+                Telemetry.PreviewTelemetry.LogException("DockToggle", ex);
+            }
+
+            // Every open tab follows, like Hide.
+            try { LocationChanged?.Invoke(this); }
+            catch (Exception ex) { Log.Write("LocationChanged handler failed: " + ex); }
         }
 
-        private void ReopenDocument()
+        private static event Action<XamlPreviewMargin>? LocationChanged;
+
+        private void OnLocationChanged(XamlPreviewMargin source)
         {
-            var path = _path;
-            if (string.IsNullOrEmpty(path))
+            if (_disposed || ReferenceEquals(source, this))
             {
                 return;
             }
 
-            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            try { SetLocation(PreviewOptions.Location); }
+            catch (Exception ex) { Log.Write("Dock sync failed: " + ex); }
+        }
+
+        private void SetLocation(PreviewLocation location)
+        {
+            if (_disposed || _location == location)
             {
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                try
-                {
-                    var sp = ServiceProvider.GlobalProvider;
+                return;
+            }
 
-                    // Close the current frame (prompts to save only if the file is dirty), then reopen it so
-                    // the new-location margin provider runs. Reopening the same path just re-activates it if
-                    // it's still open, which is why we close first.
-                    if (VsShellUtilities.IsDocumentOpen(sp, path, Guid.Empty, out _, out _, out IVsWindowFrame frame) && frame != null)
-                    {
-                        frame.CloseFrame((uint)__FRAMECLOSE.FRAMECLOSE_PromptSave);
-                    }
+            _location = location;
+            ApplyLayout();
+        }
 
-                    VsShellUtilities.OpenDocument(sp, path!, VSConstants.LOGVIEWID_Primary, out _, out _, out IVsWindowFrame newFrame);
-                    newFrame?.Show();
-                }
-                catch (Exception ex)
+        // Lays the panel out for _location and moves it into that dock container's slot. Moving it unloads and
+        // reloads the PreviewControl, which parks and re-adopts its live surface (no relaunch, no reopen).
+        private void ApplyLayout()
+        {
+            var right = _location == PreviewLocation.Right;
+
+            _root.ColumnDefinitions.Clear();
+            _root.RowDefinitions.Clear();
+            _root.Width = double.NaN;
+            _root.Height = double.NaN;
+            _root.MaxWidth = double.PositiveInfinity;
+            _root.MaxHeight = double.PositiveInfinity;
+            foreach (UIElement child in _root.Children)
+            {
+                Grid.SetRow(child, 0);
+                Grid.SetColumn(child, 0);
+                Grid.SetRowSpan(child, 1);
+                Grid.SetColumnSpan(child, 1);
+            }
+
+            if (right)
+            {
+                _root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                _root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                Grid.SetColumn(_content, 1);
+                Grid.SetColumnSpan(_collapsedBar, 2);
+            }
+            else
+            {
+                _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                _root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                Grid.SetRow(_content, 1);
+                Grid.SetRowSpan(_collapsedBar, 2);
+            }
+
+            // Grip on the inner edge: a vertical bar for Right, a horizontal one for Bottom.
+            _grip.Cursor = right ? Cursors.SizeWE : Cursors.SizeNS;
+            _grip.Width = right ? 6 : double.NaN;
+            _grip.Height = right ? double.NaN : 6;
+
+            // Rotate the strip label so it reads bottom-to-top in the narrow vertical strip.
+            _collapsedLabel.LayoutTransform = right ? new RotateTransform(-90) : Transform.Identity;
+
+            _toolbar.SetButton(_dockButton, DockMoniker(), DockLabel(), DockTooltip());
+
+            foreach (var slot in _slots.Values)
+            {
+                slot.Host(slot.Location == _location ? _root : null);
+            }
+
+            ApplyCollapsedState();
+            FitToEditor();
+        }
+
+        /// <summary>
+        /// The margin VS sees in one dock container. Both containers get one per view; only the slot for the
+        /// current location holds the preview panel, the other is empty and collapsed.
+        /// </summary>
+        private sealed class MarginSlot : IWpfTextViewMargin
+        {
+            private readonly XamlPreviewMargin _owner;
+            private readonly Border _host = new Border { Visibility = Visibility.Collapsed };
+
+            public MarginSlot(XamlPreviewMargin owner, PreviewLocation location)
+            {
+                _owner = owner;
+                Location = location;
+            }
+
+            public PreviewLocation Location { get; }
+
+            public void Host(FrameworkElement? panel)
+            {
+                if (ReferenceEquals(_host.Child, panel))
                 {
-                    Log.Write("ReopenDocument failed: " + ex);
-                    Telemetry.PreviewTelemetry.LogException("ReopenDocument", ex);
+                    return;
                 }
-            });
+
+                _host.Child = panel;
+                _host.Visibility = panel != null ? Visibility.Visible : Visibility.Collapsed;
+            }
+
+            public FrameworkElement VisualElement => _host;
+
+            public double MarginSize => _host.Child == null ? 0
+                : Location == PreviewLocation.Right ? _host.ActualWidth : _host.ActualHeight;
+
+            public bool Enabled => true;
+
+            public ITextViewMargin? GetTextViewMargin(string marginName) =>
+                string.Equals(marginName, MarginName, StringComparison.OrdinalIgnoreCase) && _host.Child != null ? this : null;
+
+            // VS disposes every margin of a view together when the view closes.
+            public void Dispose() => _owner.Dispose();
         }
 
         // ---- resize grip ----------------------------------------------------
 
-        private Border BuildGrip(bool vertical)
+        private Border BuildGrip()
         {
-            var grip = new Border
-            {
-                Cursor = vertical ? Cursors.SizeWE : Cursors.SizeNS,
-            };
+            var grip = new Border();
 
-            if (vertical)
-            {
-                grip.Width = 6;
-                grip.VerticalAlignment = VerticalAlignment.Stretch;
-            }
-            else
-            {
-                grip.Height = 6;
-                grip.HorizontalAlignment = HorizontalAlignment.Stretch;
-            }
-
-            // A theme-colored, hit-testable splitter bar on the inner edge of the panel.
+            // A theme-colored, hit-testable splitter bar on the inner edge of the panel (sized by ApplyLayout).
             grip.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.EnvironmentBackgroundBrushKey);
             grip.MouseLeftButtonDown += OnGripDown;
             grip.MouseMove += OnGripMove;
@@ -859,38 +968,6 @@ namespace WinUIXamlPreview.Editor
             _preview.OnDocumentRenamed(oldPath, newPath);
         }
 
-        public FrameworkElement VisualElement
-        {
-            get
-            {
-                ThrowIfDisposed();
-                return _root;
-            }
-        }
-
-        public double MarginSize
-        {
-            get
-            {
-                ThrowIfDisposed();
-                return _location == PreviewLocation.Right ? _root.ActualWidth : _root.ActualHeight;
-            }
-        }
-
-        public bool Enabled
-        {
-            get
-            {
-                ThrowIfDisposed();
-                return true;
-            }
-        }
-
-        public ITextViewMargin? GetTextViewMargin(string marginName)
-        {
-            return string.Equals(marginName, MarginName, StringComparison.OrdinalIgnoreCase) ? this : null;
-        }
-
         public void Dispose()
         {
             if (_disposed)
@@ -900,8 +977,26 @@ namespace WinUIXamlPreview.Editor
 
             _disposed = true;
             Testing.TestHooks.UnregisterMargin(this);
+            if (ReferenceEquals(s_lastFocused, this))
+            {
+                s_lastFocused = null;
+            }
+            _textView.GotAggregateFocus -= OnTextViewGotFocus;
+            _root.KeyDown -= OnRootKeyDown;
             PreviewPackageState.PopOutChanged -= OnPopOutChanged;
             CollapsedChanged -= OnCollapsedChanged;
+            LocationChanged -= OnLocationChanged;
+            try
+            {
+                // A recreated margin set for this view must get a fresh preview, not this disposed one.
+                _textView.Properties.RemoveProperty(typeof(XamlPreviewMargin));
+                foreach (var slot in _slots.Values)
+                {
+                    slot.Host(null);
+                }
+            }
+            catch (Exception ex) { Log.Write("Margin teardown (slots) failed: " + ex); }
+
             if (_hostControl != null)
             {
                 _hostControl.SizeChanged -= OnHostSizeChanged;
@@ -932,14 +1027,6 @@ namespace WinUIXamlPreview.Editor
             catch (Exception ex) { Log.Write("Margin teardown (selection sync) failed: " + ex); }
 
             (_preview as IDisposable)?.Dispose();
-        }
-
-        private void ThrowIfDisposed()
-        {
-            if (_disposed)
-            {
-                throw new ObjectDisposedException(nameof(XamlPreviewMargin));
-            }
         }
     }
 }

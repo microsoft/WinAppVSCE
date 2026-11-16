@@ -94,6 +94,49 @@ namespace WinUIXamlPreview.UI
             return string.Join("; ", parts) + ".";
         }
 
+        public const string ArchTitle = "Project built for another architecture";
+        public const string MarkupTitle = "This XAML won't compile";
+        private const int MaxReasons = 2;
+        private const int MaxReasonLength = 200;
+
+        /// <summary>BB-024: why custom controls can't load when the build's architecture doesn't match the preview host.</summary>
+        public static string? ArchNote(string? builtArch, string hostPlatform) =>
+            string.IsNullOrEmpty(builtArch)
+                ? null
+                : $"The project is built for {builtArch}, but the preview runs as {hostPlatform}, so its custom controls can't load. Build it for {hostPlatform} or AnyCPU.";
+
+        /// <summary>
+        /// BB-015: a project with no App.xaml (typically a class library) can't see resources its host app defines,
+        /// so a missing key there won't be fixed by building. Null when not applicable.
+        /// </summary>
+        public static string? LibraryNote(bool projectWithoutAppXaml, IReadOnlyCollection<string>? missingKeys) =>
+            projectWithoutAppXaml && (missingKeys?.Count ?? 0) > 0
+                ? "This project has no App.xaml (a class library?), so resources defined by the app that uses it aren't available to the preview."
+                : null;
+
+        /// <summary>BB-015: the exception text of controls placeholdered because they threw ("Type: Exception: message").</summary>
+        public static string? ReasonsNote(IReadOnlyCollection<string>? reasons)
+        {
+            var list = (reasons ?? new string[0])
+                .Select(r => (r ?? string.Empty).Trim())
+                .Where(r => r.Length > 0)
+                .Distinct()
+                .Select(r => r.Length > MaxReasonLength ? r.Substring(0, MaxReasonLength - 1) + "…" : r)
+                .ToList();
+            if (list.Count == 0)
+            {
+                return null;
+            }
+
+            var text = "Error: " + string.Join("; ", list.Take(MaxReasons));
+            if (list.Count > MaxReasons)
+            {
+                text += $" (+{list.Count - MaxReasons} more)";
+            }
+
+            return text.EndsWith(".") ? text : text + ".";
+        }
+
         private static string Named(List<string> names, int max)
         {
             var named = string.Join(", ", names.Take(max));

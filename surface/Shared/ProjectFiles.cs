@@ -46,7 +46,19 @@ internal static class ProjectFiles
         var candidates = new List<string> { Path.Combine(projectDir, "obj", AssetsFileName) };
         if (!string.IsNullOrEmpty(csproj))
         {
-            candidates.Add(Path.Combine(projectDir, "obj", Path.GetFileNameWithoutExtension(csproj), AssetsFileName));
+            var name = Path.GetFileNameWithoutExtension(csproj);
+            candidates.Add(Path.Combine(projectDir, "obj", name, AssetsFileName));
+
+            // UseArtifactsOutput: <Directory.Build.props dir>\artifacts\obj\<ProjectName>\ (BB-008).
+            try
+            {
+                var dir = new DirectoryInfo(projectDir);
+                for (int i = 0; dir != null && i < 6; i++, dir = dir.Parent)
+                {
+                    candidates.Add(Path.Combine(dir.FullName, "artifacts", "obj", name, AssetsFileName));
+                }
+            }
+            catch { }
         }
 
         return candidates.FirstOrDefault(File.Exists);

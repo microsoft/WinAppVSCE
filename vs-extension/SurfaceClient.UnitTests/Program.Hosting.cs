@@ -111,6 +111,9 @@ internal static partial class Program
         MatchedHostPrebuild.RunAsync(new[] { "c", "a" }, () => true, log.Enqueue, CancellationToken.None, p => plans[p],
             (v, p) => { acquired.Enqueue(v); return Build(v, Task.FromResult(new HostBuildOutcome { Success = true }), out _); }).Wait(5000);
         Eq("prebuild: failed version skipped", "2.3.0", string.Join(",", acquired));
+        FailedHostVersions.Remove("2.4.0");
+        FailedHostVersions.Remove(null);
+        Check("BB-025: a forgotten failure can build again", !FailedHostVersions.Contains("2.4.0"));
 
         // The prebuild holds no interest: a preview that joins and then cancels stops the build.
         FailedHostVersions.ResetForTests();

@@ -626,6 +626,7 @@ internal sealed class FrameServer
                 missingKeys = RenderHost.LastMissingKeys,
                 unmappedTypes = RenderHost.LastUnmappedTypes,
                 placeholderTypes = RenderHost.LastPlaceholderTypes,
+                placeholderReasons = RenderHost.LastPlaceholderReasons,
                 newerTypes = RenderHost.LastNewerTypes,
                 designValuesSkipped = RenderHost.LastDesignValuesSkipped,
             });
@@ -643,6 +644,7 @@ internal sealed class FrameServer
                 missingKeys = RenderHost.LastMissingKeys,
                 unmappedTypes = RenderHost.LastUnmappedTypes,
                 placeholderTypes = RenderHost.LastPlaceholderTypes,
+                placeholderReasons = RenderHost.LastPlaceholderReasons,
                 newerTypes = RenderHost.LastNewerTypes,
                 designValuesSkipped = RenderHost.LastDesignValuesSkipped,
             });
@@ -699,6 +701,7 @@ internal sealed class FrameServer
                 missingKeys = RenderHost.LastMissingKeys,
                 unmappedTypes = RenderHost.LastUnmappedTypes,
                 placeholderTypes = RenderHost.LastPlaceholderTypes,
+                placeholderReasons = RenderHost.LastPlaceholderReasons,
                 newerTypes = RenderHost.LastNewerTypes,
                 designValuesSkipped = RenderHost.LastDesignValuesSkipped,
             });
@@ -721,6 +724,7 @@ internal sealed class FrameServer
                 missingKeys = RenderHost.LastMissingKeys,
                 unmappedTypes = RenderHost.LastUnmappedTypes,
                 placeholderTypes = RenderHost.LastPlaceholderTypes,
+                placeholderReasons = RenderHost.LastPlaceholderReasons,
                 newerTypes = RenderHost.LastNewerTypes,
                 designValuesSkipped = RenderHost.LastDesignValuesSkipped,
             });

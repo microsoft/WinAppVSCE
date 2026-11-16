@@ -38,6 +38,20 @@ namespace WinUIXamlPreview.Protocol
             }
         }
 
+        /// <summary>BB-025: forget a failure so the next preview (or an explicit Retry) builds again.</summary>
+        public static void Remove(string? version)
+        {
+            if (string.IsNullOrEmpty(version))
+            {
+                return;
+            }
+
+            lock (Versions)
+            {
+                Versions.Remove(version!);
+            }
+        }
+
         internal static void ResetForTests()
         {
             lock (Versions)

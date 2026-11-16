@@ -42,8 +42,48 @@ namespace WinUIXamlPreview.Logging
             }
         }
 
+        /// <summary>BB-049: cap the log so it can't grow forever (it holds user paths).</summary>
+        internal const long MaxLogBytes = 5L * 1024 * 1024;
+        private const int RotateCheckEvery = 500;
+        private static int _writesSinceCheck;
+
+        /// <summary>
+        /// When <paramref name="path"/> exceeds <paramref name="maxBytes"/>, move it to <c>name.1.ext</c>
+        /// (replacing any previous one), so at most two capped files exist. Never throws.
+        /// </summary>
+        internal static void RotateIfLarge(string path, long maxBytes)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                if (!info.Exists || info.Length <= maxBytes)
+                {
+                    return;
+                }
+
+                var backup = Path.Combine(
+                    Path.GetDirectoryName(path) ?? string.Empty,
+                    Path.GetFileNameWithoutExtension(path) + ".1" + Path.GetExtension(path));
+                if (File.Exists(backup))
+                {
+                    File.Delete(backup);
+                }
+
+                File.Move(path, backup);
+            }
+            catch
+            {
+                // another writer holds it; try again later
+            }
+        }
+
         public static async Task InitializeAsync(IAsyncServiceProvider services)
         {
+            lock (Gate)
+            {
+                RotateIfLarge(LogFilePath, MaxLogBytes);
+            }
+
             // Start every VS session with a clear marker so stale content is never confusing.
             WriteToFile($"===== WinUI XAML Preview session start (pid {System.Diagnostics.Process.GetCurrentProcess().Id}) =====");
             WriteToFile($"log file: {LogFilePath}");
@@ -93,6 +133,12 @@ namespace WinUIXamlPreview.Logging
             {
                 lock (Gate)
                 {
+                    if (++_writesSinceCheck >= RotateCheckEvery)
+                    {
+                        _writesSinceCheck = 0;
+                        RotateIfLarge(LogFilePath, MaxLogBytes);
+                    }
+
                     File.AppendAllText(LogFilePath, line + Environment.NewLine);
                 }
             }

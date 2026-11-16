@@ -181,43 +181,6 @@ namespace WinUIXamlPreview.Protocol
             return null;
         }
 
-        internal static string? FindOwningCsproj(string? startPath)
-        {
-            if (string.IsNullOrWhiteSpace(startPath))
-            {
-                return null;
-            }
-
-            DirectoryInfo? dir;
-            try
-            {
-                dir = File.Exists(startPath) ? new FileInfo(startPath!).Directory : new DirectoryInfo(startPath!);
-            }
-            catch
-            {
-                return null;
-            }
-
-            for (int i = 0; dir != null && i < 30; i++)
-            {
-                try
-                {
-                    var csproj = Directory.EnumerateFiles(dir.FullName, "*.csproj", SearchOption.TopDirectoryOnly)
-                        .FirstOrDefault();
-                    if (csproj != null)
-                    {
-                        return csproj;
-                    }
-                }
-                catch
-                {
-                    // ignore access errors, keep walking up
-                }
-
-                dir = dir.Parent;
-            }
-
-            return null;
-        }
+        internal static string? FindOwningCsproj(string? startPath) => ProjectDllLocator.FindOwningCsproj(startPath);
     }
 }

@@ -368,7 +368,55 @@ namespace WinUIXamlPreview.Editor
                     yield return child;
                 }
             }
+
+            // BB-021: selectable non-content collections/slots, appended AFTER content children in this fixed order
+            // (mirrors PreviewSurface.AuthoredChildren). Flyout is flattened: its content/items are the owner's children.
+            foreach (var extra in ExtraChildProps)
+            {
+                foreach (var child in parent.Elements())
+                {
+                    string local = child.Name.LocalName;
+                    int dot = local.LastIndexOf('.');
+                    if (dot < 0 || IsSkippedChild(child) || local.Substring(dot + 1) != extra)
+                    {
+                        continue;
+                    }
+
+                    string owner = local.Substring(0, dot);
+                    bool isContent = contentPropByType != null && contentPropByType.TryGetValue(owner, out var cp)
+                        ? cp == extra
+                        : ContentProps.Contains(extra);
+                    if (isContent)
+                    {
+                        continue;
+                    }
+
+                    foreach (var gc in child.Elements())
+                    {
+                        if (IsSkippedChild(gc))
+                        {
+                            continue;
+                        }
+
+                        if (extra == "Flyout")
+                        {
+                            foreach (var fc in AuthoredChildElements(gc, contentPropByType))
+                            {
+                                yield return fc;
+                            }
+                        }
+                        else
+                        {
+                            yield return gc;
+                        }
+                    }
+                }
+            }
         }
+
+        // Must match PreviewSurface.ExtraChildProps exactly (names and order).
+        internal static readonly string[] ExtraChildProps =
+            { "SecondaryCommands", "MenuItems", "FooterMenuItems", "ActionButton", "Flyout" };
 
         private static bool IsIgnoredNamespace(XElement el)
         {

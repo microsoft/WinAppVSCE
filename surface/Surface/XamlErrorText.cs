@@ -78,6 +78,34 @@ internal static class XamlErrorText
         return text;
     }
 
+    /// <summary>
+    /// BB-061: stderr text the surface logs when a layout cycle is about to end the process. The extension matches it
+    /// (vs-extension\WinUIXamlPreview\Protocol\AppFatal.cs; keep in sync) to show the cause instead of auto-restarting.
+    /// </summary>
+    internal const string LayoutCycleMarker = "page layout never settled (layout cycle)";
+
+    internal const string LayoutCycleMessage =
+        "Layout cycle: the page's layout never settled. A control keeps changing its size on every layout pass " +
+        "(for example a custom panel's MeasureOverride/ArrangeOverride, or a SizeChanged handler that resizes it).";
+
+    // E_LAYOUTCYCLE as WinUI reports it from UpdateLayout/Measure, and the WinRT XAML form.
+    private const int LayoutCycleHResult = unchecked((int)0x88000FA8);
+    private const int LayoutCycleHResultWinRt = unchecked((int)0x802B0014);
+
+    /// <summary>True when <paramref name="ex"/> (or an inner exception) is WinUI's layout-cycle error.</summary>
+    public static bool IsLayoutCycle(Exception? ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e.HResult is LayoutCycleHResult or LayoutCycleHResultWinRt ||
+                e.Message.Contains("Layout cycle", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// <summary>True when <see cref="Informative"/> finds nothing useful in the message.</summary>
     public static bool IsOpaque(string? flattened) => Informative(flattened) is null;
 

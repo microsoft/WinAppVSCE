@@ -91,7 +91,115 @@ namespace WinUIXamlPreview.Protocol
         public static bool CanHostLoad(string dllPath)
         {
             var machine = ReadMachine(dllPath);
-            return machine == null || machine == Machine || machine == MachineI386;
+            return machine == null || machine == Machine || (machine == MachineI386 && !IsX86Only(dllPath));
+        }
+
+        /// <summary>
+        /// BB-024: the build architecture of <paramref name="dllPath"/> when the host can't load it ("x86", "x64",
+        /// "ARM64"), else null.
+        /// </summary>
+        public static string? MismatchedArch(string? dllPath)
+        {
+            if (string.IsNullOrEmpty(dllPath) || CanHostLoad(dllPath!))
+            {
+                return null;
+            }
+
+            switch (ReadMachine(dllPath!))
+            {
+                case MachineAmd64: return "x64";
+                case MachineArm64: return "ARM64";
+                case MachineI386: return "x86";
+                default: return null;
+            }
+        }
+
+        private const uint CorFlags32BitRequired = 0x2;
+        private const uint CorFlags32BitPreferred = 0x20000;
+
+        /// <summary>
+        /// True for an x86-only managed assembly: an I386 PE whose CLR header requires a 32-bit process (AnyCPU
+        /// and AnyCPU-prefer-32-bit also report I386 but load in a 64-bit host). Never throws.
+        /// </summary>
+        public static bool IsX86Only(string path)
+        {
+            try
+            {
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var br = new BinaryReader(fs);
+                if (fs.Length < 0x40 || br.ReadUInt16() != 0x5A4D)
+                {
+                    return false;
+                }
+
+                fs.Position = 0x3C;
+                var peOffset = br.ReadInt32();
+                if (peOffset <= 0 || peOffset + 24 > fs.Length)
+                {
+                    return false;
+                }
+
+                fs.Position = peOffset;
+                if (br.ReadUInt32() != 0x00004550 || br.ReadUInt16() != MachineI386)
+                {
+                    return false;
+                }
+
+                var sections = br.ReadUInt16();
+                fs.Position += 12;
+                var optionalSize = br.ReadUInt16();
+                fs.Position += 2;
+                var optional = fs.Position;
+                if (br.ReadUInt16() != 0x10b) // PE32
+                {
+                    return false;
+                }
+
+                // Data directory 14 (CLR runtime header) of a PE32 optional header.
+                var clrDir = optional + 96 + (14 * 8);
+                if (clrDir + 8 > optional + optionalSize || clrDir + 8 > fs.Length)
+                {
+                    return false;
+                }
+
+                fs.Position = clrDir;
+                var rva = br.ReadUInt32();
+                if (rva == 0)
+                {
+                    return false;
+                }
+
+                var table = optional + optionalSize;
+                for (var i = 0; i < sections; i++)
+                {
+                    fs.Position = table + (i * 40) + 8;
+                    var virtualSize = br.ReadUInt32();
+                    var virtualAddress = br.ReadUInt32();
+                    var rawSize = br.ReadUInt32();
+                    var rawPointer = br.ReadUInt32();
+                    if (rva < virtualAddress || rva >= virtualAddress + Math.Max(virtualSize, rawSize))
+                    {
+                        continue;
+                    }
+
+                    // IMAGE_COR20_HEADER.Flags sits 16 bytes in.
+                    var flagsAt = (long)rawPointer + (rva - virtualAddress) + 16;
+                    if (flagsAt + 4 > fs.Length)
+                    {
+                        return false;
+                    }
+
+                    fs.Position = flagsAt;
+                    var flags = br.ReadUInt32();
+                    return (flags & CorFlags32BitRequired) != 0 && (flags & CorFlags32BitPreferred) == 0;
+                }
+
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool DetectArm64()

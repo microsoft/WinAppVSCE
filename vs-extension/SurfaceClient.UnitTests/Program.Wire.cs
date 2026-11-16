@@ -210,6 +210,25 @@ internal static partial class Program
         Eq("no content map: standard Content walked", "0=Page, 0.0=CommandBar, 0.0.0=TextBlock",
             Names(XamlSourceMap.Build(cb)));
 
+        // BB-021: non-content slots come after content children, in the fixed ExtraChildProps order (not document
+        // order); a Flyout is flattened into its owner. Mirrors PreviewSurface.AuthoredChildren.
+        var extras =
+            "<Page " + Pns + "><StackPanel>" +
+            "<CommandBar><CommandBar.SecondaryCommands><AppBarToggleButton/></CommandBar.SecondaryCommands>" +
+            "<AppBarButton/></CommandBar>" +
+            "<InfoBar><InfoBar.ActionButton><HyperlinkButton/></InfoBar.ActionButton><TextBox/></InfoBar>" +
+            "<NavigationView><NavigationView.FooterMenuItems><NavigationViewItem/></NavigationView.FooterMenuItems>" +
+            "<NavigationView.MenuItems><NavigationViewItem/><NavigationViewItem/></NavigationView.MenuItems><Frame/></NavigationView>" +
+            "<Button><Button.Flyout><Flyout><StackPanel/></Flyout></Button.Flyout></Button>" +
+            "<Button><Button.Flyout><MenuFlyout><MenuFlyoutItem/><MenuFlyoutSeparator/></MenuFlyout></Button.Flyout></Button>" +
+            "</StackPanel></Page>";
+        Eq("extra child props: secondary commands, menu items, action button, flyouts",
+            "0=Page, 0.0=StackPanel, 0.0.0=CommandBar, 0.0.0.0=AppBarButton, 0.0.0.1=AppBarToggleButton, " +
+            "0.0.1=InfoBar, 0.0.1.0=TextBox, 0.0.1.1=HyperlinkButton, " +
+            "0.0.2=NavigationView, 0.0.2.0=Frame, 0.0.2.1=NavigationViewItem, 0.0.2.2=NavigationViewItem, 0.0.2.3=NavigationViewItem, " +
+            "0.0.3=Button, 0.0.3.0=StackPanel, 0.0.4=Button, 0.0.4.0=MenuFlyoutItem, 0.0.4.1=MenuFlyoutSeparator",
+            Names(XamlSourceMap.Build(extras, new Dictionary<string, string> { ["CommandBar"] = "PrimaryCommands" })));
+
         // A custom control in a user namespace sharing a text-element name is NOT skipped.
         var custom = "<Page " + Pns + " xmlns:my=\"using:My\"><StackPanel><my:Run/><Run/><Button/></StackPanel></Page>";
         Eq("custom element named Run is kept", "0=Page, 0.0=StackPanel, 0.0.0=Run, 0.0.1=Button", Names(XamlSourceMap.Build(custom)));

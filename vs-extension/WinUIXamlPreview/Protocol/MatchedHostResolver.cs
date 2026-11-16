@@ -60,7 +60,7 @@ internal static class MatchedHostResolver
         if (versionMismatch && !canBuild)
             note = $"Matched WinAppSDK {version} preview requires a project and .NET SDK.";
         else if (discovery.Source == WasdkVersionSource.Unresolved)
-            note = $"Couldn't determine this project's WinAppSDK version, so the preview uses the bundled {BundledVersion}. Build the project, then reopen the file.";
+            note = $"Couldn't determine this project's WinAppSDK version, so the preview uses the bundled {BundledVersion}. Build the project to preview with its own version.";
         return new HostSelection
         {
             ExePath = bundled, Fidelity = HostFidelity.Baseline, VersionLabel = version ?? BundledVersion,

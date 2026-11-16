@@ -187,10 +187,12 @@ internal static class HostPayload
         try
         {
             int linked = 0, copied = 0;
+            // Files a surface staged while running in place belong to one project, never to the host.
+            var staged = ReadStagedLedger(host, out _);
             foreach (var path in Directory.EnumerateFiles(host, "*", SearchOption.AllDirectories))
             {
                 var rel = path.Substring(host.Length + 1);
-                if (rel == RunMarker) continue;
+                if (rel == RunMarker || rel == StagedLedgerName || staged.Contains(rel)) continue;
                 var dest = Path.Combine(staging, rel);
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
                 // A read-only member is copied: its link couldn't be deleted without changing the host's attributes.
@@ -332,4 +334,34 @@ internal static class HostPayload
         }
         return removed;
     }
+
+    /// <summary>
+    /// Ledger of user files a surface staged beside its exe: first line is the owning user assembly, then one
+    /// host-relative path per line. Matters when a host runs in place (identity fallback), where staged files
+    /// would otherwise outlive the preview and leak into later previews and run copies.
+    /// </summary>
+    public const string StagedLedgerName = ".staged-files";
+
+    public static HashSet<string> ReadStagedLedger(string hostDir, out string? owner)
+    {
+        owner = null;
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var path = Path.Combine(hostDir, StagedLedgerName);
+        if (!File.Exists(path)) return set;
+        try
+        {
+            var lines = File.ReadAllLines(path);
+            if (lines.Length > 0) owner = lines[0];
+            foreach (var line in lines.Skip(1))
+            {
+                if (IsSafeRelative(line)) set.Add(line);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return set;
+    }
+
+    private static bool IsSafeRelative(string rel) =>
+        !string.IsNullOrWhiteSpace(rel) && !Path.IsPathRooted(rel) &&
+        !rel.Split('\\', '/').Any(part => part == "..");
 }

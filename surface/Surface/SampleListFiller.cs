@@ -417,7 +417,7 @@ internal static class SampleListFiller
 
     private static Dictionary<string, object> ToDictionary(JsonElement e)
     {
-        var d = new Dictionary<string, object>(StringComparer.Ordinal);
+        var d = new SampleRow();
         foreach (var p in e.EnumerateObject())
         {
             if (Convert(p.Value) is { } v)
@@ -439,6 +439,38 @@ internal static class SampleListFiller
             }
         }
         return l;
+    }
+}
+
+/// <summary>
+/// BB-055: an untyped sample row. A list item's UIA name falls back to the item's ToString, which for a plain
+/// Dictionary is "System.Collections.Generic.Dictionary`2[…]"; this reads like the row instead.
+/// </summary>
+internal sealed class SampleRow : Dictionary<string, object>
+{
+    private static readonly string[] NameKeys = { "Name", "Title", "DisplayName", "Label", "Text", "Header", "Key" };
+
+    public SampleRow() : base(StringComparer.Ordinal) { }
+
+    public override string ToString()
+    {
+        foreach (var key in NameKeys)
+        {
+            if (TryGetValue(key, out var v) && v is string s && s.Length > 0)
+            {
+                return s;
+            }
+        }
+
+        foreach (var v in Values)
+        {
+            if (v is string s && s.Length > 0 && !s.StartsWith("ms-appx:", StringComparison.OrdinalIgnoreCase))
+            {
+                return s;
+            }
+        }
+
+        return "Sample item";
     }
 }
 

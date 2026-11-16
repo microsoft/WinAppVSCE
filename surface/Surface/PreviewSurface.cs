@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -64,6 +65,8 @@ internal sealed class PreviewSurface
     private readonly Border _selectionTag; // accent chip at the selection's top-left: type + name + props icon
     private readonly TextBlock _tagType;
     private readonly TextBlock _tagName;
+    private readonly TextBlock? _tagHidden;
+    private bool _selectedHidden;
     private readonly Button _propsButton;
     private readonly Flyout _propsFlyout;
     private readonly FrameworkElement _contentHost; // the preview canvas — the hit-test subtree
@@ -177,6 +180,8 @@ internal sealed class PreviewSurface
         _inputOverlay.PointerPressed += OnPointerPressed;
         _inputOverlay.PointerMoved += OnPointerMoved;
         _inputOverlay.PointerExited += (_, _) => _hoverOutline.Visibility = Visibility.Collapsed;
+        _inputOverlay.PointerReleased += EndPan;
+        _inputOverlay.PointerCaptureLost += (_, _) => _panStart = null;
 
         // Previewer chrome that must be clickable (the selection tag) rides on its own canvas above the input
         // overlay. A Canvas with no Background is hit-transparent except where its children are, so clicks that
@@ -227,6 +232,18 @@ internal sealed class PreviewSurface
         };
         tagPanel.Children.Add(_tagType);
         tagPanel.Children.Add(_tagName);
+        _tagHidden = new TextBlock
+        {
+            Text = "· not visible",
+            FontSize = 11,
+            FontStyle = Windows.UI.Text.FontStyle.Italic,
+            Foreground = new SolidColorBrush(Microsoft.UI.Colors.White),
+            Opacity = 0.85,
+            VerticalAlignment = VerticalAlignment.Center,
+            Visibility = Visibility.Collapsed,
+        };
+        ToolTipService.SetToolTip(_tagHidden, "This element isn't currently rendered (collapsed, in an overflow menu, or in a closed flyout).");
+        tagPanel.Children.Add(_tagHidden);
         tagPanel.Children.Add(_propsButton);
 
         _selectionTag = new Border
@@ -252,8 +269,13 @@ internal sealed class PreviewSurface
 
         _artboard.SizeChanged += OnArtboardSizeChanged;
         _scroll.ViewChanged += OnScrollViewChanged;
+        _scroll.LayoutUpdated += (_, _) => UpdateOverlayInset(); // extent changes (zoom, resize, new content)
         _scroll.Loaded += (_, _) => { if (!_zoomInitialized) { InitializeZoom(); } };
         _inputOverlay.PointerWheelChanged += OnOverlayWheel;
+        // Any user scroll ends a pending BB-069 restore so it never fights the user.
+        _scroll.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, _) => CancelRestore()), true);
+        _scroll.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, _) => CancelRestore()), true);
+        _scroll.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler((_, _) => CancelRestore()), true);
 
         ApplyMode();
     }
@@ -342,7 +364,7 @@ internal sealed class PreviewSurface
         RebuildGrid(e.NewSize.Width, e.NewSize.Height);
         if (!_zoomInitialized) { InitializeZoom(); }
         else if (_fitMode) { ApplyFit(); }
-        else { ReflowSelectionChrome(); }
+        else { ContinueRestore(); ReflowSelectionChrome(); }
     }
 
     /// <summary>Zoom/scroll snapshot carried from one preview surface to the next across a live re-host.</summary>
@@ -354,7 +376,39 @@ internal sealed class PreviewSurface
     internal ViewState CaptureViewState() =>
         !_zoomInitialized && InitialView is { } pending
             ? pending // not laid out yet (e.g. a quick re-host right after a restore): pass the restore along
-            : new(_fitMode || !_zoomInitialized, _scroll.ZoomFactor, _scroll.HorizontalOffset, _scroll.VerticalOffset);
+            : _pendingRestore is { } r && DateTime.UtcNow <= r.Until
+                ? new(false, r.Zoom, r.X, r.Y) // still growing into the restored offset: don't save the clamp
+                : new(_fitMode || !_zoomInitialized, _scroll.ZoomFactor, _scroll.HorizontalOffset, _scroll.VerticalOffset);
+
+    /// <summary>
+    /// BB-069: the restored offset is clamped while the re-hosted page is still smaller than before (it renders
+    /// after the first layout), so an in-place edit kept the zoom but jumped to the top. The target is re-applied
+    /// as the extent grows, until it is reached, the user scrolls, or a short window passes.
+    /// </summary>
+    private (double X, double Y, float Zoom, DateTime Until)? _pendingRestore;
+
+    private void ContinueRestore()
+    {
+        if (_pendingRestore is not { } p)
+        {
+            return;
+        }
+        double x = _scroll.HorizontalOffset, y = _scroll.VerticalOffset;
+        if (DateTime.UtcNow > p.Until || (Math.Abs(x - p.X) <= 1 && Math.Abs(y - p.Y) <= 1))
+        {
+            _pendingRestore = null;
+            return;
+        }
+        double maxX = Math.Max(0, _scroll.ExtentWidth - _scroll.ViewportWidth);
+        double maxY = Math.Max(0, _scroll.ExtentHeight - _scroll.ViewportHeight);
+        double nx = Math.Min(p.X, maxX), ny = Math.Min(p.Y, maxY);
+        if (nx > x + 1 || ny > y + 1)
+        {
+            _scroll.ChangeView(nx, ny, null, true);
+        }
+    }
+
+    private void CancelRestore() => _pendingRestore = null;
 
     private void InitializeZoom()
     {
@@ -366,6 +420,7 @@ internal sealed class PreviewSurface
             _fitMode = false;
             App.Log($"Restoring view: zoom {v.Zoom:0.###} offset {v.OffsetX:0},{v.OffsetY:0}");
             _scroll.ChangeView(v.OffsetX, v.OffsetY, (float)Math.Max(MinZoom, Math.Min(MaxZoom, v.Zoom)), true);
+            _pendingRestore = (v.OffsetX, v.OffsetY, (float)v.Zoom, DateTime.UtcNow.AddSeconds(3));
             UpdateZoomLabel(v.Zoom);
             return;
         }
@@ -374,12 +429,24 @@ internal sealed class PreviewSurface
 
     private void OnScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
-        // ChangeView may raise ViewChanged after ApplyFit has returned, so also treat "still at the fit zoom" as fit.
-        if (!_applyingFit && !IsAtFitZoom()) { _fitMode = false; }
+        // Only a user zoom (pinch) leaves fit mode. ChangeView may raise ViewChanged after ApplyFit has returned, and
+        // during a pane resize (BB-012) the event reports the zoom of an earlier fit while the viewport has already
+        // changed — neither is the user zooming, and the artboard's SizeChanged re-fits to the final size.
+        double vw = _scroll.ViewportWidth, vh = _scroll.ViewportHeight;
+        bool resized = vw != _lastViewportWidth || vh != _lastViewportHeight;
+        _lastViewportWidth = vw;
+        _lastViewportHeight = vh;
+        if (_fitMode && !_applyingFit && !resized && !IsFitZoom(_scroll.ZoomFactor)) { _fitMode = false; }
         UpdateZoomLabel(_scroll.ZoomFactor);
+        UpdateOverlayInset();
         ReflowSelectionChrome();
+        if (!e.IsIntermediate) { ContinueRestore(); }
         if (!e.IsIntermediate && _zoomInitialized) { ViewStateChanged?.Invoke(CaptureViewState()); }
     }
+
+    private double _lastViewportWidth;
+    private double _lastViewportHeight;
+    private double _fitTargetZoom = double.NaN;
 
     /// <summary>Raised (UI thread) when the user's zoom/scroll settles, so the client can restore it on a new surface.</summary>
     public event Action<ViewState>? ViewStateChanged;
@@ -393,7 +460,8 @@ internal sealed class PreviewSurface
         return Math.Max(MinZoom, Math.Min(fit, 1.0));
     }
 
-    private bool IsAtFitZoom() => _fitMode && Math.Abs(_scroll.ZoomFactor - ComputeFitZoom()) < 0.002;
+    private bool IsFitZoom(double zoom) =>
+        Math.Abs(zoom - ComputeFitZoom()) < 0.002 || Math.Abs(zoom - _fitTargetZoom) < 0.002;
 
     private void RebuildGrid(double w, double h)
     {
@@ -418,6 +486,7 @@ internal sealed class PreviewSurface
     /// <summary>Set the zoom factor, anchoring on <paramref name="centerViewport"/> (or the viewport center).</summary>
     private void ChangeZoom(double factor, Point? centerViewport, bool keepFit)
     {
+        CancelRestore();
         factor = Math.Max(MinZoom, Math.Min(MaxZoom, factor));
         double oldZoom = _scroll.ZoomFactor;
         if (oldZoom <= 0) { oldZoom = 1.0; }
@@ -428,6 +497,7 @@ internal sealed class PreviewSurface
         double newOffsetY = ZoomMath.AnchoredOffset(_scroll.VerticalOffset, _scroll.ViewportHeight, _canvasH, oldZoom, factor, cy);
 
         _fitMode = keepFit;
+        _fitTargetZoom = keepFit ? factor : double.NaN;
         _applyingFit = keepFit;
         _scroll.ChangeView(newOffsetX, newOffsetY, (float)factor, true);
         _applyingFit = false;
@@ -452,6 +522,7 @@ internal sealed class PreviewSurface
 
     private void OnOverlayWheel(object sender, PointerRoutedEventArgs e)
     {
+        CancelRestore();
         var pp = e.GetCurrentPoint(_scroll);
         int delta = pp.Properties.MouseWheelDelta;
         if (delta == 0) { return; }
@@ -461,8 +532,9 @@ internal sealed class PreviewSurface
             double step = delta > 0 ? 1.15 : 1.0 / 1.15;
             ChangeZoom(_scroll.ZoomFactor * step, pp.Position, keepFit: false);
         }
-        else if ((mods & VirtualKeyModifiers.Shift) != 0)
+        else if ((mods & VirtualKeyModifiers.Shift) != 0 || (_scroll.ScrollableHeight <= 0 && _scroll.ScrollableWidth > 0))
         {
+            // BB-030: with only horizontal overflow, the plain wheel scrolls sideways instead of doing nothing.
             _scroll.ChangeView(_scroll.HorizontalOffset - delta, null, null, true);
         }
         else
@@ -514,7 +586,62 @@ internal sealed class PreviewSurface
         }
 
         e.Handled = true; // consume the click so it never reaches the live content
-        ApplyPick(e.GetCurrentPoint(_artboard).Position);
+        var cp = e.GetCurrentPoint(_artboard);
+        if (cp.Properties.IsMiddleButtonPressed)
+        {
+            BeginPan(e, cp.Position);
+            return;
+        }
+
+        // A left press on empty canvas (nothing authored under it) pans, like the letterbox in other designers.
+        if (!ApplyPick(cp.Position) && cp.Properties.IsLeftButtonPressed)
+        {
+            BeginPan(e, cp.Position);
+        }
+    }
+
+    // ---- drag-pan (BB-030) ---------------------------------------------------
+    // Middle-drag anywhere, or left-drag from empty canvas, scrolls the zoomed view. The scroll offsets are in
+    // viewport pixels, so a pointer delta maps 1:1 to an offset delta at any zoom.
+
+    private Point? _panStart;
+    private double _panFromX, _panFromY;
+
+    private bool CanPan => _scroll.ScrollableWidth > 0 || _scroll.ScrollableHeight > 0;
+
+    private void BeginPan(PointerRoutedEventArgs e, Point at)
+    {
+        if (!CanPan || !_inputOverlay.CapturePointer(e.Pointer))
+        {
+            return;
+        }
+        CancelRestore();
+        _panStart = at;
+        _panFromX = _scroll.HorizontalOffset;
+        _panFromY = _scroll.VerticalOffset;
+        _hoverOutline.Visibility = Visibility.Collapsed;
+    }
+
+    private void EndPan(object sender, PointerRoutedEventArgs e)
+    {
+        if (_panStart is null)
+        {
+            return;
+        }
+        _panStart = null;
+        _inputOverlay.ReleasePointerCapture(e.Pointer);
+        e.Handled = true;
+    }
+
+    /// <summary>Keeps the overlay off the ScrollViewer's scrollbar strips so they stay reachable (BB-030).</summary>
+    private void UpdateOverlayInset()
+    {
+        const double bar = 16;
+        var inset = new Thickness(0, 0, _scroll.ScrollableHeight > 0 ? bar : 0, _scroll.ScrollableWidth > 0 ? bar : 0);
+        if (_inputOverlay.Margin != inset)
+        {
+            _inputOverlay.Margin = inset;
+        }
     }
 
     /// <summary>
@@ -556,6 +683,7 @@ internal sealed class PreviewSurface
     /// </summary>
     private void SelectAndReport(FrameworkElement hit)
     {
+        WatchSelectedSize(hit);
         var bounds = DrawAdorner(hit);
 
         try
@@ -570,6 +698,62 @@ internal sealed class PreviewSurface
         {
             App.Log("PreviewSurface selection callback failed: " + ex.Message);
         }
+    }
+
+    // BB-013: the selected element can resize without a re-render (canvas Size preset, window resize) — re-emit its
+    // properties so ActualWidth/ActualHeight in the panel don't go stale. Debounced to one refresh per layout burst.
+    private FrameworkElement? _sizeWatched;
+    private bool _sizeRefreshQueued;
+
+    private void WatchSelectedSize(FrameworkElement? fe)
+    {
+        if (ReferenceEquals(fe, _sizeWatched))
+        {
+            return;
+        }
+
+        if (_sizeWatched != null)
+        {
+            _sizeWatched.SizeChanged -= OnSelectedSizeChanged;
+        }
+
+        _sizeWatched = fe;
+        if (fe != null)
+        {
+            fe.SizeChanged += OnSelectedSizeChanged;
+        }
+    }
+
+    private void OnSelectedSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_sizeRefreshQueued || !ReferenceEquals(sender, _selected))
+        {
+            return;
+        }
+
+        _sizeRefreshQueued = true;
+        ((FrameworkElement)sender).DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            _sizeRefreshQueued = false;
+            var fe = _selected;
+            if (fe is null || !_designMode || !ReferenceEquals(fe, _sizeWatched))
+            {
+                return;
+            }
+
+            try
+            {
+                var bounds = DrawAdorner(fe);
+                var payload = BuildPayload(fe, bounds);
+                _selectedPayload = payload;
+                PositionSelectionTag(bounds);
+                PropsRefreshed?.Invoke(payload);
+            }
+            catch (Exception ex)
+            {
+                App.Log("Selected-size refresh failed: " + ex.Message);
+            }
+        });
     }
 
     /// <summary>Builds the full selection payload (identity + adorner bounds + authored path + reflected props).</summary>
@@ -681,6 +865,13 @@ internal sealed class PreviewSurface
         }
 
         var pt = e.GetCurrentPoint(_artboard).Position;
+        if (_panStart is { } start)
+        {
+            _scroll.ChangeView(_panFromX - (pt.X - start.X), _panFromY - (pt.Y - start.Y), null, true);
+            e.Handled = true;
+            return;
+        }
+
         var hit = LeafUnder(pt);
         if (hit is null || ReferenceEquals(hit, _selected))
         {
@@ -867,10 +1058,6 @@ internal sealed class PreviewSurface
     private IEnumerable<FrameworkElement> AuthoredChildren(DependencyObject obj)
     {
         string? cp = ContentPropertyName(obj.GetType());
-        if (cp == null)
-        {
-            yield break;
-        }
 
         // A nested UserControl's "Content" is its private compiled template — opaque. (The root page is the
         // exception: its Content is the authored page body.) Custom controls that expose authored content via a
@@ -894,17 +1081,89 @@ internal sealed class PreviewSurface
             yield break;
         }
 
-        object? value;
-        try
+        if (cp != null)
         {
-            value = obj.GetType().GetProperty(cp)?.GetValue(obj);
+            foreach (var fe in PropertyChildren(obj, cp))
+            {
+                yield return fe;
+            }
         }
-        catch (Exception ex)
+
+        if (ReferenceEquals(obj, _contentHost))
         {
-            App.Log($"AuthoredChildren: reading {obj.GetType().Name}.{cp} failed: {ex.Message}");
             yield break;
         }
 
+        // BB-021: selectable non-content slots, appended after content children in a fixed order the client's
+        // XamlSourceMap.ExtraChildProps mirrors. A Flyout is flattened: its content/items become the owner's children.
+        foreach (var extra in ExtraChildProps)
+        {
+            if (extra == cp)
+            {
+                continue;
+            }
+
+            if (extra == "Flyout")
+            {
+                if (ReadProperty(obj, extra) is Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase flyout)
+                {
+                    foreach (var fe in AuthoredChildren(flyout))
+                    {
+                        yield return fe;
+                    }
+                }
+
+                continue;
+            }
+
+            foreach (var fe in PropertyChildren(obj, extra))
+            {
+                yield return fe;
+            }
+        }
+    }
+
+    private static readonly string[] ExtraChildProps =
+        { "SecondaryCommands", "MenuItems", "FooterMenuItems", "ActionButton", "Flyout" };
+
+    private static readonly Dictionary<(Type, string), PropertyInfo?> _propInfoCache = new();
+
+    private static object? ReadProperty(DependencyObject obj, string name)
+    {
+        var key = (obj.GetType(), name);
+        if (!_propInfoCache.TryGetValue(key, out var pi))
+        {
+            try
+            {
+                pi = obj.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
+            }
+            catch (AmbiguousMatchException)
+            {
+                pi = null;
+            }
+
+            _propInfoCache[key] = pi;
+        }
+
+        if (pi is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return pi.GetValue(obj);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"AuthoredChildren: reading {obj.GetType().Name}.{name} failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private IEnumerable<FrameworkElement> PropertyChildren(DependencyObject obj, string prop)
+    {
+        object? value = ReadProperty(obj, prop);
         if (value is FrameworkElement single)
         {
             yield return single;
@@ -1130,9 +1389,22 @@ internal sealed class PreviewSurface
     {
         try
         {
+            if (_tagHidden != null)
+            {
+                _tagHidden.Visibility = _selectedHidden ? Visibility.Visible : Visibility.Collapsed;
+            }
+
             _selectionTag.Visibility = Visibility.Visible;
             _selectionTag.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             double th = _selectionTag.DesiredSize.Height;
+
+            if (_selectedHidden)
+            {
+                // Pin to the artboard's top-left (chrome is in screen space) without implying a location.
+                Canvas.SetLeft(_selectionTag, 4);
+                Canvas.SetTop(_selectionTag, 4);
+                return;
+            }
 
             double left = Math.Max(0, selection.Left);
             double top = selection.Top - th - 2;
@@ -1280,6 +1552,15 @@ internal sealed class PreviewSurface
     private Rect DrawAdorner(FrameworkElement fe)
     {
         var r = BoundsOf(fe);
+        // BB-026: a collapsed/unrealized element (overflow command, closed flyout, Visibility=Collapsed) has no
+        // on-screen box; don't draw a 0x0 rectangle at the artboard corner — the tag says "not visible" instead.
+        _selectedHidden = !fe.IsLoaded || r.Width <= 0 || r.Height <= 0;
+        if (_selectedHidden)
+        {
+            _selectRect.Visibility = Visibility.Collapsed;
+            return r;
+        }
+
         Canvas.SetLeft(_selectRect, r.X);
         Canvas.SetTop(_selectRect, r.Y);
         _selectRect.Width = Math.Max(0, r.Width);
@@ -1290,6 +1571,8 @@ internal sealed class PreviewSurface
 
     private void ClearAdorner()
     {
+        WatchSelectedSize(null);
+        _selectedHidden = false;
         _selectRect.Visibility = Visibility.Collapsed;
         _selectionTag.Visibility = Visibility.Collapsed;
     }

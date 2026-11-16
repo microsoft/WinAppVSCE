@@ -3,7 +3,9 @@
   <Metadata>
     <Identity Id="WinUIXamlPreview.735e99b9-7953-4336-b8e8-b083b29effa4" Version="0.3.15" Language="en-US" Publisher="winui-vsc" />
     <DisplayName>WinUI XAML Preview</DisplayName>
-    <Description xml:space="preserve">Live headless preview pane for WinUI 3 XAML pages. Streams rendered frames from a reused surface process into a tool window. Proof-of-concept.</Description>
+    <Description xml:space="preserve">Live preview of WinUI 3 XAML pages beside the editor. Updates as you type, supports element selection, themes, and sample data.</Description>
+    <Icon>icon.png</Icon>
+    <PreviewImage>icon.png</PreviewImage>
   </Metadata>
   <Installation>
     <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.8,19.0)">

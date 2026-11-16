@@ -31,6 +31,7 @@ internal static partial class Program
             ("BEH-R3 Border root renders", Root("Border")),
             ("BEH-R4 compiled custom UserControl (fx:ProfileCard) root renders", "<fx:ProfileCard " + BehNs + " Width=\"200\" Height=\"100\"/>"),
             ("BEH-R5 control root (Button) renders", "<Button " + BehNs + " Content=\"b\"/>"),
+            ("BEH-R8 Window root previews its content", Root("Window", "<Grid/>", "")),
             ("BEH-R6 leading comment naming a Window does not misclassify",
                 "<!-- <Window> --><Page " + BehNs + " Width=\"200\" Height=\"100\"><TextBlock Text=\"c\"/></Page>"),
         })
@@ -43,7 +44,6 @@ internal static partial class Program
         foreach (var (code, xaml) in new[]
         {
             ("BEH-R7 ResourceDictionary root -> nonpage", "<ResourceDictionary " + BehNs + "><SolidColorBrush x:Key=\"B\" Color=\"Red\"/></ResourceDictionary>"),
-            ("BEH-R8 Window root -> nonpage", Root("Window", "<Grid/>", "")),
             ("BEH-R9 Application root -> nonpage", Root("Application", "", "")),
             ("BEH-R10 project-template placeholder -> nonpage",
                 "<Page x:Class=\"$safeprojectname$.MainPage\" " + BehNs + "><Grid/></Page>"),

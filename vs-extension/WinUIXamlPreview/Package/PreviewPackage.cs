@@ -103,6 +103,17 @@ namespace WinUIXamlPreview
             {
                 var id = new CommandID(PackageGuids.CommandSet, PackageGuids.ShowPreviewCommandId);
                 mcs.AddCommand(new MenuCommand(OnShowPreviewCommand, id));
+
+                var focusId = new CommandID(PackageGuids.CommandSet, PackageGuids.FocusPreviewToolbarCommandId);
+                var focusCmd = new OleMenuCommand((_, __) =>
+                {
+                    if (!Editor.XamlPreviewMargin.FocusActiveToolbar())
+                    {
+                        Log.Write("Focus-toolbar command: no visible in-editor preview to focus.");
+                    }
+                }, focusId);
+                focusCmd.BeforeQueryStatus += (_, __) => focusCmd.Enabled = Editor.XamlPreviewMargin.HasActiveMargin;
+                mcs.AddCommand(focusCmd);
                 Log.Write("Show-preview command registered.");
             }
             else

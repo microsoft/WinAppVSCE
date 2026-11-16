@@ -22,5 +22,8 @@ namespace WinUIXamlPreview
 
         /// <summary>ID of the "WinUI XAML Preview" button (must match VSCommandTable.vsct).</summary>
         public const int ShowPreviewCommandId = 0x0100;
+
+        /// <summary>ID of the "Focus WinUI XAML Preview Toolbar" command (must match VSCommandTable.vsct).</summary>
+        public const int FocusPreviewToolbarCommandId = 0x0101;
     }
 }

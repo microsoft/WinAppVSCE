@@ -47,8 +47,36 @@ namespace WinUIXamlPreview.UI
             return line.HasValue ? $"Line {line}, col {column} — {msg}" : msg;
         }
 
-        /// <summary>Detail line for the "Preview disconnected" card.</summary>
-        public static string DisconnectedDetail(string reason, bool restartsExhausted, int maxRestarts) =>
-            restartsExhausted ? $"Auto-restart gave up after {maxRestarts} attempts. {reason}" : reason;
+        /// <summary>
+        /// BB-062: detail line for the "Preview disconnected" card, in plain words. The transport reason
+        /// ("Surface socket read failed…") only goes to preview.log, where the surface's own error output is too.
+        /// </summary>
+        public static string DisconnectedDetail(bool restartsExhausted, int maxRestarts) =>
+            restartsExhausted
+                ? $"The preview stopped {maxRestarts} times in a row while rendering this file, so it was not restarted again. " +
+                  "Something on the page (often a control or its code) is probably crashing it. Fix or remove it, then choose Reload preview. " +
+                  "Details are in preview.log."
+                : "The preview stopped unexpectedly. Choose Reload preview to start it again. Details are in preview.log.";
+
+        /// <summary>BB-060/061: title of the card shown when the page's own code ended the preview.</summary>
+        public const string AppFatalTitle = "The page's code stopped the preview";
+
+        /// <summary>BB-060/061: why the page's code ended the preview, and what to do. Not auto-restarted.</summary>
+        public static string AppFatalDetail(Protocol.AppFatalCause cause)
+        {
+            var what = cause switch
+            {
+                Protocol.AppFatalCause.LayoutCycle =>
+                    "Its layout never settled: a control keeps changing its size on every layout pass (a layout cycle), " +
+                    "for example a custom panel's MeasureOverride/ArrangeOverride or a SizeChanged handler that resizes it.",
+                Protocol.AppFatalCause.LayoutCodeThrew =>
+                    "A control's MeasureOverride or ArrangeOverride threw an exception, and WinUI closes the app when that happens.",
+                Protocol.AppFatalCause.Unresponsive =>
+                    "It stopped responding before it finished loading, probably a long-running loop in a constructor or Loaded handler.",
+                _ => "It crashed while rendering.",
+            };
+            return what + " Restarting would hit the same problem, so the preview was not restarted. " +
+                   "Fix the code, rebuild, then choose Reload preview. Details are in preview.log.";
+        }
     }
 }

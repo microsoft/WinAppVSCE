@@ -92,7 +92,8 @@ namespace WinUIXamlPreview.Editor
             public bool Overflowed { get; set; }
         }
 
-        private const int MaxOverflowRank = 7;
+        // BB-047: Select and then Reload overflow last, so even a very narrow pane keeps "⋯" and Hide on screen.
+        private const int MaxOverflowRank = 9;
 
         private FrameworkElement BuildToolbar(Func<PreviewToolbar, List<ToolbarItem>>? hostGroup)
         {
@@ -107,17 +108,17 @@ namespace WinUIXamlPreview.Editor
             };
 
             var reload = MakeButton(KnownMonikers.Refresh, "Reload", "Re-render the preview", OnReloadClick, "PreviewReloadButton");
-            _selectButton = MakeButton(SelectMoniker(), SelectLabel(), SelectTooltip(), OnToggleSelectClick, "PreviewSelectToggle");
+            _selectButton = MakeButton(SelectMoniker(), SelectLabel(), SelectTooltip(), OnToggleSelectClick, "PreviewSelectToggle", () => PreviewOptions.DesignMode);
             var properties = MakeButton(KnownMonikers.Property, "Properties", "Show the design-time Properties panel", OnPropertiesClick, "PreviewPropertiesButton");
             _themeButton = MakeMenuButton(KnownMonikers.DarkTheme, ThemeLabel(), ThemeTooltip(), "PreviewThemeButton", BuildThemeMenu());
             _sizeButton = MakeMenuButton(KnownMonikers.Monitor, SizeLabel(), SizeTooltip(), "PreviewSizeButton", BuildSizeMenu());
-            _dtdButton = MakeButton(DtdMoniker(), DtdLabel(), DtdTooltip(), OnToggleDtdClick, "PreviewDtdToggle");
-            _fidelityButton = MakeButton(FidelityMoniker(), FidelityLabel(), FidelityTooltip(), OnToggleFidelityClick, "PreviewFidelityToggle");
+            _dtdButton = MakeButton(DtdMoniker(), DtdLabel(), DtdTooltip(), OnToggleDtdClick, "PreviewDtdToggle", () => PreviewOptions.DesignTimeData);
+            _fidelityButton = MakeButton(FidelityMoniker(), FidelityLabel(), FidelityTooltip(), OnToggleFidelityClick, "PreviewFidelityToggle", () => PreviewOptions.FullFidelityAutoBuild);
 
-            _toolbarGroups.Add(new List<ToolbarItem> { new ToolbarItem(reload, 0, null) });
+            _toolbarGroups.Add(new List<ToolbarItem> { new ToolbarItem(reload, 9, () => MakeOverflowCommand(KnownMonikers.Refresh, "Reload", OnReloadClick, "PreviewOverflowReload")) });
             _toolbarGroups.Add(new List<ToolbarItem>
             {
-                new ToolbarItem(_selectButton, 0, null),
+                new ToolbarItem(_selectButton, 8, () => MakeOverflowCommand(SelectMoniker(), SelectLabel(), OnToggleSelectClick, "PreviewOverflowSelect")),
                 new ToolbarItem(properties, 5, () => MakeOverflowCommand(KnownMonikers.Property, "Properties", OnPropertiesClick, "PreviewOverflowProperties")),
             });
             _toolbarGroups.Add(new List<ToolbarItem>
@@ -172,8 +173,19 @@ namespace WinUIXamlPreview.Editor
             _toolbarButtons = buttons;
             _toolbarTitle = title;
             bar.SizeChanged += (s, e) => { if (e.WidthChanged) { UpdateToolbarLayout(); } };
+            // BB-068: a relabel in a background tab measures detached content (unresolved fonts/styles) and
+            // picks the wrong level; such a fit is deferred until the bar is shown again.
+            bar.IsVisibleChanged += (s, e) =>
+            {
+                if (bar.IsVisible && _toolbarLayoutPending)
+                {
+                    bar.Dispatcher.BeginInvoke(new Action(UpdateToolbarLayout), System.Windows.Threading.DispatcherPriority.Loaded);
+                }
+            };
             return bar;
         }
+
+        private bool _toolbarLayoutPending;
 
         // Progressive narrow-width layout: drop the title, then the button labels (icon + tooltip), then move
         // buttons into the "⋯" overflow menu least-used first. Picks the first level whose buttons fit.
@@ -185,10 +197,12 @@ namespace WinUIXamlPreview.Editor
             }
 
             var available = _toolbarBar.ActualWidth;
-            if (available <= 0)
+            if (available <= 0 || !_toolbarBar.IsVisible)
             {
+                _toolbarLayoutPending = true;
                 return;
             }
+            _toolbarLayoutPending = false;
 
             var unbounded = new Size(double.PositiveInfinity, double.PositiveInfinity);
             var level = 0;
@@ -284,11 +298,11 @@ namespace WinUIXamlPreview.Editor
                 Margin = new Thickness(0, 3, 2, 3),
                 MinWidth = 0,
                 Cursor = Cursors.Hand,
-                Focusable = false,
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed,
                 Content = new CrispImage { Moniker = KnownMonikers.Ellipsis, Width = 16, Height = 16, VerticalAlignment = VerticalAlignment.Center },
             };
+            PreviewChrome.KeyboardOnlyFocus(b);
             b.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
             AutomationProperties.SetName(b, "More options");
             AutomationProperties.SetAutomationId(b, "PreviewOverflowButton");
@@ -393,6 +407,11 @@ namespace WinUIXamlPreview.Editor
             hover.Setters.Add(new Setter(Border.BorderBrushProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuBorderBrushKey), "Bd"));
             template.Triggers.Add(hover);
 
+            var keyboardFocus = new Trigger { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
+            keyboardFocus.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarHoverBrushKey), "Bd"));
+            keyboardFocus.Setters.Add(new Setter(Border.BorderBrushProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuBorderBrushKey), "Bd"));
+            template.Triggers.Add(keyboardFocus);
+
             var pressed = new Trigger { Property = Button.IsPressedProperty, Value = true };
             pressed.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMouseDownBackgroundBeginBrushKey), "Bd"));
             pressed.Setters.Add(new Setter(Border.BorderBrushProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuBorderBrushKey), "Bd"));
@@ -402,20 +421,20 @@ namespace WinUIXamlPreview.Editor
             return style;
         }
 
-        internal Button MakeButton(ImageMoniker moniker, string label, string tooltip, RoutedEventHandler onClick, string automationId)
+        /// <param name="isOn">For an on/off switch, reads the current state; the button then exposes the UIA
+        /// Toggle pattern (BB-064).</param>
+        internal Button MakeButton(ImageMoniker moniker, string label, string tooltip, RoutedEventHandler onClick, string automationId, Func<bool>? isOn = null)
         {
-            var b = new Button
-            {
-                Style = FlatButtonStyle,
-                ToolTip = tooltip,
-                Padding = new Thickness(6, 1, 8, 1),
-                Margin = new Thickness(0, 3, 2, 3),
-                MinWidth = 0,
-                Cursor = Cursors.Hand,
-                Focusable = false,
-                VerticalAlignment = VerticalAlignment.Center,
-                Content = BuildButtonContent(moniker, label),
-            };
+            var b = isOn != null ? new PreviewToggleButton(isOn) : new Button();
+            b.Style = FlatButtonStyle;
+            b.ToolTip = tooltip;
+            b.Padding = new Thickness(6, 1, 8, 1);
+            b.Margin = new Thickness(0, 3, 2, 3);
+            b.MinWidth = 0;
+            b.Cursor = Cursors.Hand;
+            b.VerticalAlignment = VerticalAlignment.Center;
+            b.Content = BuildButtonContent(moniker, label);
+            PreviewChrome.KeyboardOnlyFocus(b);
             b.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
             // Content is now an icon+text panel, so the UIA Name no longer defaults to the label. Set it
             // explicitly so scripted UIA (winapp) can still read a toggle button's current state; SetButton
@@ -454,12 +473,13 @@ namespace WinUIXamlPreview.Editor
         }
 
         // Updates a toggle button's icon + label + UIA Name + tooltip together.
-        private void SetButton(Button? b, ImageMoniker moniker, string label, string tooltip)
+        internal void SetButton(Button? b, ImageMoniker moniker, string label, string tooltip)
         {
             if (b == null) { return; }
             b.Content = BuildButtonContent(moniker, label);
             b.ToolTip = tooltip;
             AutomationProperties.SetName(b, label);
+            (b as PreviewToggleButton)?.RefreshState();
             OnToolbarButtonContentChanged(b);
         }
 
@@ -504,7 +524,7 @@ namespace WinUIXamlPreview.Editor
 
         private Button MakeMenuButton(ImageMoniker moniker, string label, string tooltip, string automationId, ContextMenu menu)
         {
-            var b = new Button
+            var b = new PreviewMenuButton
             {
                 Style = FlatButtonStyle,
                 ToolTip = tooltip,
@@ -512,24 +532,15 @@ namespace WinUIXamlPreview.Editor
                 Margin = new Thickness(0, 3, 2, 3),
                 MinWidth = 0,
                 Cursor = Cursors.Hand,
-                Focusable = false,
                 VerticalAlignment = VerticalAlignment.Center,
                 Content = BuildMenuButtonContent(moniker, label),
             };
+            PreviewChrome.KeyboardOnlyFocus(b);
             b.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
             AutomationProperties.SetName(b, label);
             AutomationProperties.SetAutomationId(b, automationId);
-            menu.PlacementTarget = b;
-            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
-            b.ContextMenu = menu;
-            b.Click += (s, e) =>
-            {
-                if (b.ContextMenu != null)
-                {
-                    b.ContextMenu.PlacementTarget = b;
-                    b.ContextMenu.IsOpen = true;
-                }
-            };
+            b.AttachMenu(menu);
+            b.Click += (s, e) => b.OpenMenu();
             return b;
         }
 
@@ -732,7 +743,10 @@ namespace WinUIXamlPreview.Editor
         private static string ThemeLabel() => PreviewOptions.Theme;
 
         private static string ThemeTooltip() =>
-            $"Preview theme: {PreviewOptions.Theme}. Click to preview the page under Light, Dark, or Default (host) theme.";
+            $"Preview theme: {PreviewOptions.Theme}. Click to preview the page under Light, Dark, or Default (Windows) theme. Default uses the Windows app theme when the preview starts.";
+
+        // BB-037: "Default" alone doesn't say what it follows.
+        private static string ThemeHeader(string theme) => theme == "Default" ? "Default (Windows)" : theme;
 
         private ContextMenu BuildThemeMenu()
         {
@@ -741,7 +755,7 @@ namespace WinUIXamlPreview.Editor
             foreach (var opt in ThemeOptions)
             {
                 var value = opt;
-                menu.Items.Add(MakeMenuItem(opt, string.Equals(current, value, StringComparison.Ordinal),
+                menu.Items.Add(MakeMenuItem(ThemeHeader(opt), string.Equals(current, value, StringComparison.Ordinal),
                     "PreviewTheme" + value, (s, e) => OnThemeSelected(value)));
             }
             return menu;
@@ -806,9 +820,16 @@ namespace WinUIXamlPreview.Editor
             b.Content = BuildMenuButtonContent(moniker, label);
             b.ToolTip = tooltip;
             AutomationProperties.SetName(b, label);
-            menu.PlacementTarget = b;
-            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
-            b.ContextMenu = menu;
+            if (b is PreviewMenuButton mb)
+            {
+                mb.AttachMenu(menu);
+            }
+            else
+            {
+                menu.PlacementTarget = b;
+                menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+                b.ContextMenu = menu;
+            }
             OnToolbarButtonContentChanged(b);
         }
 

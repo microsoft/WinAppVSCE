@@ -22,6 +22,7 @@
 
         <!-- Image path: streamed PNG frame, scrollable + centered. -->
         <ScrollViewer Grid.Row="1"
+                      IsTabStop="False"
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"
                       Background="#3C3C3C">
@@ -43,6 +44,7 @@
              viewport onto that canvas, clipped to the pane (no reflow, no overlap). -->
         <Border x:Name="NativeHostHolder"
                 Grid.Row="1"
+                KeyboardNavigation.TabNavigation="None"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Stretch"
                 Background="#3C3C3C"

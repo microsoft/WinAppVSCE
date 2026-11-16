@@ -121,6 +121,20 @@ internal static partial class SamplePlanner
                             App.Log($"SAMPLE: {el.Name.LocalName}.{a.Name.LocalName}: {ex.GetType().Name}: {ex.Message}");
                         }
                     }
+                    else if (!a.IsNamespaceDeclaration && ClassicBindingHead.IsMatch(a.Value))
+                    {
+                        try
+                        {
+                            if (PlanClassicBinding(el, a) is { } literal)
+                            {
+                                plan.Binds[a] = new BindSample(literal, null);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            App.Log($"SAMPLE: {el.Name.LocalName}.{a.Name.LocalName}: {ex.GetType().Name}: {ex.Message}");
+                        }
+                    }
                 }
             }
 
@@ -218,7 +232,8 @@ internal static partial class SamplePlanner
         {
             foreach (var key in new[] { "FallbackValue", "TargetNullValue" })
             {
-                if (named.TryGetValue(key, out var literal) && literal.Length > 0 && literal[0] != '{')
+                // BB-045: an explicit empty literal (FallbackValue='') means "show nothing" and is honored too.
+                if (named.TryGetValue(key, out var literal) && (literal.Length == 0 || literal[0] != '{'))
                 {
                     return new BindSample(literal, null);
                 }
@@ -267,6 +282,52 @@ internal static partial class SamplePlanner
 
     private static bool IsInputBox(XElement el) =>
         el.Name.LocalName is "TextBox" or "AutoSuggestBox" or "PasswordBox" or "RichEditBox" or "NumberBox";
+
+    // ---- classic {Binding} (BB-023) ---------------------------------------------------------------------
+
+    private static readonly Regex ClassicBindingHead = new(@"^\s*\{\s*Binding\b", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A literal sample for a page-scope classic <c>{Binding}</c> whose data context the preview can't have (none is
+    /// set in markup, so at design time it renders empty), or null to leave the binding as written. Bindings that
+    /// read another element or an explicit source, carry their own FallbackValue, sit in a template (the row filler
+    /// covers those), or fill an input box (which starts empty, as with <c>{x:Bind}</c>) are left alone.
+    /// </summary>
+    internal static string? PlanClassicBinding(XElement el, XAttribute a)
+    {
+        var property = a.Name.LocalName;
+        if (a.Name.Namespace != XNamespace.None || property.Contains('.') ||
+            el.Attribute(Design + property) is not null ||
+            !XamlCleaner.TryParseBind(a.Value, out var path, out var named) ||
+            named.Keys.Any(k => k is "ElementName" or "RelativeSource" or "Source" or "FallbackValue" or "TargetNullValue") ||
+            el.AncestorsAndSelf().Any(x => x.Name.LocalName is "DataTemplate" or "ControlTemplate" or "Setter" ||
+                x.Attribute("DataContext") is not null ||
+                x.Elements().Any(c => c.Name.LocalName.EndsWith(".DataContext", StringComparison.Ordinal))))
+        {
+            return null;
+        }
+
+        var p = (path ?? string.Empty).Trim();
+        if (p.Length > 0 && p != "." && !Regex.IsMatch(p, @"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$"))
+        {
+            return null;
+        }
+
+        var name = LastIdentifier(p) is { Length: > 0 } last ? last : property;
+        switch (TargetKindOf(el, property))
+        {
+            case TargetKind.Text:
+                return IsInputBox(el) ? null : EscapeLiteral(GlyphSample(el, property) ?? TextValue(null, name, 0));
+            case TargetKind.Number:
+                return ScalarValue(TargetKind.Number, property, null, name, el);
+            case TargetKind.Bool:
+            case TargetKind.Visibility:
+                // A converter may invert the value, so only a direct binding gets the sample state.
+                return named.ContainsKey("Converter") ? null : ScalarValue(TargetKindOf(el, property), property, null, name, el);
+            default:
+                return null;
+        }
+    }
 
     /// <summary>A neutral Segoe Fluent Icons glyph (Page) for icon slots: generated words render as tofu boxes in an icon font.</summary>
     internal const string SampleGlyph = "\uE7C3";

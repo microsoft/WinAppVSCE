@@ -116,9 +116,15 @@ internal static class XamlCleaner
     private static readonly Regex MarkupExtensionHead =
         new(@"^\{\s*(?:(?<prefix>[\w]+):)?(?<name>[\w]+)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex ClassicBindingValue =
+        new(@"^\s*\{\s*Binding\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly Regex ResourceExtension =
         new(@"^\{\s*(?:[\w]+:)?(?:Static|Theme)Resource\s+(?<key>[^}]+?)\s*\}$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex CustomResourceExtension =
+        new(@"^\{\s*CustomResource(?:\s+(?<key>[^}]*?))?\s*\}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex DesignExtension =
         new(@"^\{\s*[\w]+:Design", RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -179,6 +185,7 @@ internal static class XamlCleaner
     /// <param name="designPromotions">Receives "Element.Property" for each <c>d:</c> value promoted to a runtime property. May be null.</param>
     /// <param name="resolveDictionarySource">Maps a page's merged-dictionary <c>Source</c> to a loadable one plus the keys it defines (Rule 1c). May be null.</param>
     /// <param name="forcedTypes">Receives the full name of every custom type the provider maps but that was placeholdered anyway (heavy or throwing constructor). May be null.</param>
+    /// <param name="uidStrings">Maps a resource file name (<c>Resources</c>) to its <c>.resw</c> entries, for <c>x:Uid</c> (Rule 3a). May be null.</param>
     public static string Clean(
         string rawXaml,
         Func<string, bool>? isKnownResourceKey = null,
@@ -194,7 +201,8 @@ internal static class XamlCleaner
         bool designValues = true,
         ISet<string>? designPromotions = null,
         Func<string, (string Source, IReadOnlyCollection<string> Keys)?>? resolveDictionarySource = null,
-        ISet<string>? forcedTypes = null)
+        ISet<string>? forcedTypes = null,
+        Func<string, IReadOnlyDictionary<string, string>?>? uidStrings = null)
     {
         if (string.IsNullOrWhiteSpace(rawXaml))
         {
@@ -243,6 +251,12 @@ internal static class XamlCleaner
             // documented VS design-time behavior. Concrete FRAMEWORK roots (the common case) are untouched.
             TryRebaseNonConstructibleRoot(root);
 
+            // Rule 3a (BB-071): x:Uid gets its strings from the project's .resw at runtime; apply them before Rule 3 drops it.
+            if (uidStrings is not null)
+            {
+                ApplyUidStrings(root, uidStrings);
+            }
+
             // Collect every x:Key defined anywhere in the document (Rule 6 treats these as resolvable). A
             // resource entry with only an x:Name is keyed by that name, so it counts too.
             var docKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -281,6 +295,13 @@ internal static class XamlCleaner
             foreach (var el in root.DescendantsAndSelf().Where(e => e.Name.Namespace == Design).ToList())
             {
                 el.Remove();
+            }
+
+            // Rule 9 (BB-051): a WebView2 would navigate to its real Source (network access from the design surface),
+            // so it always previews as a labelled placeholder that keeps its layout.
+            foreach (var el in root.Descendants(Pres + "WebView2").ToList())
+            {
+                ReplaceWithPlaceholder(el, WebViewLabel((string?)el.Attribute("Source")));
             }
 
             // Rule 7 (T2): pre-emptively neutralise custom (using:/clr-namespace:) elements the runtime
@@ -507,6 +528,14 @@ internal static class XamlCleaner
                 continue;
             }
 
+            // Rule 2b (BB-023): a page-scope classic {Binding} the SamplePlanner gave a literal (sample data on).
+            if (samples is not null && ClassicBindingValue.IsMatch(value) &&
+                samples.Binds.TryGetValue(a, out var classicSample) && classicSample.Value is not null)
+            {
+                toRewrite.Add((a, classicSample.Value));
+                continue;
+            }
+
             // Rule 6: a {StaticResource}/{ThemeResource} whose key is defined nowhere we can see — or was
             // dropped by Rule 7 (its resource entry was unmappable) — drop the attribute so the rest of the
             // document still renders (degraded element vs. whole-doc fail).
@@ -532,10 +561,22 @@ internal static class XamlCleaner
                 continue; // resolvable resource reference: keep as-is
             }
 
-            // Rule 7c (T2): a {Binding ... Converter={StaticResource droppedKey} ...} — strip only the
-            // converter clause (the converter resource was dropped by Rule 7). The binding survives and
-            // renders its raw value, which is acceptable for a static preview.
-            if (droppedKeys.Count > 0 && TryStripDroppedConverter(value, droppedKeys, out var rewritten))
+            // Rule 6b (BB-018): {CustomResource key} needs an app-registered CustomXamlResourceLoader, which the
+            // preview never has; left in, it fails the whole page ("No custom resource loader set").
+            if (TryGetCustomResourceKey(value, out var customKey))
+            {
+                missingResourceKeys?.Add(customKey);
+                toRemove.Add(a);
+                continue;
+            }
+
+            // Rule 7c (T2, BB-018): a {Binding ... Converter={StaticResource key} ...} whose key was dropped by
+            // Rule 7 or can't be resolved (e.g. an unbuilt App.xaml converter) — strip only the converter clause
+            // instead of failing the page. The binding survives and renders its raw value.
+            if (TryStripDroppedConverter(value, key =>
+                    droppedKeys.Contains(key) ||
+                    !(docKeys.Contains(key) || key.StartsWith("__wxp", StringComparison.Ordinal) || (isKnownKey?.Invoke(key) ?? false)),
+                    missingResourceKeys, out var rewritten))
             {
                 toRewrite.Add((a, rewritten));
                 continue;
@@ -644,6 +685,228 @@ internal static class XamlCleaner
         }
 
         return prop is not null && prop.CanWrite && (prop.PropertyType == typeof(string) || prop.PropertyType == typeof(object));
+    }
+
+    private static readonly HashSet<string> WindowRootNames = new(StringComparer.Ordinal) { "Window", "WindowEx", "DesktopAcrylicWindow" };
+
+    /// <summary>
+    /// Rule 3a: set each <c>Uid.Property</c> string on the element carrying <c>x:Uid="Uid"</c> (or
+    /// <c>x:Uid="/File/Uid"</c>), overriding the markup value as MRT does. Only plain properties the element's type
+    /// has are applied; attached (<c>[using:…]</c>) and nested keys, and properties already set by a property
+    /// element or inline text, are left alone.
+    /// </summary>
+    private static void ApplyUidStrings(XElement root, Func<string, IReadOnlyDictionary<string, string>?> uidStrings)
+    {
+        foreach (var el in root.DescendantsAndSelf().ToList())
+        {
+            var uid = el.Attribute(Xaml + "Uid")?.Value.Trim();
+            if (string.IsNullOrEmpty(uid))
+            {
+                continue;
+            }
+
+            var file = "Resources";
+            if (uid.StartsWith("/", StringComparison.Ordinal))
+            {
+                var parts = uid.Substring(1).Split('/');
+                if (parts.Length != 2)
+                {
+                    continue;
+                }
+                (file, uid) = (parts[0], parts[1]);
+            }
+
+            var strings = uidStrings(file);
+            var type = strings is null ? null : ResolveElementType(el);
+            if (type is null)
+            {
+                continue;
+            }
+
+            bool hasText = el.Nodes().OfType<XText>().Any(t => !string.IsNullOrWhiteSpace(t.Value));
+            var prefix = uid + ".";
+            foreach (var entry in strings!)
+            {
+                if (!entry.Key.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                var prop = entry.Key.Substring(prefix.Length);
+                if (prop.Length == 0 || prop.IndexOfAny(new[] { '.', '[' }) >= 0 || hasText ||
+                    el.Elements().Any(c => c.Name.LocalName.EndsWith("." + prop, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                PropertyInfo? info;
+                try
+                {
+                    info = type.GetProperty(prop, BindingFlags.Public | BindingFlags.Instance);
+                }
+                catch (AmbiguousMatchException)
+                {
+                    continue;
+                }
+                if (info is null || !info.CanWrite)
+                {
+                    continue;
+                }
+
+                // A leading '{' would be read as a markup extension; "{}" escapes it.
+                el.SetAttributeValue(prop, entry.Value.StartsWith("{", StringComparison.Ordinal) ? "{}" + entry.Value : entry.Value);
+            }
+        }
+    }
+
+    private static readonly Regex XamlIdentifier =
+        new(@"^[\p{L}\p{Nl}_][\p{L}\p{Nl}\p{Nd}\p{Mn}\p{Mc}\p{Pc}\p{Cf}]*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly XNamespace Presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+
+    /// <summary>
+    /// BB-043: the XAML compiler rejects a duplicate or non-identifier <c>x:Name</c>, but the runtime parser the
+    /// preview uses accepts both, so the page would preview fine and then fail to build. Returns one short message per
+    /// problem name (with the user's line numbers). Templates are their own namescope. Empty when the markup isn't
+    /// well-formed XML (that error is reported on its own).
+    /// </summary>
+    internal static IReadOnlyList<string> NameIssues(string raw)
+    {
+        var issues = new List<string>();
+        XDocument doc;
+        try
+        {
+            doc = XDocument.Parse(raw, LoadOptions.SetLineInfo);
+        }
+        catch (System.Xml.XmlException)
+        {
+            return issues;
+        }
+        if (doc.Root is null)
+        {
+            return issues;
+        }
+
+        static int Line(XAttribute a) => ((System.Xml.IXmlLineInfo)a).LineNumber;
+        var scopes = new Dictionary<XElement, Dictionary<string, List<int>>>();
+        foreach (var el in doc.Root.DescendantsAndSelf())
+        {
+            var a = el.Attribute(Xaml + "Name") ?? (el.Name.Namespace == Presentation ? el.Attribute("Name") : null);
+            if (a is null)
+            {
+                continue;
+            }
+            var name = a.Value.Trim();
+            if (!XamlIdentifier.IsMatch(name))
+            {
+                issues.Add($"x:Name \"{name}\" isn't a valid identifier (line {Line(a)})");
+                continue;
+            }
+            var scope = el.Ancestors().FirstOrDefault(x => x.Name.LocalName is "DataTemplate" or "ControlTemplate" or "ItemsPanelTemplate") ?? doc.Root;
+            if (!scopes.TryGetValue(scope, out var names))
+            {
+                scopes[scope] = names = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+            }
+            if (!names.TryGetValue(name, out var lines))
+            {
+                names[name] = lines = new List<int>();
+            }
+            lines.Add(Line(a));
+        }
+        foreach (var (name, lines) in scopes.Values.SelectMany(s => s).Where(kv => kv.Value.Count > 1))
+        {
+            issues.Add($"x:Name \"{name}\" is used more than once (lines {string.Join(", ", lines)})");
+        }
+        return issues;
+    }
+
+    /// <summary>
+    /// BB-011: a <c>Window</c> (or WinUIEx <c>WindowEx</c>) root can't be hosted, but its content can. Rewrites the
+    /// root to a <c>UserControl</c>, dropping the window's own attributes (Title, events, …) and property elements
+    /// (<c>Window.SystemBackdrop</c>, …) and keeping <c>Window.Content</c>. Dropped text is blanked rather than
+    /// removed so line numbers still match the user's file. Null when the root isn't a window or can't be rewritten.
+    /// </summary>
+    internal static string? WindowRootAsUserControl(string raw)
+    {
+        try
+        {
+            // Mask comments and processing instructions so a tag inside one can't be mistaken for the root.
+            var masked = Regex.Replace(raw, @"<!--.*?-->|<\?.*?\?>", m => new string(' ', m.Length), RegexOptions.Singleline);
+            var root = Regex.Match(masked, @"<\s*(?<pfx>[\w.]+:)?(?<name>\w+)(?=[\s/>])");
+            if (!root.Success || !WindowRootNames.Contains(root.Groups["name"].Value)) return null;
+
+            int tagEnd = FindTagEnd(masked, root.Index);
+            if (tagEnd < 0) return null;
+            var startTag = raw.Substring(root.Index, tagEnd + 1 - root.Index);
+            if (!Regex.IsMatch(startTag, @"\sxmlns\s*=\s*([""'])" + Regex.Escape(Pres.NamespaceName) + @"\1")) return null;
+
+            var qname = root.Groups["pfx"].Value + root.Groups["name"].Value;
+            var sb = new System.Text.StringBuilder(raw);
+
+            // Unprefixed attributes on a window are window properties/events; keep xmlns and x:/d:/mc: ones.
+            foreach (Match a in Regex.Matches(startTag, @"(?<=\s)(?<n>[\w.]+)\s*=\s*(?<q>[""']).*?\k<q>", RegexOptions.Singleline))
+            {
+                if (a.Groups["n"].Value == "xmlns") continue;
+                Blank(sb, root.Index + a.Index, a.Length);
+            }
+
+            var selfClosing = startTag.EndsWith("/>", StringComparison.Ordinal);
+            var propPattern = @"<" + Regex.Escape(qname) + @"\.(?<p>\w+)\b[^>]*?(?:/>|>.*?</" + Regex.Escape(qname) + @"\.\k<p>\s*>)";
+            var renames = new List<(int Index, int Length, string Text)>();
+            if (!selfClosing)
+            {
+                foreach (Match pe in Regex.Matches(masked, propPattern, RegexOptions.Singleline))
+                {
+                    if (pe.Groups["p"].Value == "Content")
+                    {
+                        renames.Add((pe.Index + 1, qname.Length, "UserControl"));
+                        var close = pe.Value.LastIndexOf("</" + qname, StringComparison.Ordinal);
+                        if (close > 0) renames.Add((pe.Index + close + 2, qname.Length, "UserControl"));
+                    }
+                    else
+                    {
+                        Blank(sb, pe.Index, pe.Length);
+                    }
+                }
+
+                var end = Regex.Matches(masked, @"</\s*(?<n>" + Regex.Escape(qname) + @")\s*>").Cast<Match>().LastOrDefault();
+                if (end is null) return null;
+                renames.Add((end.Groups["n"].Index, end.Groups["n"].Length, "UserControl"));
+            }
+
+            var nameStart = root.Groups["pfx"].Success ? root.Groups["pfx"].Index : root.Groups["name"].Index;
+            renames.Add((nameStart, qname.Length, "UserControl"));
+            foreach (var (index, length, text) in renames.OrderByDescending(r => r.Index))
+            {
+                sb.Remove(index, length).Insert(index, text);
+            }
+
+            return sb.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+
+        static int FindTagEnd(string s, int start)
+        {
+            char quote = '\0';
+            for (int i = start; i < s.Length; i++)
+            {
+                var c = s[i];
+                if (quote != '\0') { if (c == quote) quote = '\0'; }
+                else if (c == '"' || c == '\'') quote = c;
+                else if (c == '>') return i;
+            }
+            return -1;
+        }
+
+        static void Blank(System.Text.StringBuilder sb, int index, int length)
+        {
+            for (int i = index; i < index + length; i++)
+            {
+                if (sb[i] != '\r' && sb[i] != '\n') sb[i] = ' ';
+            }
+        }
     }
 
     /// <summary>
@@ -875,6 +1138,19 @@ internal static class XamlCleaner
         var eq = raw.IndexOf('=');
         key = (eq >= 0 ? raw[(eq + 1)..] : raw).Trim();
         return key.Length > 0;
+    }
+
+    /// <summary>Extracts KEY from a framework <c>{CustomResource KEY}</c> (no prefix).</summary>
+    private static bool TryGetCustomResourceKey(string value, out string key)
+    {
+        key = string.Empty;
+        var m = CustomResourceExtension.Match(value.Trim());
+        if (!m.Success)
+        {
+            return false;
+        }
+        key = m.Groups["key"].Value.Trim();
+        return true;
     }
 
     // ---- event detection (per-element type resolution) -----------------------
@@ -1326,7 +1602,7 @@ internal static class XamlCleaner
     /// its direct layout properties so the page's layout is not disturbed. Uses literal colours (no
     /// resource lookups) so the placeholder itself can never fail to parse.
     /// </summary>
-    private static void ReplaceWithPlaceholder(XElement el)
+    private static void ReplaceWithPlaceholder(XElement el, string? label = null)
     {
         var placeholder = new XElement(
             Pres + "Border",
@@ -1343,11 +1619,12 @@ internal static class XamlCleaner
 
         placeholder.Add(new XElement(
             Pres + "TextBlock",
-            new XAttribute("Text", el.Name.LocalName),
+            new XAttribute("Text", label ?? el.Name.LocalName),
             new XAttribute("Foreground", "#FF9E9E9E"),
             new XAttribute("FontSize", "11"),
             new XAttribute("FontStyle", "Italic"),
             new XAttribute("TextWrapping", "Wrap"),
+            new XAttribute("TextAlignment", "Center"),
             new XAttribute("TextTrimming", "CharacterEllipsis"),
             new XAttribute("HorizontalAlignment", "Center"),
             new XAttribute("VerticalAlignment", "Center")));
@@ -1358,6 +1635,19 @@ internal static class XamlCleaner
     /// <summary>Tag value on a placeholder <c>Border</c>; the preview surface treats it as a leaf so the stand-in
     /// label is never mistaken for one of the original control's children.</summary>
     internal const string PlaceholderTag = "__wxp_placeholder";
+
+    /// <summary>The BB-051 WebView2 stand-in label: the web host only (never the path or query), or just the type.</summary>
+    internal static string WebViewLabel(string? source)
+    {
+        var head = "WebView2";
+        if (source is not null && !source.TrimStart().StartsWith('{') &&
+            Uri.TryCreate(source.Trim(), UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) && uri.Host.Length > 0)
+        {
+            head += " · " + (uri.Host.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? uri.Host[4..] : uri.Host);
+        }
+        return head + "\n(web content isn't loaded)";
+    }
 
     private static void CopyPreservedAttributes(XElement src, XElement dst)
     {
@@ -1467,10 +1757,11 @@ internal static class XamlCleaner
 
     /// <summary>
     /// If <paramref name="value"/> is a binding expression carrying <c>Converter={StaticResource key}</c>
-    /// where <c>key</c> names a dropped resource, removes just that converter clause (keeping the binding,
-    /// which then renders its raw value) and returns the rewritten expression via <paramref name="rewritten"/>.
+    /// where <c>key</c> is dropped or unresolvable per <paramref name="shouldStrip"/>, removes just that converter
+    /// clause (keeping the binding, which then renders its raw value) and returns the rewritten expression via
+    /// <paramref name="rewritten"/>. Stripped keys are added to <paramref name="missingKeys"/>.
     /// </summary>
-    private static bool TryStripDroppedConverter(string value, HashSet<string> droppedKeys, out string rewritten)
+    private static bool TryStripDroppedConverter(string value, Func<string, bool> shouldStrip, ISet<string>? missingKeys, out string rewritten)
     {
         rewritten = value;
         var trimmed = value.TrimStart();
@@ -1488,11 +1779,12 @@ internal static class XamlCleaner
             {
                 key = key[(eq + 1)..].Trim(); // support "ResourceKey=Foo"
             }
-            if (!droppedKeys.Contains(key))
+            if (key.Length == 0 || !shouldStrip(key))
             {
-                return m.Value; // a converter we did not drop — leave untouched.
+                return m.Value; // a resolvable converter — leave untouched.
             }
             changed = true;
+            missingKeys?.Add(key);
             // Keep a single separator when the clause sat between two other arguments.
             return m.Groups["lead"].Success && m.Groups["trail"].Success ? ", " : string.Empty;
         });

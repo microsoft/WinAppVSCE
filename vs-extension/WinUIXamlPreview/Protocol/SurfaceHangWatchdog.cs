@@ -35,6 +35,58 @@ internal sealed class SurfaceHangWatchdog : IDisposable
     internal static SurfaceHangWatchdog Start(IntPtr hwnd, Action<TimeSpan> onHung, TimeSpan interval, TimeSpan hungAfter) =>
         new(() => Probe(hwnd), onHung, interval, hungAfter);
 
+    /// <summary>
+    /// BB-060: watches a surface before its window is hosted (the first load), by probing the process's WinUI
+    /// windows. No WinUI window yet counts as responsive: the process is still starting.
+    /// </summary>
+    public static SurfaceHangWatchdog StartForProcess(int pid, Action<TimeSpan> onHung, TimeSpan hungAfter) =>
+        new(() => ProbeProcess(pid), onHung, DefaultInterval, hungAfter);
+
+    private const string WinUIWindowClass = "WinUIDesktopWin32WindowClass";
+
+    private static bool? ProbeProcess(int pid)
+    {
+        var windows = new System.Collections.Generic.List<IntPtr>();
+        var cls = new System.Text.StringBuilder(64);
+        EnumWindows((h, _) =>
+        {
+            GetWindowThreadProcessId(h, out var owner);
+            if (owner == (uint)pid)
+            {
+                cls.Clear();
+                if (GetClassName(h, cls, cls.Capacity) > 0 && cls.ToString() == WinUIWindowClass)
+                {
+                    windows.Add(h);
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        // Responsive if any WinUI window answers; a hung UI thread leaves all of them unanswered.
+        bool sawLive = false;
+        foreach (var h in windows)
+        {
+            var r = Probe(h);
+            if (r == true)
+            {
+                return true;
+            }
+            sawLive |= r == false;
+        }
+        return !sawLive;
+    }
+
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder className, int maxCount);
+
     /// <param name="probe">True = responsive, false = not responding, null = window gone (stops watching).</param>
     internal SurfaceHangWatchdog(Func<bool?> probe, Action<TimeSpan> onHung, TimeSpan interval, TimeSpan hungAfter)
     {

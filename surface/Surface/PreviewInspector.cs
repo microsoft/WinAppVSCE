@@ -196,14 +196,15 @@ internal static class PreviewInspector
                 continue; // not a displayable/scalar type — skip to keep the panel clean
             }
 
+            bool displayOnly = IsDisplayOnly(p.PropertyType);
             result.Add(new DesignPropInfo
             {
                 Name = p.Name,
                 Category = Categorize(p.Name),
                 TypeName = typeName,
                 Value = text,
-                ReadOnly = !p.CanWrite,
-                Options = p.CanWrite ? OptionsFor(p.PropertyType) : null,
+                ReadOnly = !p.CanWrite || displayOnly,
+                Options = p.CanWrite && !displayOnly ? OptionsFor(p.PropertyType) : null,
             });
         }
 
@@ -423,6 +424,41 @@ internal static class PreviewInspector
             return true;
         }
 
+        // BB-022: object-valued properties people look for. Shown as a summary, read-only (no string round-trip).
+        if (typeof(ImageSource).IsAssignableFrom(underlying))
+        {
+            typeName = "ImageSource";
+            text = value switch
+            {
+                null => "(none)",
+                Microsoft.UI.Xaml.Media.Imaging.BitmapImage { UriSource: { } u } => u.OriginalString,
+                Microsoft.UI.Xaml.Media.Imaging.SvgImageSource { UriSource: { } u } => u.OriginalString,
+                _ => value.GetType().Name,
+            };
+            return true;
+        }
+
+        if (typeof(Geometry).IsAssignableFrom(underlying) || typeof(Style).IsAssignableFrom(underlying) ||
+            typeof(FrameworkTemplate).IsAssignableFrom(underlying))
+        {
+            typeName = underlying.Name;
+            text = value switch
+            {
+                null => "(none)",
+                Style { TargetType: { } t } => $"Style ({t.Name})",
+                ControlTemplate { TargetType: { } t } => $"ControlTemplate ({t.Name})",
+                _ => value.GetType().Name,
+            };
+            return true;
+        }
+
+        if (value is Windows.UI.Text.FontWeight fw)
+        {
+            typeName = "FontWeight";
+            text = FontWeightName(fw.Weight);
+            return true;
+        }
+
         if (value is null)
         {
             // Only surface nulls for the simple value types below via their struct path; a null here means
@@ -479,6 +515,32 @@ internal static class PreviewInspector
         t == typeof(short) || t == typeof(byte) || t == typeof(decimal) || t == typeof(uint) ||
         t == typeof(ulong) || t == typeof(ushort) || t == typeof(sbyte) || t == typeof(char);
 
+    private static bool IsDisplayOnly(Type declared)
+    {
+        var t = Nullable.GetUnderlyingType(declared) ?? declared;
+        return typeof(ImageSource).IsAssignableFrom(t) || typeof(Geometry).IsAssignableFrom(t) ||
+            typeof(Style).IsAssignableFrom(t) || typeof(FrameworkTemplate).IsAssignableFrom(t);
+    }
+
+    private static readonly (ushort Weight, string Name)[] FontWeightNames =
+    {
+        (100, "Thin"), (200, "ExtraLight"), (300, "Light"), (350, "SemiLight"), (400, "Normal"), (500, "Medium"),
+        (600, "SemiBold"), (700, "Bold"), (800, "ExtraBold"), (900, "Black"), (950, "ExtraBlack"),
+    };
+
+    private static string FontWeightName(ushort weight)
+    {
+        foreach (var (w, n) in FontWeightNames)
+        {
+            if (w == weight)
+            {
+                return n;
+            }
+        }
+
+        return weight.ToString(CultureInfo.InvariantCulture);
+    }
+
     /// <summary>Legal-value set for a dropdown editor: enum members, or True/False for a bool; else null.</summary>
     private static List<string>? OptionsFor(Type declaredType)
     {
@@ -491,6 +553,17 @@ internal static class PreviewInspector
         if (underlying == typeof(bool))
         {
             return new List<string> { "True", "False" };
+        }
+
+        if (underlying == typeof(Windows.UI.Text.FontWeight))
+        {
+            var names = new List<string>();
+            foreach (var (_, n) in FontWeightNames)
+            {
+                names.Add(n);
+            }
+
+            return names;
         }
 
         return null;
@@ -522,7 +595,7 @@ internal static class PreviewInspector
             return false;
         }
 
-        if (p is null || !p.CanWrite || p.GetIndexParameters().Length > 0)
+        if (p is null || !p.CanWrite || p.GetIndexParameters().Length > 0 || IsDisplayOnly(p.PropertyType))
         {
             error = "property is not settable";
             return false;
@@ -565,6 +638,24 @@ internal static class PreviewInspector
         if (target == typeof(FontFamily))
         {
             return value.Length == 0 ? null : new FontFamily(value);
+        }
+
+        if (target == typeof(Windows.UI.Text.FontWeight))
+        {
+            foreach (var (w, n) in FontWeightNames)
+            {
+                if (string.Equals(n, value, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new Windows.UI.Text.FontWeight { Weight = w };
+                }
+            }
+
+            if (ushort.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numeric) && numeric is >= 1 and <= 999)
+            {
+                return new Windows.UI.Text.FontWeight { Weight = numeric };
+            }
+
+            throw new FormatException("not a font weight");
         }
 
         // An empty string clears a nullable/reference property; for a non-nullable value type there's no

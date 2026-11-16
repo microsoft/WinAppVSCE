@@ -46,6 +46,9 @@ internal static partial class Program
             Check("previewer: caret past end is not", !c.IsEchoOfCaret("0/4", 21, 10, 20));
             Check("previewer: caret before start is not", !c.IsEchoOfCaret("0/4", 9, 10, 20));
             Eq("previewer: non-echo leaves the path alone", "0/3", c.LastPath);
+            Check("previewer: caret in a child of the selection is not an echo (BB-014)",
+                !c.IsEchoOfCaret("0/3", 15, 10, 20, pathAtCaret: "0/3/1"));
+            Check("previewer: caret innermost in the selection is an echo", c.IsEchoOfCaret("0/3", 15, 10, 20, pathAtCaret: "0/3"));
 
             using (c.BeginCaretMove())
             {

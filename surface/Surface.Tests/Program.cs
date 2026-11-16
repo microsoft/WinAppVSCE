@@ -159,11 +159,16 @@ namespace Surface.Tests
             Run("R7 WinUI types newer than the host", Rule7NewerFrameworkTypes);
             Run("R7 known WinUI type list (typos stay errors)", KnownWinUiTypeList);
             Run("R7a/b/c attached, extensions, converters", Rule7abc);
+            Run("BB-018 unresolvable converters / CustomResource", Bb018UnresolvedConverters);
+            Run("BB-023 page-scope {Binding} samples", Bb023ClassicBindingSamples);
+            Run("BB-043 duplicate / invalid x:Name", Bb043NameIssues);
+            Run("BB-051 WebView2 placeholder", Bb051WebViewPlaceholder);
             Run("DTD grammar", DtdGrammar);
             Run("DTD source paths + file prep", DtdPaths);
             Run("XAML error text", ErrorText);
             Run("XAML error positions map to the user's file", ErrorPositionMapping);
             Run("Zoom anchoring", ZoomAnchoring);
+            Run("Window root previewed as a UserControl", WindowRoot);
 
             foreach (var f in s_failures)
             {
@@ -208,6 +213,10 @@ namespace Surface.Tests
             Check("opaque: placeholder + type name", XamlErrorText.IsOpaque(Opaque));
             Check("opaque: with position suffix and chain", XamlErrorText.IsOpaque(Opaque + " [Line: 3 Position: 13] -> COMException: " + XamlErrorText.OpaqueWinUiText));
             Check("opaque: empty", XamlErrorText.IsOpaque(""));
+            // BB-061: WinUI's layout-cycle error, as an empty COMException or wrapped.
+            Check("layout cycle: HResult 0x88000FA8", XamlErrorText.IsLayoutCycle(new System.Runtime.InteropServices.COMException("", unchecked((int)0x88000FA8))));
+            Check("layout cycle: wrapped inner", XamlErrorText.IsLayoutCycle(new InvalidOperationException("x", new System.Runtime.InteropServices.COMException("Layout cycle detected.", -1))));
+            Check("layout cycle: other COM error", !XamlErrorText.IsLayoutCycle(new System.Runtime.InteropServices.COMException("ClassFactory cannot supply requested class", unchecked((int)0x80040111))));
             const string ChartsPage = "<Page xmlns:charts=\"using:Microsoft.UI.Xaml.Controls.Charts\"><charts:Chart /></Page>";
             const string MissingChartsKey = "XamlParseException: Cannot find a Resource with the Name/Key ChartsControlBackgroundBrush [Line: 1 Position: 70]";
             var hint = XamlErrorText.ChartsHint(MissingChartsKey, ChartsPage, chartsResourcesLoaded: false);
@@ -386,6 +395,45 @@ namespace Surface.Tests
 
         // ------------------------------------------------------------ harness
 
+        private static void WindowRoot()
+        {
+            var window =
+                "<!-- <Page> -->\r\n" +
+                "<Window x:Class=\"App.MainWindow\" " + Ns + "\r\n" +
+                "        Title=\"Main\" Activated=\"OnActivated\" d:DesignWidth=\"640\">\r\n" +
+                "  <Window.SystemBackdrop>\r\n    <MicaBackdrop />\r\n  </Window.SystemBackdrop>\r\n" +
+                "  <Grid><TextBlock Text=\"hi\" /></Grid>\r\n" +
+                "</Window>";
+            var r = XamlCleaner.WindowRootAsUserControl(window);
+            var doc = r is null ? null : XDocument.Parse(r);
+            Eq("Window root -> UserControl", Pres + "UserControl", doc?.Root?.Name.ToString());
+            Check("window attributes dropped, x:/d: kept",
+                doc?.Root?.Attribute("Title") is null && doc?.Root?.Attribute("Activated") is null &&
+                doc?.Root?.Attribute(X + "Class") is not null &&
+                doc?.Root?.Attribute(XNamespace.Get("http://schemas.microsoft.com/expression/blend/2008") + "DesignWidth") is not null, r);
+            Check("Window.SystemBackdrop dropped", r?.Contains("Backdrop") == false, r);
+            Eq("content kept", Pres + "Grid", doc?.Root?.Elements().FirstOrDefault()?.Name.ToString());
+            Check("line numbers preserved", r?.Split('\n').Length == window.Split('\n').Length &&
+                r!.Split('\n')[6].Contains("<Grid>"), r);
+
+            var withContent = "<Window " + Ns + "><Window.Content><Grid/></Window.Content></Window>";
+            Eq("Window.Content -> UserControl.Content", Pres + "UserControl.Content",
+                XDocument.Parse(XamlCleaner.WindowRootAsUserControl(withContent) ?? "<x/>").Root?.Elements().FirstOrDefault()?.Name.ToString());
+
+            var ex = "<winex:WindowEx xmlns:winex=\"using:WinUIEx\" " + Ns + " MinWidth=\"300\" PersistenceId=\"Main\">" +
+                     "<winex:WindowEx.Backdrop><winex:MicaSystemBackdrop/></winex:WindowEx.Backdrop><StackPanel/></winex:WindowEx>";
+            var exDoc = XamlCleaner.WindowRootAsUserControl(ex) is { } exr ? XDocument.Parse(exr) : null;
+            Check("WindowEx -> UserControl with only its content",
+                exDoc?.Root?.Name == Pres + "UserControl" && exDoc.Root.Attribute("PersistenceId") is null &&
+                exDoc.Root.Elements().Single().Name == Pres + "StackPanel", exDoc?.ToString());
+
+            Eq("Page root untouched", (string?)null, XamlCleaner.WindowRootAsUserControl("<Page " + Ns + "><Grid/></Page>"));
+            Eq("Window without the WinUI default xmlns untouched", (string?)null,
+                XamlCleaner.WindowRootAsUserControl("<Window xmlns=\"urn:other\"><Grid/></Window>"));
+            Check("self-closing Window -> empty UserControl",
+                XamlCleaner.WindowRootAsUserControl("<Window " + Ns + " Title=\"t\"/>")?.StartsWith("<UserControl ") == true);
+        }
+
         private static void Run(string group, Action body)
         {
             Console.WriteLine($"--- {group}");
@@ -537,6 +585,7 @@ namespace Surface.Tests
                 "<StackPanel>" +
                 "<TextBlock x:Name=\"Path\" Text=\"{x:Bind ViewModel.User.Name, Mode=OneWay}\" />" +
                 "<TextBlock x:Name=\"Fallback\" Text=\"{x:Bind Name, FallbackValue='Hello, world'}\" />" +
+                "<TextBlock x:Name=\"EmptyFallback\" Text=\"{x:Bind Status, FallbackValue=''}\" />" +
                 "<TextBlock x:Name=\"NullValue\" Text=\"{x:Bind Name, TargetNullValue=Nothing}\" />" +
                 "<TextBlock x:Name=\"Func\" Text=\"{x:Bind local:Fmt.Format(Value, 'x'), Mode=OneWay}\" />" +
                 "<Button x:Name=\"Btn\" Content=\"{x:Bind Label}\" />" +
@@ -549,6 +598,7 @@ namespace Surface.Tests
                 "</StackPanel>"), sample: true);
             Eq("untyped path -> humanized last segment", "Name", Attr(Named(r, "Path"), "Text"));
             Eq("FallbackValue wins (single quotes stripped)", "Hello, world", Attr(Named(r, "Fallback"), "Text"));
+            Eq("explicit empty FallbackValue honored (BB-045)", "", Attr(Named(r, "EmptyFallback"), "Text"));
             Eq("TargetNullValue used", "Nothing", Attr(Named(r, "NullValue"), "Text"));
             Eq("formatter function -> named from its argument", "Value", Attr(Named(r, "Func"), "Text"));
             Eq("object-typed Content gets a sample", "Label", Attr(Named(r, "Btn"), "Content"));
@@ -604,6 +654,7 @@ namespace Surface.Tests
             var rows = SampleListFiller.BuildRows(tag[SampleListFiller.TagPrefix.Length..], 2, out var label);
             Eq("filler label", "Orders", label);
             Check("filler rows are dictionaries capped to max", rows.Count == 2 && rows[0] is Dictionary<string, object> d && d.ContainsKey("Customer"));
+            Check("BB-055: row reads as text, not Dictionary`2", !rows[0].ToString()!.Contains("Dictionary", StringComparison.Ordinal), rows[0].ToString());
             var plain = SampleListFiller.BuildRows("Items", 3, out label);
             Check("bare label -> repeated strings", plain.Count == 3 && (string)plain[0] == "Items" && label == "Items");
             Check("top level: planner row count kept, no padding", SampleListFiller.BuildRows("L|[1,2]", 50, out _, out _, padOnlyWhenEmpty: 3).Count == 2);
@@ -1350,6 +1401,44 @@ namespace Surface.Tests
             Check("x:Phase removed", First(r, "TextBlock")!.Attribute(X + "Phase") is null);
             Check("x:Name kept", g.Attribute(X + "Name") is not null);
             Eq("x:Key kept", "T", (string?)First(r, "DataTemplate")!.Attribute(X + "Key"));
+
+            // Rule 3a (BB-071): x:Uid strings from the project's .resw.
+            var strings = new Dictionary<string, string>
+            {
+                ["Title.Text"] = "Localized title",
+                ["Go.Content"] = "{Start}",
+                ["Go.[using:Microsoft.UI.Xaml.Automation]AutomationProperties.Name"] = "Start button",
+                ["Go.NotAProperty"] = "x",
+                ["Inline.Text"] = "ignored",
+            };
+            var u = XDocument.Parse(XamlCleaner.Clean(Doc(
+                "<StackPanel><TextBlock x:Name=\"T\" x:Uid=\"Title\" Text=\"Design text\" />" +
+                "<Button x:Name=\"B\" x:Uid=\"/Other/Go\" /><TextBlock x:Name=\"I\" x:Uid=\"Inline\">inline</TextBlock></StackPanel>"),
+                uidStrings: f => f == "Resources" || f == "Other" ? strings : null)).Root!;
+            Eq("x:Uid string overrides markup", "Localized title", Attr(Named(u, "T"), "Text"));
+            Eq("x:Uid=\"/File/Key\" reads that file; '{' escaped", "{}{Start}", Attr(Named(u, "B"), "Content"));
+            Check("x:Uid attached and unknown properties skipped", Attr(Named(u, "B"), "NotAProperty") is null &&
+                !Named(u, "B")!.Attributes().Any(a => a.Name.LocalName.Contains("AutomationProperties")));
+            Check("x:Uid skipped when inline text sets the content", Attr(Named(u, "I"), "Text") is null);
+            Check("x:Uid removed after applying", Named(u, "T")!.Attribute(X + "Uid") is null);
+
+            var proj = Path.Combine(Path.GetTempPath(), "uid-" + Guid.NewGuid().ToString("N").Substring(0, 6));
+            Directory.CreateDirectory(Path.Combine(proj, "Strings", "fr-FR"));
+            Directory.CreateDirectory(Path.Combine(proj, "Strings", "de-DE"));
+            File.WriteAllText(Path.Combine(proj, "App.csproj"), "<Project><PropertyGroup><DefaultLanguage>fr-FR</DefaultLanguage></PropertyGroup></Project>");
+            File.WriteAllText(Path.Combine(proj, "Strings", "fr-FR", "Resources.resw"), "<root><data name=\"Title.Text\"><value>Bonjour</value></data></root>");
+            File.WriteAllText(Path.Combine(proj, "Strings", "de-DE", "Resources.resw"), "<root><data name=\"Title.Text\"><value>Hallo</value></data></root>");
+            File.WriteAllText(Path.Combine(proj, "MainPage.xaml"), "<Page/>");
+            try
+            {
+                var found = UidStrings.For(Path.Combine(proj, "MainPage.xaml"));
+                Eq("resw: project DefaultLanguage", "Bonjour", found?.Get("Resources")?["Title.Text"]);
+                Check("resw: missing file -> null", found?.Get("Nope") is null);
+            }
+            finally
+            {
+                Directory.Delete(proj, true);
+            }
         }
 
         // ------------------------------------------------------------ R4
@@ -1669,6 +1758,85 @@ namespace Surface.Tests
             Eq("R7b: mapped custom extension kept", "{good:Icon Glyph=x}", Attr(Named(r, "GoodExt"), "Content"));
             Eq("R7b: ...Extension-suffixed mapping kept", "{good2:Icon Glyph=x}", Attr(Named(r, "GoodExtSuffix"), "Content"));
             Eq("R7b: framework extension kept", "{Binding X}", Attr(Named(r, "Framework"), "Content"));
+        }
+
+        private static void Bb043NameIssues()
+        {
+            var issues = XamlCleaner.NameIssues(
+                "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">\n" +
+                "<StackPanel>\n" +
+                "<TextBlock x:Name=\"Dup\" />\n" +
+                "<Button Name=\"Dup\" />\n" +
+                "<TextBlock x:Name=\"😀\" />\n" +
+                "<TextBlock x:Name=\"Été_1\" />\n" +
+                "<ListView><ListView.ItemTemplate><DataTemplate><TextBlock x:Name=\"Dup\" /></DataTemplate></ListView.ItemTemplate></ListView>\n" +
+                "<ListView><ListView.ItemTemplate><DataTemplate><TextBlock x:Name=\"Dup\" /></DataTemplate></ListView.ItemTemplate></ListView>\n" +
+                "</StackPanel></Page>");
+            Eq("two issues", "2", issues.Count.ToString());
+            Check("duplicate with lines", issues.Any(i => i.Contains("\"Dup\" is used more than once (lines 3, 4)")), string.Join(" | ", issues));
+            Check("emoji invalid", issues.Any(i => i.Contains("\"😀\" isn't a valid identifier (line 5)")), string.Join(" | ", issues));
+            Eq("malformed XML -> none", "0", XamlCleaner.NameIssues("<Page><Oops></Page>").Count.ToString());
+        }
+
+        private static void Bb051WebViewPlaceholder()
+        {
+            var r = CleanRoot(Doc(
+                "<Grid><WebView2 x:Name=\"Web\" Grid.Row=\"1\" Margin=\"8\" Source=\"https://www.bing.com/search?q=secret\" />" +
+                "<WebView2 x:Name=\"Bound\" Source=\"{x:Bind Url}\" /></Grid>"));
+            var web = Named(r, "Web");
+            Eq("WebView2 -> placeholder", "Border", web?.Name.LocalName);
+            Eq("layout kept", "1", Attr(web, "Grid.Row"));
+            var label = web?.Descendants().FirstOrDefault(e => e.Name.LocalName == "TextBlock")?.Attribute("Text")?.Value ?? "";
+            Check("label is host only", label.StartsWith("WebView2 · bing.com") && !label.Contains("secret"), label);
+            Check("bound source -> type only", (Named(r, "Bound")?.Descendants().First().Attribute("Text")?.Value ?? "").StartsWith("WebView2\n"), Named(r, "Bound")?.ToString());
+            Check("no WebView2 left", !r.Descendants().Any(e => e.Name.LocalName == "WebView2"), r.ToString());
+        }
+
+        private static void Bb023ClassicBindingSamples()
+        {
+            var xaml = Doc(
+                "<StackPanel>" +
+                "<TextBlock x:Name=\"Title\" Text=\"{Binding Title}\" />" +
+                "<TextBlock x:Name=\"Fallback\" Text=\"{Binding Title, FallbackValue=Hi}\" />" +
+                "<TextBlock x:Name=\"Elem\" Text=\"{Binding Text, ElementName=Title}\" />" +
+                "<TextBox x:Name=\"Input\" Text=\"{Binding Query}\" />" +
+                "<ProgressBar x:Name=\"Bar\" Value=\"{Binding Progress}\" />" +
+                "<Border Visibility=\"{Binding IsBusy, Converter={StaticResource B2V}}\" x:Name=\"Conv\" />" +
+                "<StackPanel DataContext=\"{Binding Child}\"><TextBlock x:Name=\"Scoped\" Text=\"{Binding Name}\" /></StackPanel>" +
+                "</StackPanel>");
+            var r = CleanRoot(xaml, sample: true);
+            Check("page {Binding} text -> sample", Attr(Named(r, "Title"), "Text") is { Length: > 0 } t && !t.StartsWith('{'), Attr(Named(r, "Title"), "Text"));
+            Eq("FallbackValue kept", "{Binding Title, FallbackValue=Hi}", Attr(Named(r, "Fallback"), "Text"));
+            Eq("ElementName kept", "{Binding Text, ElementName=Title}", Attr(Named(r, "Elem"), "Text"));
+            Eq("input box kept", "{Binding Query}", Attr(Named(r, "Input"), "Text"));
+            Eq("number -> sample", "72.5", Attr(Named(r, "Bar"), "Value"));
+            Check("converted bool kept", (Attr(Named(r, "Conv"), "Visibility") ?? "{").StartsWith('{') || Attr(Named(r, "Conv"), "Visibility") is null, Attr(Named(r, "Conv"), "Visibility"));
+            Eq("explicit DataContext scope kept", "{Binding Name}", Attr(Named(r, "Scoped"), "Text"));
+            var off = CleanRoot(xaml, sample: false);
+            Eq("sample data off -> binding kept", "{Binding Title}", Attr(Named(off, "Title"), "Text"));
+        }
+
+        private static void Bb018UnresolvedConverters()
+        {
+            var missing = new HashSet<string>();
+            var r = CleanRoot(Doc(
+                "<Page.Resources><SolidColorBrush x:Key=\"Local\" /></Page.Resources>" +
+                "<StackPanel>" +
+                "<TextBlock x:Name=\"AppConv\" Text=\"{Binding V, Converter={StaticResource AppUpperConverter}, Mode=OneWay}\" />" +
+                "<TextBlock x:Name=\"Known\" Text=\"{Binding V, Converter={StaticResource FromApp}}\" />" +
+                "<TextBlock x:Name=\"DocConv\" Text=\"{Binding V, Converter={StaticResource Local}}\" />" +
+                "<TextBlock x:Name=\"Custom\" Text=\"{CustomResource Greeting}\" Tag=\"x\" />" +
+                "</StackPanel>"),
+                known: k => k == "FromApp", missing: missing);
+
+            Eq("BB-018: unresolvable converter clause stripped", "{Binding V, Mode=OneWay}", Squash(Attr(Named(r, "AppConv"), "Text")));
+            Eq("BB-018: app-resolvable converter kept", "{Binding V, Converter={StaticResource FromApp}}", Attr(Named(r, "Known"), "Text"));
+            Eq("BB-018: document converter kept", "{Binding V, Converter={StaticResource Local}}", Attr(Named(r, "DocConv"), "Text"));
+            Check("BB-018: {CustomResource} attribute dropped", Attr(Named(r, "Custom"), "Text") is null);
+            Eq("BB-018: sibling attribute kept", "x", Attr(Named(r, "Custom"), "Tag"));
+            Check("BB-018: stripped keys reported missing",
+                missing.Contains("AppUpperConverter") && missing.Contains("Greeting") && !missing.Contains("FromApp"),
+                string.Join(",", missing));
         }
 
         // ------------------------------------------------------------ design-time data grammar

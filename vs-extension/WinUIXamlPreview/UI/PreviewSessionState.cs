@@ -254,8 +254,14 @@ namespace WinUIXamlPreview.UI
                 return ActiveDeathAction.GiveUp;
             }
 
-            // Nearly always the §36 2nd-render fail-fast: future edits of this doc recycle proactively.
-            MarkRisky(path!);
+            // Nearly always the §36 2nd-render fail-fast: future edits of this doc recycle proactively. A process that
+            // died before its first frame is a different failure that isolation can't prevent (BB-048), so it
+            // doesn't mark the doc and its edits keep rendering in place.
+            if (ActiveProcessRendered)
+            {
+                MarkRisky(path!);
+            }
+
             return Restarts.TryBeginRestart() ? ActiveDeathAction.Recover : ActiveDeathAction.GiveUp;
         }
 

@@ -30,10 +30,26 @@ public static class Program
         try
         {
             File.AppendAllText(
-                Path.Combine(Paths.SurfaceRoot, "boot.log"),
+                Paths.LogFile("boot.log"),
                 DateTime.Now.ToString("HH:mm:ss.fff") + " " + message + Environment.NewLine);
         }
         catch { }
+    }
+
+    /// <summary>
+    /// BB-054: the extension decodes stderr as UTF-8, but a console-less process writes it in the ANSI code
+    /// page, so "—" arrived as "�". Write UTF-8 explicitly (no BOM; Console.OutputEncoding would need a console).
+    /// </summary>
+    private static void UseUtf8StdErr()
+    {
+        try
+        {
+            Console.SetError(new StreamWriter(Console.OpenStandardError(), new System.Text.UTF8Encoding(false)) { AutoFlush = true });
+        }
+        catch
+        {
+            // keep the default writer
+        }
     }
 
     /// <summary>Path to the user assembly from <c>--user-dll &lt;path&gt;</c>, or null to use the default.</summary>
@@ -67,6 +83,9 @@ public static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        UseUtf8StdErr();
+        Paths.RotateIfLarge(Paths.LogFile("boot.log"));
+        Paths.RotateIfLarge(Paths.LogFile("surface-run.log"));
         Boot("Main: enter");
         RegisterVersionAgnosticAssemblyResolver();
         RegisterAppNativeLibraryResolver();
@@ -424,6 +443,16 @@ public partial class App : Application, IXamlMetadataProvider
     {
         var ex = e.Exception;
         var userFrame = ex != null ? FindUserCodeFrame(ex) : null;
+        // BB-061: a layout cycle often arrives here with an unrelated message ("ClassFactory cannot supply requested
+        // class"); the render that hit it just recorded it. WinUI ends the process either way.
+        if (XamlErrorText.IsLayoutCycle(ex) || (e.Message ?? "").Contains("Layout cycle", StringComparison.OrdinalIgnoreCase) ||
+            (userFrame == null && Environment.TickCount64 - Interlocked.Read(ref s_layoutCycleAt) < LayoutCycleWindowMs))
+        {
+            Log($"ERROR: {XamlErrorText.LayoutCycleMarker}: a control on the page keeps changing its size, so WinUI " +
+                "stopped laying it out and will close the preview host: " +
+                (ex != null ? DescribeExceptionChain(ex) : e.Message));
+            return;
+        }
         if (userFrame != null)
         {
             e.Handled = true;
@@ -441,6 +470,12 @@ public partial class App : Application, IXamlMetadataProvider
         Log("FATAL: unhandled exception in the preview host: " +
             (ex != null ? DescribeExceptionChain(ex) + Environment.NewLine + ex.StackTrace : e.Message));
     }
+
+    private const long LayoutCycleWindowMs = 10_000;
+    private static long s_layoutCycleAt = long.MinValue / 2;
+
+    /// <summary>Records that a render just failed with a layout cycle (see <see cref="OnUnhandledException"/>).</summary>
+    internal static void NoteLayoutCycle() => Interlocked.Exchange(ref s_layoutCycleAt, Environment.TickCount64);
 
     private static void LogContained(string userFrame, Exception ex) =>
         Log($"WARNING: unhandled exception in app code was contained by the preview host (at {userFrame}): " +
@@ -968,6 +1003,7 @@ public partial class App : Application, IXamlMetadataProvider
                 var d = new FileInfo(dest);
                 if (d.Exists && d.Length == s.Length && d.LastWriteTimeUtc == s.LastWriteTimeUtc)
                 {
+                    RecordStaged(dest);
                     return;
                 }
 
@@ -978,6 +1014,7 @@ public partial class App : Application, IXamlMetadataProvider
                     File.Delete(dest);
                 }
                 File.Copy(src, dest, overwrite: true);
+                RecordStaged(dest);
                 return;
             }
             catch (IOException) when (attempt < 20)
@@ -987,11 +1024,104 @@ public partial class App : Application, IXamlMetadataProvider
         }
     }
 
+    // Must match HostPayload.StagedLedgerName (surface\Shared), which run copies use to skip staged files.
+    private const string StagedLedgerName = ".staged-files";
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> s_staged =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private static void RecordStaged(string dest) =>
+        s_staged.TryAdd(Path.GetRelativePath(AppContext.BaseDirectory, dest), 0);
+
+    /// <summary>
+    /// Removes files another project staged into this base directory. A private run directory starts clean, but a
+    /// host running in place (identity fallback) shares its folder with every earlier preview, so a stale
+    /// <c>ms-appx:///</c> file there would render another project's control (BB-010).
+    /// </summary>
+    internal static void SweepForeignStagedFiles(string baseDir, string owner)
+    {
+        var ledger = Path.Combine(baseDir, StagedLedgerName);
+        if (!File.Exists(ledger))
+        {
+            return;
+        }
+        string[] lines;
+        try { lines = File.ReadAllLines(ledger); }
+        catch (IOException) { return; }
+        if (lines.Length == 0 || string.Equals(lines[0], owner, StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var rel in lines.Skip(1)) s_staged.TryAdd(rel, 0);
+            return;
+        }
+        int removed = 0;
+        s_staged.Clear();
+        var dirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rel in lines.Skip(1))
+        {
+            if (string.IsNullOrWhiteSpace(rel) || Path.IsPathRooted(rel) || rel.Split('\\', '/').Contains(".."))
+            {
+                continue;
+            }
+            try
+            {
+                var file = Path.Combine(baseDir, rel);
+                if (!File.Exists(file)) continue;
+                File.Delete(file);
+                removed++;
+                for (var dir = Path.GetDirectoryName(rel); !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
+                    dirs.Add(dir);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        foreach (var dir in dirs.OrderByDescending(d => d.Length))
+        {
+            try
+            {
+                var full = Path.Combine(baseDir, dir);
+                if (Directory.Exists(full) && !Directory.EnumerateFileSystemEntries(full).Any()) Directory.Delete(full);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        try { File.Delete(ledger); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        Log($"Removed {removed} file(s) staged for '{lines[0]}' before staging '{owner}'.");
+    }
+
+    internal static void WriteStagedLedger(string baseDir, string owner)
+    {
+        if (s_staged.IsEmpty)
+        {
+            return;
+        }
+        var lines = new[] { owner }.Concat(s_staged.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase));
+        for (var attempt = 0; ; attempt++)
+        {
+            try { File.WriteAllLines(Path.Combine(baseDir, StagedLedgerName), lines); return; }
+            catch (IOException) when (attempt < 10) { Thread.Sleep(50); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log($"Could not write the staged-file ledger: {ex.Message}");
+                return;
+            }
+        }
+    }
+
     private static void StageLooseXamlResources(string userAssemblyPath)
     {
         var dllDir = Path.GetDirectoryName(userAssemblyPath)!;
         var asmName = Path.GetFileNameWithoutExtension(userAssemblyPath);
+        SweepForeignStagedFiles(AppContext.BaseDirectory, userAssemblyPath);
+        try
+        {
+            StageLooseXamlResourcesCore(userAssemblyPath, dllDir, asmName);
+        }
+        finally
+        {
+            WriteStagedLedger(AppContext.BaseDirectory, userAssemblyPath);
+        }
+    }
 
+    private static void StageLooseXamlResourcesCore(string userAssemblyPath, string dllDir, string asmName)
+    {
         // --- Layout 1: class-library loose tree under <dllDir>\<AssemblyName>\ (verbatim, incl. .xaml) ---
         var srcTree = Path.Combine(dllDir, asmName);
         int libCount = 0;
@@ -1578,7 +1708,7 @@ public partial class App : Application, IXamlMetadataProvider
         try
         {
             File.AppendAllText(
-                Path.Combine(Paths.SurfaceRoot, "surface-run.log"),
+                Paths.LogFile("surface-run.log"),
                 DateTime.Now.ToString("HH:mm:ss.fff") + " " + line + Environment.NewLine);
         }
         catch

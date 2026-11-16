@@ -21,12 +21,19 @@ namespace WinUIXamlPreview.Editor
         public bool AcceptsPreviewerSelection(string? path) => !_movingCaret && !string.IsNullOrEmpty(path);
 
         /// <summary>
-        /// Previewer → editor: true when the caret already sits inside the selected element's span (inclusive
-        /// end), i.e. the selection is the echo of a caret move — leave the caret alone.
+        /// Previewer → editor: true when the selection is the echo of a caret move — the caret already sits
+        /// inside the selected element's span (inclusive end) AND, when known, the innermost element at the caret
+        /// IS that element. A caret inside a child of the selection is not an echo (BB-014: clicking a parent,
+        /// or walking up on re-click, must move the caret to the parent).
         /// </summary>
-        public bool IsEchoOfCaret(string path, int caret, int start, int end)
+        public bool IsEchoOfCaret(string path, int caret, int start, int end, string? pathAtCaret = null)
         {
             if (caret < start || caret > end)
+            {
+                return false;
+            }
+
+            if (pathAtCaret != null && pathAtCaret != path)
             {
                 return false;
             }

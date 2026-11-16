@@ -81,7 +81,9 @@ namespace WinUIXamlPreview
                 case __FRAMESHOW.FRAMESHOW_WinRestored:
                     PreviewPackageState.SetPoppedOut(true);
                     break;
-                case __FRAMESHOW.FRAMESHOW_WinHidden:
+                // BB-020: a tab switch or an auto-hide slide-in only hides the window; it is still open, so the
+                // margins stay out of the way instead of each starting (then stopping) its own surface.
+                // A real close reports through OnClose below.
                 case __FRAMESHOW.FRAMESHOW_WinClosed:
                     PreviewPackageState.SetPoppedOut(false);
                     break;
@@ -96,6 +98,11 @@ namespace WinUIXamlPreview
 
         public int OnDockableChange(int fDockable, int x, int y, int w, int h) => VSConstants.S_OK;
 
-        public int OnClose(ref uint pgrfSaveOptions) => VSConstants.S_OK;
+        public int OnClose(ref uint pgrfSaveOptions)
+        {
+            // The user closed the window (X / Close): the margins take the preview back.
+            PreviewPackageState.SetPoppedOut(false);
+            return VSConstants.S_OK;
+        }
     }
 }

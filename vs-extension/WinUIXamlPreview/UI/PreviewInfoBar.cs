@@ -4,6 +4,7 @@ using System;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -104,6 +105,8 @@ namespace WinUIXamlPreview.UI
 
         public bool IsShown => Visibility == Visibility.Visible;
 
+        public BannerSeverity Severity { get; private set; }
+
         /// <summary>Show (or replace) the bar's content. <paramref name="autoHide"/> collapses it after a delay.</summary>
         public void Show(
             BannerSeverity severity,
@@ -115,6 +118,7 @@ namespace WinUIXamlPreview.UI
             TimeSpan? autoHide = null)
         {
             _autoHide?.Stop();
+            Severity = severity;
 
             _icon.Moniker = PreviewChrome.MonikerFor(severity);
 
@@ -128,6 +132,7 @@ namespace WinUIXamlPreview.UI
             var full = string.IsNullOrEmpty(message) ? title : title + ": " + message;
             _text.ToolTip = full;
             AutomationProperties.SetName(this, full);
+            PreviewChrome.Announce(_text, full, severity == BannerSeverity.Error || severity == BannerSeverity.Warning);
 
             _onAction = onAction;
             if (!string.IsNullOrEmpty(actionText) && onAction != null)
@@ -185,6 +190,56 @@ namespace WinUIXamlPreview.UI
         private static Style? _buttonStyle;
         private static Style? _closeStyle;
 
+        /// <summary>
+        /// BB-064: makes <paramref name="element"/> a UIA live region carrying <paramref name="text"/> and tells
+        /// screen readers it changed, so status and error messages are read out without moving focus. Errors and
+        /// warnings interrupt (Assertive); progress and info wait their turn (Polite). Repeating the text that is
+        /// already shown is not re-announced.
+        /// </summary>
+        public static void Announce(FrameworkElement element, string text, bool assertive)
+        {
+            var unchanged = element.IsVisible && string.Equals(AutomationProperties.GetName(element), text, StringComparison.Ordinal);
+            AutomationProperties.SetName(element, text);
+            AutomationProperties.SetLiveSetting(element, assertive ? AutomationLiveSetting.Assertive : AutomationLiveSetting.Polite);
+            if (unchanged || !System.Windows.Automation.Peers.AutomationPeer.ListenerExists(System.Windows.Automation.Peers.AutomationEvents.LiveRegionChanged))
+            {
+                return;
+            }
+
+            // After layout, so the newly shown element is in the UIA tree when the event arrives.
+            element.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+            {
+                try
+                {
+                    var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.FromElement(element)
+                        ?? System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(element);
+                    peer?.RaiseAutomationEvent(System.Windows.Automation.Peers.AutomationEvents.LiveRegionChanged);
+                }
+                catch
+                {
+                    // accessibility notifications are best-effort
+                }
+            }));
+        }
+
+        /// <summary>
+        /// BB-004: lets a button take keyboard focus (Tab / Enter / Space) while a mouse click still leaves
+        /// focus in the editor. ButtonBase focuses itself on mouse-down only when Focusable, so drop it for
+        /// that one event and restore it once the event has finished routing.
+        /// </summary>
+        public static T KeyboardOnlyFocus<T>(T b) where T : ButtonBase
+        {
+            b.Focusable = true;
+            b.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                if (b.IsKeyboardFocused)
+                    return;
+                b.Focusable = false;
+                b.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => b.Focusable = true));
+            };
+            return b;
+        }
+
         /// <summary>A VS info-bar button (InfoBarColors.Button*), used for banner and status-card actions.</summary>
         public static Button MakeButton(string text, RoutedEventHandler onClick)
         {
@@ -197,7 +252,7 @@ namespace WinUIXamlPreview.UI
                 Cursor = Cursors.Hand,
             };
             b.Click += onClick;
-            return b;
+            return KeyboardOnlyFocus(b);
         }
 
         public static Button MakeCloseButton(RoutedEventHandler onClick)
@@ -220,7 +275,7 @@ namespace WinUIXamlPreview.UI
             };
             AutomationProperties.SetName(b, "Dismiss");
             b.Click += onClick;
-            return b;
+            return KeyboardOnlyFocus(b);
         }
 
         /// <summary>A flat, theme-colored progress line (the stock Aero bar is a green chip that ignores VS themes).</summary>

@@ -2,6 +2,7 @@
 
 using System;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Shapes;
 using Microsoft.VisualStudio.PlatformUI;
@@ -188,6 +189,10 @@ namespace WinUIXamlPreview.UI
             };
             value.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
             Grid.SetColumn(value, 2);
+
+            // BB-064: screen readers hear "Width: 200" as one item, not two unrelated texts.
+            AutomationProperties.SetLabeledBy(value, name);
+            AutomationProperties.SetName(value, row.Name + ": " + (string.IsNullOrEmpty(row.Value) ? "empty" : row.Value));
 
             grid.Children.Add(name);
             grid.Children.Add(value);

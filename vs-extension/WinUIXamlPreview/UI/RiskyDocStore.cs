@@ -16,7 +16,8 @@ namespace WinUIXamlPreview.UI
     /// </summary>
     internal sealed class RiskyDocStore
     {
-        internal static readonly TimeSpan Expiry = TimeSpan.FromDays(14);
+        // Short: a page that has since been fixed should go back to fast in-place edits soon (BB-048).
+        internal static readonly TimeSpan Expiry = TimeSpan.FromDays(2);
         internal const int MaxEntries = 200;
 
         public static readonly RiskyDocStore Shared = new RiskyDocStore(DefaultFile());

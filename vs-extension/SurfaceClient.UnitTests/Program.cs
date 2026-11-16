@@ -352,6 +352,24 @@ internal static partial class Program
         return b;
     }
 
+    /// <summary>I386 PE32 with one section holding a CLR header whose Flags are <paramref name="corFlags"/>.</summary>
+    private static byte[] ManagedI386Pe(uint corFlags)
+    {
+        var b = new byte[0x400];
+        Pe(HostArch.MachineI386).CopyTo(b, 0);
+        const int pe = 0x80, optional = pe + 24, table = optional + 0xE0;
+        BitConverter.GetBytes((ushort)1).CopyTo(b, pe + 6);
+        BitConverter.GetBytes((ushort)0xE0).CopyTo(b, pe + 20);
+        BitConverter.GetBytes((ushort)0x10b).CopyTo(b, optional);
+        BitConverter.GetBytes(0x2008u).CopyTo(b, optional + 96 + (14 * 8));
+        BitConverter.GetBytes(0x200u).CopyTo(b, table + 8);
+        BitConverter.GetBytes(0x2000u).CopyTo(b, table + 12);
+        BitConverter.GetBytes(0x200u).CopyTo(b, table + 16);
+        BitConverter.GetBytes(0x200u).CopyTo(b, table + 20);
+        BitConverter.GetBytes(corFlags).CopyTo(b, 0x200 + 8 + 16);
+        return b;
+    }
+
     private static string WriteBytes(string path, byte[] bytes)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -411,6 +429,21 @@ internal static partial class Program
         Check("CanHostLoad: foreign machine refused", !HostArch.CanHostLoad(WriteBytes(Path.Combine(d, "foreign.dll"), Pe(ForeignMachine))));
         Check("CanHostLoad: unreadable header -> permissive", HostArch.CanHostLoad(Path.Combine(d, "short.dll")));
 
+        // BB-024: I386 managed images are told apart by their CLR header flags.
+        var x86Only = WriteBytes(Path.Combine(d, "x86only.dll"), ManagedI386Pe(0x1 | 0x2));
+        var anyCpu = WriteBytes(Path.Combine(d, "anycpu.dll"), ManagedI386Pe(0x1));
+        var prefer32 = WriteBytes(Path.Combine(d, "prefer32.dll"), ManagedI386Pe(0x1 | 0x2 | 0x20000));
+        Check("IsX86Only: 32BITREQUIRED", HostArch.IsX86Only(x86Only));
+        Check("IsX86Only: AnyCPU -> false", !HostArch.IsX86Only(anyCpu));
+        Check("IsX86Only: AnyCPU prefer-32-bit -> false", !HostArch.IsX86Only(prefer32));
+        Check("IsX86Only: minimal header -> false", !HostArch.IsX86Only(Path.Combine(d, "c.dll")));
+        Check("CanHostLoad: x86-only refused", !HostArch.CanHostLoad(x86Only));
+        Check("CanHostLoad: AnyCPU managed loads", HostArch.CanHostLoad(anyCpu));
+        Eq("MismatchedArch: x86-only", "x86", HostArch.MismatchedArch(x86Only));
+        Eq("MismatchedArch: foreign machine", HostArch.IsArm64 ? "x64" : "ARM64", HostArch.MismatchedArch(Path.Combine(d, "foreign.dll")));
+        Eq("MismatchedArch: loadable -> null", (string?)null, HostArch.MismatchedArch(anyCpu));
+        Eq("MismatchedArch: null path -> null", (string?)null, HostArch.MismatchedArch(null));
+
         Eq("Platform/Rid/SurfaceDirName agree",
             HostArch.IsArm64 ? "ARM64|win-arm64|Surface-arm64" : "x64|win-x64|Surface",
             $"{HostArch.Platform}|{HostArch.Rid}|{HostArch.SurfaceDirName}");
@@ -452,6 +485,28 @@ internal static partial class Program
         var sub = Page(Path.Combine(p1, "Views", "Deep"), "Sub.xaml");
         Eq("nested page walks up to csproj", "1.6.250108002", WasdkVersionDiscovery.Discover(sub).Version);
         Eq("FindOwningCsproj from nested page", Path.Combine(p1, "App1.csproj"), WasdkVersionDiscovery.FindOwningCsproj(sub));
+
+        // BB-066: several csproj in one folder -> the restored one beats an alphabetically-earlier decoy.
+        var multi = NewDir("multi-csproj");
+        Csproj(multi, "Aaa.Decoy", "");
+        Csproj(multi, "RealApp", PkgRef("1.7.1"));
+        Write(Path.Combine(multi, "obj", "RealApp.csproj.nuget.g.props"), "<Project />");
+        Eq("multi csproj picks restored", Path.Combine(multi, "RealApp.csproj"), ProjectDllLocator.FindOwningCsproj(Page(multi)));
+
+        // ...and with nothing restored, the one named after the folder.
+        var named = Path.Combine(NewDir("named"), "Named");
+        Csproj(named, "Aaa", "");
+        Csproj(named, "Named", "");
+        Eq("multi csproj picks folder-named", Path.Combine(named, "Named.csproj"), ProjectDllLocator.FindOwningCsproj(Page(named)));
+
+        // A linked page (outside the project tree) uses the owner Visual Studio reported; null forgets it.
+        var shared = NewDir("shared-xaml");
+        var linked = Page(shared, "Linked.xaml");
+        ProjectDllLocator.RememberOwner(linked, Path.Combine(p1, "App1.csproj"));
+        Eq("remembered owner wins", Path.Combine(p1, "App1.csproj"), ProjectDllLocator.FindOwningCsproj(linked));
+        Eq("remembered owner drives WASDK discovery", "1.6.250108002", WasdkVersionDiscovery.Discover(linked).Version);
+        ProjectDllLocator.RememberOwner(linked, null);
+        Eq("forgotten owner -> walk-up", null, ProjectDllLocator.FindOwningCsproj(linked));
 
         // Central package management (Include and Update forms, attribute and child <Version>).
         var cpm = NewDir("cpm");
@@ -619,6 +674,39 @@ internal static partial class Program
         var appXaml = Write(Path.Combine(app, "App.xaml"), "<Application/>");
         Eq("FindAppXaml: next to csproj", appXaml, ProjectDllLocator.FindAppXaml(nested));
         Eq("FindAppXaml: null -> null", (string?)null, ProjectDllLocator.FindAppXaml(null));
+
+        // BB-008: custom AssemblyName (literal, or via Directory.Build.props), artifacts output, moved App.xaml.
+        var asm = NewDir("asmname");
+        Csproj(asm, "OddAsmName", "<PropertyGroup><AssemblyName>Renamed.Assembly</AssemblyName></PropertyGroup>");
+        var renamed = WriteBytes(Path.Combine(asm, "bin", "x64", "Debug", "Renamed.Assembly.dll"), Pe(HostArch.Machine));
+        Eq("FindUserDll: custom AssemblyName", renamed, ProjectDllLocator.FindUserDll(Page(asm)));
+
+        var asmProps = NewDir("asmname-props");
+        Write(Path.Combine(asmProps, "Directory.Build.props"), "<Project><PropertyGroup><AssemblyName>Contoso.$(MSBuildProjectName)</AssemblyName></PropertyGroup></Project>");
+        var asmProj = Path.Combine(asmProps, "src", "App");
+        Csproj(asmProj, "App");
+        var propsDll = WriteBytes(Path.Combine(asmProj, "bin", "Debug", "Contoso.App.dll"), Pe(HostArch.Machine));
+        Eq("FindUserDll: AssemblyName from Directory.Build.props", propsDll, ProjectDllLocator.FindUserDll(Page(asmProj)));
+
+        var art = NewDir("artifacts");
+        Write(Path.Combine(art, "Directory.Build.props"), "<Project><PropertyGroup><UseArtifactsOutput>true</UseArtifactsOutput></PropertyGroup></Project>");
+        var artProj = Path.Combine(art, "src", "OddArtifacts");
+        Csproj(artProj, "OddArtifacts");
+        var artDll = WriteBytes(Path.Combine(art, "artifacts", "bin", "OddArtifacts", "debug_win-x64", "OddArtifacts.dll"), Pe(HostArch.Machine));
+        Eq("FindUserDll: artifacts output", artDll, ProjectDllLocator.FindUserDll(Page(artProj)));
+        Check("OutputDirs: artifacts dir listed before it exists",
+            ProjectDllLocator.OutputDirs(Path.Combine(artProj, "OddArtifacts.csproj")).Contains(Path.Combine(art, "artifacts", "bin", "OddArtifacts")));
+
+        var moved = NewDir("appxaml-moved");
+        Csproj(moved, "MyApp", "<ItemGroup><ApplicationDefinition Include=\"Application\\App.xaml\" /></ItemGroup>");
+        var movedApp = Write(Path.Combine(moved, "Application", "App.xaml"), "<Application/>");
+        Eq("FindAppXaml: ApplicationDefinition in a subfolder", movedApp, ProjectDllLocator.FindAppXaml(Page(moved)));
+
+        var scanned = NewDir("appxaml-scan");
+        Csproj(scanned, "MyApp");
+        Write(Path.Combine(scanned, "Themes", "Generic.xaml"), "<ResourceDictionary/>");
+        var scannedApp = Write(Path.Combine(scanned, "Shell", "MyApp.xaml"), "<Application xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"/>");
+        Eq("FindAppXaml: Application root found by scan", scannedApp, ProjectDllLocator.FindAppXaml(Page(scanned)));
     }
 
     // ---------------------------------------------------------------- IsWinUiXaml / IsWinUiProject

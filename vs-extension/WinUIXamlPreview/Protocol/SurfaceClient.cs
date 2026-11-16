@@ -125,7 +125,22 @@ namespace WinUIXamlPreview.Protocol
         public const string AppCodeFaultContainedMarker = "unhandled exception in app code was contained by the preview host";
 
         /// <summary>Stderr text the surface logs when app layout code threw; WinUI terminates the host for these.</summary>
-        public const string AppLayoutFaultMarker = "app layout code threw during measure/arrange";
+        public const string AppLayoutFaultMarker = AppFatal.LayoutFaultMarker;
+
+        /// <summary>
+        /// BB-060/061: set when the page's own code is about to end (or has hung) this surface. The control then shows
+        /// the cause instead of auto-restarting into the same failure.
+        /// </summary>
+        public AppFatalCause FatalCause { get; private set; }
+
+        /// <summary>Records why the page's code is ending this surface; the first cause wins.</summary>
+        internal void MarkAppFatal(AppFatalCause cause)
+        {
+            if (FatalCause == AppFatalCause.None)
+            {
+                FatalCause = cause;
+            }
+        }
 
         /// <summary>Raised (on a background thread) when this surface reports an app-code fault; the argument is true for a fatal layout fault.</summary>
         public event Action<bool>? AppCodeFault;
@@ -334,7 +349,12 @@ namespace WinUIXamlPreview.Protocol
                 }
                 else if (e.Data.IndexOf(AppLayoutFaultMarker, StringComparison.Ordinal) >= 0)
                 {
+                    MarkAppFatal(AppFatalCause.LayoutCodeThrew);
                     AppCodeFault?.Invoke(true);
+                }
+                else if (AppFatal.FromStderr(e.Data) == AppFatalCause.LayoutCycle)
+                {
+                    MarkAppFatal(AppFatalCause.LayoutCycle);
                 }
                 else if (IsRuntimeFatalLine(e.Data))
                 {

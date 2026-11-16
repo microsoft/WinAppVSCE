@@ -20,7 +20,7 @@ internal sealed class ProjectOutputWatcher : IDisposable
     private readonly List<(string Dir, string Filter, bool Recursive)> _specs = new();
     private bool _rearm;
     private readonly string[] _assetsCandidates;
-    private readonly string _binDir;
+    private readonly List<string> _binDirs;
     private readonly string _dllName;
     private readonly TimeSpan _quiet;
     private readonly Action<bool> _onSettled;
@@ -33,16 +33,15 @@ internal sealed class ProjectOutputWatcher : IDisposable
 
     private ProjectOutputWatcher(string csproj, string? userDll, TimeSpan quiet, Action<bool> onSettled, Action<string> log)
     {
-        var projectDir = Path.GetDirectoryName(csproj)!;
-        _assetsCandidates = new[]
-        {
-            Path.Combine(projectDir, "obj", ProjectFiles.AssetsFileName),
-            Path.Combine(projectDir, "obj", Path.GetFileNameWithoutExtension(csproj), ProjectFiles.AssetsFileName),
-        };
+        var objDirs = ProjectDllLocator.IntermediateDirs(csproj);
+        _assetsCandidates = objDirs
+            .SelectMany(d => new[] { Path.Combine(d, ProjectFiles.AssetsFileName), Path.Combine(d, Path.GetFileNameWithoutExtension(csproj), ProjectFiles.AssetsFileName) })
+            .ToArray();
         // Watch every build of the assembly under bin, not just the one the preview loaded: the first build of a
         // never-built project (BB-003) or of another configuration (BB-019) lands in a folder that didn't exist yet.
-        _binDir = Path.Combine(projectDir, "bin");
-        _dllName = !string.IsNullOrEmpty(userDll) ? Path.GetFileName(userDll)! : Path.GetFileNameWithoutExtension(csproj) + ".dll";
+        // BB-008: also custom OutputPath and artifacts\bin\<project> layouts, and a custom AssemblyName.
+        _binDirs = ProjectDllLocator.OutputDirs(csproj);
+        _dllName = !string.IsNullOrEmpty(userDll) ? Path.GetFileName(userDll)! : ProjectDllLocator.AssemblyNameFor(csproj) + ".dll";
         _quiet = quiet;
         _onSettled = onSettled;
         _log = log;
@@ -50,8 +49,8 @@ internal sealed class ProjectOutputWatcher : IDisposable
         _assetsBaseline = Fingerprint(_assetsCandidates);
         _dllBaseline = DllFingerprint();
 
-        Watch(Path.Combine(projectDir, "obj"), ProjectFiles.AssetsFileName, recursive: true);
-        Watch(_binDir, _dllName, recursive: true);
+        foreach (var obj in objDirs) Watch(obj, ProjectFiles.AssetsFileName, recursive: true);
+        foreach (var bin in _binDirs) Watch(bin, _dllName, recursive: true);
     }
 
     /// <summary>Null when there's no owning project or nothing can be watched.</summary>
@@ -155,8 +154,9 @@ internal sealed class ProjectOutputWatcher : IDisposable
     {
         try
         {
-            if (!Directory.Exists(_binDir)) return "";
-            var dlls = Directory.EnumerateFiles(_binDir, _dllName, SearchOption.AllDirectories)
+            var dlls = _binDirs.Where(Directory.Exists)
+                .SelectMany(d => Directory.EnumerateFiles(d, _dllName, SearchOption.AllDirectories))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
             return string.Join("|", dlls.Select(f => f + "=" + Fingerprint(new[] { f })));
         }

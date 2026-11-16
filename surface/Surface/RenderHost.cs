@@ -169,14 +169,14 @@ internal sealed class RenderHost
     /// resource-scope key resolver (Layer 2) is passed through so the cleaner can distinguish a resolvable
     /// <c>{StaticResource}</c> from a genuinely-undefined one.
     /// </summary>
-    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false, SampleTypeModel? sampleTypes = null, IList<ChartFixup>? chartFixups = null, ISet<string>? missingFrameworkTypes = null, bool designValues = true, ISet<string>? designPromotions = null, PageDictionaries? pageDictionaries = null)
+    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false, SampleTypeModel? sampleTypes = null, IList<ChartFixup>? chartFixups = null, ISet<string>? missingFrameworkTypes = null, bool designValues = true, ISet<string>? designPromotions = null, PageDictionaries? pageDictionaries = null, UidStrings? uidStrings = null)
     {
         var missing = new SortedSet<string>(StringComparer.Ordinal);
         var unmapped = new SortedSet<string>(StringComparer.Ordinal);
         var designSized = new HashSet<string>(StringComparer.Ordinal);
         var forcedSwaps = new SortedSet<string>(StringComparer.Ordinal);
         XamlCleaner.ProviderTypeResolver ??= ProviderUnderlyingType;
-        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped, sampleTypes, chartFixups, missingFrameworkTypes, designSized, designValues, designPromotions, pageDictionaries is null ? null : pageDictionaries.Resolve, forcedSwaps);
+        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped, sampleTypes, chartFixups, missingFrameworkTypes, designSized, designValues, designPromotions, pageDictionaries is null ? null : pageDictionaries.Resolve, forcedSwaps, uidStrings is null ? null : uidStrings.Get);
         LastMissingKeys = missing.ToArray();
         LastUnmappedTypes = unmapped.ToArray();
         LastPlaceholderTypes = forcedSwaps.ToArray();
@@ -202,6 +202,11 @@ internal sealed class RenderHost
 
     /// <summary>Custom types the most recent clean placeholdered although they map (heavy or throwing constructor).</summary>
     internal static string[] LastPlaceholderTypes { get; private set; } = Array.Empty<string>();
+
+    private static readonly List<string> _placeholderReasons = new();
+
+    /// <summary>BB-015: why the safety net placeholdered controls in the most recent parse ("Type threw Ex: message").</summary>
+    internal static string[] LastPlaceholderReasons => _placeholderReasons.ToArray();
 
     /// <summary>Root dimensions ("Width"/"Height") the most recent clean took from <c>d:</c> markup; a device preset overrides these.</summary>
     internal static IReadOnlySet<string> LastDesignSizedRoot { get; private set; } = new HashSet<string>();
@@ -361,13 +366,35 @@ internal sealed class RenderHost
         LastMissingKeys = Array.Empty<string>();
         LastUnmappedTypes = Array.Empty<string>();
         LastPlaceholderTypes = Array.Empty<string>();
+        _placeholderReasons.Clear();
         LastNewerTypes = Array.Empty<string>();
         LastDesignSizedRoot = new HashSet<string>();
         LastDesignValuesSkipped = false;
         try
         {
+            // BB-044: XamlReader.Load throws ArgumentException on "" and crashes the process natively on
+            // whitespace-only text, so an empty buffer is reported as a non-page instead of being loaded.
+            if (string.IsNullOrWhiteSpace(rawXaml))
+            {
+                App.Log("NONPAGE: empty document.");
+                return (null, NonPagePhase, "The file is empty. Add a Page or UserControl to preview it.", null, null);
+            }
+
+            // BB-011: preview a Window's content (as a UserControl) instead of refusing it.
+            // BB-043: name problems are checked on the user's own text first so line numbers match their file.
+            foreach (var issue in XamlCleaner.NameIssues(rawXaml))
+            {
+                App.Log("NAME: " + issue);
+                _placeholderReasons.Add(issue);
+            }
+            if (XamlCleaner.WindowRootAsUserControl(rawXaml) is { } windowContent)
+            {
+                App.Log("WINDOW-ROOT: previewing the Window's content as a UserControl.");
+                rawXaml = windowContent;
+            }
+
             // P1 (non-page classification): a structurally non-designable root — a ResourceDictionary
-            // (styles/themes/control-template dictionary), a Window/WindowEx (a window is not a page), or a
+            // (styles/themes/control-template dictionary), a Window/WindowEx that couldn't be rewritten above, or a
             // Visual Studio project-template placeholder ($safeprojectname$, never a resolvable type) — is
             // not a broken preview, it is simply not a designable page. Detect it from the markup up front
             // and return a DISTINCT NonPage status so the previewer shows a sensible message and an oracle
@@ -398,11 +425,12 @@ internal sealed class RenderHost
             // d: values (d:Text, d:Background, …) apply with Sample data on; dropped once if the page won't load with them.
             var designValues = SampleData;
             var pageDictionaries = PageDictionaries.For(DocumentPath);
+            var uidStrings = UidStrings.For(DocumentPath);
             for (int attempt = 0; ; attempt++)
             {
                 var chartFixups = new List<ChartFixup>();
                 var designPromotions = new HashSet<string>(StringComparer.Ordinal);
-                var xaml = CleanXaml(rawXaml, forced, SampleData, sampleTypes, chartFixups, missingFramework, designValues, designPromotions, pageDictionaries);
+                var xaml = CleanXaml(rawXaml, forced, SampleData, sampleTypes, chartFixups, missingFramework, designValues, designPromotions, pageDictionaries, uidStrings);
                 if (attempt == 0 && timings is not null) timings.CleanMs = ElapsedMs(tClean);
 
                 object? parsed;
@@ -440,6 +468,10 @@ internal sealed class RenderHost
                     if (attempt < maxSafetyNetRetries && offender is not null &&
                         (forced ??= new(StringComparer.Ordinal)).Add(offender))
                     {
+                        if (offender == ctorWatch.Offender && ctorWatch.OffenderMessage is { } why)
+                        {
+                            _placeholderReasons.Add($"{offender} threw {why}");
+                        }
                         App.Log($"SAFETY-NET: '{offender}' failed at Load — placeholdering and retrying.");
                         continue;
                     }
@@ -1377,6 +1409,9 @@ internal sealed class RenderHost
 
         public string? Offender { get; private set; }
 
+        /// <summary>BB-015: "ExceptionType: message" of the throw that named <see cref="Offender"/>.</summary>
+        public string? OffenderMessage { get; private set; }
+
         public void Dispose()
         {
             if (!_active) return;
@@ -1398,7 +1433,12 @@ internal sealed class RenderHost
                         outer = t.Name;
                     }
                 }
-                if (outer is not null) Offender = outer;
+                if (outer is not null)
+                {
+                    Offender = outer;
+                    var message = (e.Exception.Message ?? string.Empty).Trim();
+                    OffenderMessage = message.Length == 0 ? e.Exception.GetType().Name : $"{e.Exception.GetType().Name}: {message}";
+                }
             }
             catch
             {
@@ -1513,6 +1553,14 @@ internal sealed class RenderHost
 
     private static string Flatten(Exception ex)
     {
+        // BB-061: WinUI reports a layout cycle as an empty COMException; name it, and remember it so the fatal
+        // UnhandledException that usually follows (with an unrelated message) is attributed to it.
+        if (XamlErrorText.IsLayoutCycle(ex))
+        {
+            App.NoteLayoutCycle();
+            return XamlErrorText.LayoutCycleMessage;
+        }
+
         var sb = new StringBuilder();
         for (var e = ex; e != null; e = e.InnerException)
         {

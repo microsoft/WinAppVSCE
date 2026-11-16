@@ -78,6 +78,8 @@ namespace WinUIXamlPreview.UI
         private SurfaceClient? _retiringClient;
         private string? _activeSurfaceExe;
         private string? _activeUserDll;
+        // BB-024: the build architecture of _activeUserDll when the preview host can't load it, else null.
+        private string? _activeUserDllArch;
         private string? _activeUserAppXaml;
         private string? _activeProject;
         // Documents whose "project not built" hint the user closed — don't re-nag on every edit.
@@ -325,17 +327,19 @@ namespace WinUIXamlPreview.UI
         }
 
         /// <summary>
-        /// Release the surface process while this preview is hidden in favour of another view (the margin while
-        /// the preview tool window is open). <see cref="Resume"/> restarts it. UI thread only.
+        /// Release the surface process while this preview isn't shown: the margin while the preview tool window
+        /// is open, or a margin hidden to its strip (BB-063). <see cref="Resume"/> restarts it. UI thread only.
         /// </summary>
-        public void Suspend()
+        public void Suspend(bool hidden = false)
         {
             if (_disposed || _suspended)
             {
                 return;
             }
 
-            Log.Write("Preview suspended (shown in the preview window); releasing its surface.");
+            Log.Write(hidden
+                ? "Preview suspended (hidden); releasing its surface."
+                : "Preview suspended (shown in the preview window); releasing its surface.");
             PreviewerSelection.Forget(_pinnedPath);
             ParkOrDisposeClient();
             _suspended = true;
@@ -343,15 +347,18 @@ namespace WinUIXamlPreview.UI
             _currentPath = null;
             _hasFrame = false;
             FrameImage.Source = null;
-            SetStatus("The preview is open in the WinUI XAML Preview window.", spinner: false);
+            SetStatus(hidden ? "The preview is hidden." : "The preview is open in the WinUI XAML Preview window.", spinner: false);
         }
 
-        /// <summary>Restart the preview after <see cref="Suspend"/>. UI thread only.</summary>
-        public void Resume()
+        /// <summary>
+        /// Restart the preview after <see cref="Suspend"/>; it renders the current buffer, edits included.
+        /// False when it wasn't suspended. UI thread only.
+        /// </summary>
+        public bool Resume()
         {
             if (_disposed || !_suspended)
             {
-                return;
+                return false;
             }
 
             Log.Write("Preview resumed.");
@@ -366,6 +373,8 @@ namespace WinUIXamlPreview.UI
                 // every open .xaml tab relaunching a surface the moment the preview window closes.
                 _resumeOnVisible = true;
             }
+
+            return true;
         }
 
         private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -484,6 +493,13 @@ namespace WinUIXamlPreview.UI
             }
 
             Log.Write($"ShowDocument: path='{path ?? "(null)"}'");
+
+            if (!string.IsNullOrEmpty(path) && path!.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase))
+            {
+                // BB-066: VS knows the real owner of a linked page or one in a folder with several projects.
+                var owner = PreviewPackageState.GetOwningProjectPath(path);
+                ProjectDllLocator.RememberOwner(path, owner);
+            }
 
             if (string.IsNullOrEmpty(path) || !path!.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase))
             {
@@ -605,6 +621,7 @@ namespace WinUIXamlPreview.UI
 
             _activeSurfaceExe = surfaceExe;
             _activeUserDll = userDll;
+            _activeUserDllArch = HostArch.MismatchedArch(userDll);
             _activeUserAppXaml = userAppXaml;
             _activeProject = plan?.TargetProject;
             _activeTheme = PreviewOptions.Theme;
@@ -683,6 +700,7 @@ namespace WinUIXamlPreview.UI
                     Log.Write($"Using image mode; sending LoadXaml ({w}x{h} @ {scale}x, {xaml.Length} chars)…");
                     client.LoadXaml(xaml, w, h, scale);
                 }
+                ArmLoadWatchdog(client);
 
                 // Instant bundled preview is now on its way. If this project needs a version-matched host, kick
                 // the background upgrade (run-copy a cached host, or provisioner --build) → hot-swap when ready.
@@ -1143,6 +1161,7 @@ namespace WinUIXamlPreview.UI
 
         private void DetachClient(SurfaceClient c)
         {
+            DisarmLoadWatchdog(c);
             if (_clientWiring.TryGetValue(c, out var unwire))
             {
                 _clientWiring.Remove(c);
@@ -1285,7 +1304,7 @@ namespace WinUIXamlPreview.UI
                 // would risk a crash). The spare is already up, so the swap costs about one render, not a
                 // cold process start — no visible restart blip.
                 bool isolate = _session.IsRisky(_currentPath);
-                if (isolate && TryPromoteSpare(xaml))
+                if (isolate && PromoteSpareKeepingView(xaml))
                 {
                     PerfBegin("edit.riskyspare");
                     Log.Write("Risky doc edit: recycled onto the warm spare (skipped in-place re-render).");
@@ -1455,10 +1474,27 @@ namespace WinUIXamlPreview.UI
             catch (Exception ex) { _session.EndHold(); Log.Write("Re-read for held edit failed: " + ex.Message); return; }
 
             EndHold("spare");
-            if (TryPromoteSpare(xaml))
+            if (PromoteSpareKeepingView(xaml))
             {
                 Log.Write("Held edit rendered on the newly ready spare (latest text).");
             }
+        }
+
+        /// <summary>
+        /// An edit recycled onto the spare is the same document, so it keeps the user's zoom and scroll instead of
+        /// snapping back to Fit (BB-048).
+        /// </summary>
+        private bool PromoteSpareKeepingView(string xaml)
+        {
+            var carry = _carryViewOnPromote;
+            _carryViewOnPromote = true;
+            if (TryPromoteSpare(xaml))
+            {
+                return true;
+            }
+
+            _carryViewOnPromote = carry;
+            return false;
         }
 
         private void RenderAwaitedEditInPlace(string why)
@@ -1575,6 +1611,7 @@ namespace WinUIXamlPreview.UI
                     var (w, h, sc) = GetViewportSync();
                     spare.LoadXaml(xaml, w, h, sc);
                 }
+                ArmLoadWatchdog(spare);
             }
             catch (Exception ex)
             {
@@ -1628,7 +1665,11 @@ namespace WinUIXamlPreview.UI
             {
                 if (!string.IsNullOrEmpty(plan.Note))
                 {
-                    ShowFidelityNote(plan.Note!);
+                    ShowFidelityNote(plan.Note!, sticky: true); // BB-041: actionable text, so don't vanish mid-read
+                }
+                else if (_fidelityBar.IsShown && _fidelityBar.Severity == BannerSeverity.Info)
+                {
+                    _fidelityBar.Hide(); // a rebuild resolved the version: the sticky note no longer applies
                 }
                 return;
             }
@@ -1654,7 +1695,7 @@ namespace WinUIXamlPreview.UI
             {
                 Log.Write($"Fidelity upgrade for {version}: a build already failed this session — not retrying.");
                 TelemetryFullFidelityBuild("build", "previously-failed", version, null);
-                ShowFidelityNote(BuildFailedNote(version!), sticky: true);
+                ShowBuildFailedNote(version!);
                 return;
             }
 
@@ -1729,7 +1770,7 @@ namespace WinUIXamlPreview.UI
                             TelemetryFullFidelityBuild(telemetryKind, "build-failed", version, upSw);
                             Log.Write($"Fidelity upgrade for {version}: build did not yield a matched host ({outcome.Error}); staying on bundled 2.2.0.");
                             EndUpgrade(gen, note: null);
-                            ShowFidelityNote(BuildFailedNote(version!), sticky: true);
+                            ShowBuildFailedNote(version!);
                             UpdateNewerTypesNote(_lastNewerTypes);
                         });
                         return;
@@ -1866,6 +1907,7 @@ namespace WinUIXamlPreview.UI
                     var (w, h, sc) = GetViewportSync();
                     matched.LoadXaml(xaml, w, h, sc);
                 }
+                ArmLoadWatchdog(matched);
             }
             catch (Exception ex)
             {
@@ -1934,12 +1976,28 @@ namespace WinUIXamlPreview.UI
                 autoHide: TimeSpan.FromSeconds(4));
         }
 
-        private void ShowFidelityNote(string note, bool sticky = false)
+        private void ShowFidelityNote(string note, bool sticky = false, Action? retry = null)
         {
             _newerTypesNoteShown = false;
             _fidelityBar.Show(BannerSeverity.Info, "Full-fidelity preview unavailable", note,
-                autoHide: sticky ? (TimeSpan?)null : TimeSpan.FromSeconds(10));
+                autoHide: sticky ? (TimeSpan?)null : TimeSpan.FromSeconds(10),
+                actionText: retry != null ? "Retry" : null, onAction: retry);
         }
+
+        /// <summary>BB-025: the failed-build bar, with a Retry that forgets the failure and builds again.</summary>
+        private void ShowBuildFailedNote(string version) =>
+            ShowFidelityNote(BuildFailedNote(version), sticky: true, retry: () =>
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                Log.Write($"Fidelity upgrade for {version}: retry requested.");
+                FailedHostVersions.Remove(version);
+                HideFidelityBanner();
+                KickFidelityUpgrade(_fidelityPlan);
+            });
 
         // WinUI types the bundled host lacked on the last render (the surface left them out), and whether the
         // fidelity bar is currently showing the note about them.
@@ -2022,7 +2080,7 @@ namespace WinUIXamlPreview.UI
         /// unbuilt project a build restores them, and the output watcher relaunches the preview on its own; otherwise
         /// an Info banner names what fell back, so a placeholder or default color isn't mistaken for the real thing.
         /// </summary>
-        private void UpdateBuildHint(System.Collections.Generic.List<string>? missingKeys, System.Collections.Generic.List<string>? unmappedTypes, bool designValuesSkipped = false, System.Collections.Generic.List<string>? placeholderTypes = null)
+        private void UpdateBuildHint(System.Collections.Generic.List<string>? missingKeys, System.Collections.Generic.List<string>? unmappedTypes, bool designValuesSkipped = false, System.Collections.Generic.List<string>? placeholderTypes = null, System.Collections.Generic.List<string>? placeholderReasons = null)
         {
             var doc = SelectionDocument;
             var unbuilt = _activeProject != null && _activeUserDll == null;
@@ -2033,6 +2091,31 @@ namespace WinUIXamlPreview.UI
             {
                 text = BuildHint.DescribeBuilt(missingKeys, unmappedTypes, placeholderTypes);
                 (title, severity) = (BuildHint.BuiltTitle, BannerSeverity.Info);
+            }
+            var reasons = BuildHint.ReasonsNote(placeholderReasons);
+            if (text != null)
+            {
+                foreach (var note in new[]
+                {
+                    reasons,
+                    BuildHint.LibraryNote(_activeProject != null && _activeUserAppXaml == null, missingKeys),
+                })
+                {
+                    if (note != null)
+                    {
+                        text += " " + note;
+                    }
+                }
+            }
+            else if (reasons != null)
+            {
+                // BB-043: a page that rendered cleanly can still carry compiler-only errors (duplicate x:Name).
+                (title, text, severity) = (BuildHint.MarkupTitle, reasons, BannerSeverity.Warning);
+            }
+            if (BuildHint.ArchNote(_activeUserDllArch, HostArch.Platform) is { } archNote)
+            {
+                text = text == null ? archNote : archNote + " " + text;
+                (title, severity) = (BuildHint.ArchTitle, BannerSeverity.Warning);
             }
             if (designValuesSkipped)
             {
@@ -2081,6 +2164,11 @@ namespace WinUIXamlPreview.UI
             }
 
             PreviewOptions.FullFidelityAutoBuild = on;
+            if (on)
+            {
+                // BB-025: turning it on is an explicit request, so a version that failed earlier gets another build.
+                FailedHostVersions.Remove(_fidelityPlan?.TargetVersion);
+            }
             ApplyFullFidelity(on);
         }
 
@@ -2163,6 +2251,7 @@ namespace WinUIXamlPreview.UI
 
         private void OnFrame(SurfaceClient source, FrameMsg frame)
         {
+            DisarmLoadWatchdog(source);
             _ = Dispatcher.InvokeAsync(() =>
             {
                 if (_disposed || string.IsNullOrEmpty(frame.Data) || IsStale(source, "Frame"))
@@ -2202,7 +2291,7 @@ namespace WinUIXamlPreview.UI
                     PerfEnd("frame");
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
-                    UpdateBuildHint(frame.MissingKeys, frame.UnmappedTypes, frame.DesignValuesSkipped, frame.PlaceholderTypes);
+                    UpdateBuildHint(frame.MissingKeys, frame.UnmappedTypes, frame.DesignValuesSkipped, frame.PlaceholderTypes, frame.PlaceholderReasons);
                     UpdateNewerTypesNote(frame.NewerTypes);
                     Log.Write($"Frame rendered: {frame.Width}x{frame.Height}px ({frame.DipWidth}x{frame.DipHeight} dip).");
                 }
@@ -2215,6 +2304,7 @@ namespace WinUIXamlPreview.UI
 
         private void OnHwnd(SurfaceClient source, HwndMsg msg)
         {
+            DisarmLoadWatchdog(source);
             _ = Dispatcher.InvokeAsync(() =>
             {
                 if (_disposed || msg.Hwnd == 0 || IsStale(source, "Hwnd"))
@@ -2253,7 +2343,7 @@ namespace WinUIXamlPreview.UI
                     PerfEnd("hwnd");
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
-                    UpdateBuildHint(msg.MissingKeys, msg.UnmappedTypes, msg.DesignValuesSkipped, msg.PlaceholderTypes);
+                    UpdateBuildHint(msg.MissingKeys, msg.UnmappedTypes, msg.DesignValuesSkipped, msg.PlaceholderTypes, msg.PlaceholderReasons);
                     UpdateNewerTypesNote(msg.NewerTypes);
                     Log.Write($"Native surface hosted: hwnd=0x{msg.Hwnd:X} px={pxW}x{pxH} dip={dipW:0}x{dipH:0} scale={msg.Scale}.");
 
@@ -2320,6 +2410,49 @@ namespace WinUIXamlPreview.UI
             });
         }
 
+        // BB-060: the hang watchdog above starts only once the window is hosted. Page code that loops in its
+        // constructor or Loaded handler blocks the first render, so watch the process until any reply arrives.
+        private static readonly TimeSpan LoadHungAfter = TimeSpan.FromSeconds(15);
+        private readonly object _loadWatchdogLock = new object();
+        private SurfaceHangWatchdog? _loadWatchdog;
+        private SurfaceClient? _loadWatchdogSource;
+
+        private void ArmLoadWatchdog(SurfaceClient source)
+        {
+            if (source.ProcessId is not int pid)
+            {
+                return;
+            }
+
+            lock (_loadWatchdogLock)
+            {
+                _loadWatchdog?.Dispose();
+                _loadWatchdogSource = source;
+                _loadWatchdog = SurfaceHangWatchdog.StartForProcess(pid, hungFor =>
+                {
+                    var reason = $"Surface stopped responding for {hungFor.TotalSeconds:0} s before its first render (pid={pid}); " +
+                                 "the page's code is probably stuck in a loop.";
+                    Log.Write(reason);
+                    source.MarkAppFatal(AppFatalCause.Unresponsive);
+                    source.TerminateUnresponsive(reason);
+                }, LoadHungAfter);
+            }
+        }
+
+        private void DisarmLoadWatchdog(SurfaceClient? source = null)
+        {
+            lock (_loadWatchdogLock)
+            {
+                if (source != null && !ReferenceEquals(source, _loadWatchdogSource))
+                {
+                    return;
+                }
+                _loadWatchdog?.Dispose();
+                _loadWatchdog = null;
+                _loadWatchdogSource = null;
+            }
+        }
+
         private void OnView(SurfaceClient source, ViewMsg view)
         {
             if (!ReferenceEquals(source, _client))
@@ -2358,6 +2491,7 @@ namespace WinUIXamlPreview.UI
 
         private void OnError(SurfaceClient source, ErrorMsg err)
         {
+            DisarmLoadWatchdog(source);
             _ = Dispatcher.InvokeAsync(() =>
             {
                 if (_disposed || IsStale(source, "Error"))
@@ -2366,7 +2500,7 @@ namespace WinUIXamlPreview.UI
                 }
 
                 PerfEnd(err.NotDesignable ? "notdesignable" : "error");
-                UpdateBuildHint(err.MissingKeys, err.UnmappedTypes, false, err.PlaceholderTypes);
+                UpdateBuildHint(err.MissingKeys, err.UnmappedTypes, false, err.PlaceholderTypes, err.PlaceholderReasons);
                 UpdateNewerTypesNote(err.NewerTypes);
 
                 // A promoted spare that answered with an error never rendered, so it is still fresh: a held
@@ -2423,6 +2557,7 @@ namespace WinUIXamlPreview.UI
 
         private void OnClosed(SurfaceClient source, string reason)
         {
+            DisarmLoadWatchdog(source);
             Log.Write("Surface closed: " + reason);
             _ = Dispatcher.InvokeAsync(() =>
             {
@@ -2459,6 +2594,17 @@ namespace WinUIXamlPreview.UI
                 }
 
                 var restarts = _session.Restarts;
+                // BB-060/061: the page's own code ended this surface; a restart would only repeat it.
+                if (source.FatalCause != AppFatalCause.None)
+                {
+                    _hasFrame = false;
+                    _hasNative = false;
+                    TelemetrySurfaceCrashed(reason, action, usedSpare: false, hadRender);
+                    Log.Write($"Surface ended by the page's code ({source.FatalCause}); not restarting.");
+                    ShowReconnectBanner(PreviewErrorText.AppFatalDetail(source.FatalCause), PreviewErrorText.AppFatalTitle);
+                    return;
+                }
+
                 if (action == ActiveDeathAction.Recover)
                 {
                     _hasFrame = false;
@@ -2491,7 +2637,7 @@ namespace WinUIXamlPreview.UI
                 }
 
                 TelemetrySurfaceCrashed(reason, action, usedSpare: false, hadRender);
-                ShowReconnectBanner(PreviewErrorText.DisconnectedDetail(reason, restarts.Exhausted, restarts.MaxAttempts));
+                ShowReconnectBanner(PreviewErrorText.DisconnectedDetail(restarts.Exhausted, restarts.MaxAttempts));
             });
         }
 
@@ -2639,6 +2785,9 @@ namespace WinUIXamlPreview.UI
 
             StatusActionHost.Content = action;
             StatusActionHost.Visibility = action != null ? Visibility.Visible : Visibility.Collapsed;
+
+            PreviewChrome.Announce(StatusText, string.IsNullOrEmpty(detail) ? title : title + ". " + detail,
+                icon == BannerSeverity.Error || icon == BannerSeverity.Warning);
         }
 
         private void HideStatusCard()
@@ -2698,12 +2847,17 @@ namespace WinUIXamlPreview.UI
         /// explicit "Reload preview" affordance in the status card. This is the one give-up sink for all fault
         /// paths; a working state (SetStatus) or a successful render (HideStatus) clears it again.
         /// </summary>
-        private void ShowReconnectBanner(string? reason)
+        private void ShowReconnectBanner(string? reason, string title = "Preview disconnected")
         {
             HideMessageBar();
+            // BB-062: a "Full-fidelity preview ready" success bar would contradict the disconnected card.
+            if (_fidelityBar.IsShown && _fidelityBar.Severity == BannerSeverity.Success)
+            {
+                _fidelityBar.Hide();
+            }
             var reload = PreviewChrome.MakeButton("Reload preview", OnReloadClick);
             System.Windows.Automation.AutomationProperties.SetAutomationId(reload, "PreviewReconnectReload");
-            ShowStatusCard("Preview disconnected", reason, BannerSeverity.Warning, reload);
+            ShowStatusCard(title, reason, BannerSeverity.Warning, reload);
             ReconnectScrim.Visibility = Visibility.Visible;
             _reconnectShown = true;
         }
@@ -2788,7 +2942,7 @@ namespace WinUIXamlPreview.UI
 
         // ---- parking: hand a live surface to the next preview of the same document ----
         //
-        // Moving the preview (dock right/bottom reopens the document; Window / closing the window moves it between
+        // Moving the preview (dock right/bottom moves the panel between margins; Window / closing the window moves it between
         // the margin and the tool window; redocking the tool window reloads its content) tears one PreviewControl's
         // surface down and starts another for the same file. Instead of killing a rendered surface and cold-starting
         // a new one (~1 s of blank "Starting preview…"), park it briefly and let the next preview re-host its window.
@@ -2889,6 +3043,7 @@ namespace WinUIXamlPreview.UI
             {
                 _activeSurfaceExe = p.SurfaceExe;
                 _activeUserDll = p.UserDll;
+                _activeUserDllArch = HostArch.MismatchedArch(p.UserDll);
                 _activeUserAppXaml = p.UserAppXaml;
                 _activeProject = p.Project;
                 _activeTheme = p.Theme;
@@ -2911,7 +3066,7 @@ namespace WinUIXamlPreview.UI
                 HideStatus();
                 if (p.LastHosted is { } hint)
                 {
-                    UpdateBuildHint(hint.MissingKeys, hint.UnmappedTypes, hint.DesignValuesSkipped, hint.PlaceholderTypes);
+                    UpdateBuildHint(hint.MissingKeys, hint.UnmappedTypes, hint.DesignValuesSkipped, hint.PlaceholderTypes, hint.PlaceholderReasons);
                     UpdateNewerTypesNote(hint.NewerTypes);
                 }
 
@@ -3022,6 +3177,7 @@ namespace WinUIXamlPreview.UI
             _resizeDebounce.Stop();
             _emptyDebounce.Stop();
             StopFocusGuard();
+            DisarmLoadWatchdog();
             ParkOrDisposeClient();
         }
     }

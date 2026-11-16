@@ -16,6 +16,7 @@ internal sealed class BuildStage : IDisposable
         // Reserve space for the SDK's longest generated MakePRI relative paths.
         if (root.Length > 80) throw new IOException("Staging root exceeds 80 characters; provide --staging-root at a shorter owned location.");
         Directory.CreateDirectory(root);
+        SweepStale(root);
         var id = Guid.NewGuid().ToString("N").Substring(0, 16);
         Root = Path.Combine(root, id);
         _leasePath = Root + ".lease";
@@ -27,6 +28,49 @@ internal sealed class BuildStage : IDisposable
     {
         try { HostPayload.DeleteOwnedDirectory(Root); }
         finally { _lease.Dispose(); File.Delete(_leasePath); }
+    }
+
+    public static readonly TimeSpan OrphanGrace = TimeSpan.FromHours(1);
+
+    private static bool IsStageName(string name) => name.Length == 16 && name.All(char.IsAsciiHexDigit);
+
+    /// <summary>
+    /// BB-077: a build killed mid-way (VS closed) leaves <c>&lt;id&gt;</c> + <c>&lt;id&gt;.lease</c> forever. A lease
+    /// we can open exclusively has no live owner, so its stage is reclaimed; a stage with no lease (failed
+    /// Dispose) is reclaimed once older than <see cref="OrphanGrace"/>. Only 16-hex names are touched.
+    /// </summary>
+    public static int SweepStale(string root, Action<string>? log = null)
+    {
+        var removed = 0;
+        try
+        {
+            foreach (var lease in Directory.GetFiles(root, "*.lease"))
+            {
+                var stage = lease.Substring(0, lease.Length - ".lease".Length);
+                if (!IsStageName(Path.GetFileName(stage))) continue;
+                try
+                {
+                    using (new FileStream(lease, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                    {
+                        if (Directory.Exists(stage)) HostPayload.DeleteOwnedDirectory(stage);
+                    }
+                    File.Delete(lease);
+                    removed++;
+                    log?.Invoke("Staging GC: removed abandoned stage " + Path.GetFileName(stage) + ".");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } // owner alive
+            }
+            var cutoff = DateTime.UtcNow - OrphanGrace;
+            foreach (var stage in Directory.GetDirectories(root))
+            {
+                if (!IsStageName(Path.GetFileName(stage)) || File.Exists(stage + ".lease")) continue;
+                if (Directory.GetLastWriteTimeUtc(stage) > cutoff) continue;
+                try { HostPayload.DeleteOwnedDirectory(stage); removed++; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return removed;
     }
 }
 

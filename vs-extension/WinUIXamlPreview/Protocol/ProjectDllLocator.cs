@@ -40,9 +40,10 @@ namespace WinUIXamlPreview.Protocol
             }
 
             var projectDir = Path.GetDirectoryName(csproj)!;
-            var assemblyName = Path.GetFileNameWithoutExtension(csproj);
-            var binDir = Path.Combine(projectDir, "bin");
-            if (!Directory.Exists(binDir))
+            var assemblyName = AssemblyNameFor(csproj);
+            var outputDirs = OutputDirs(csproj).Where(Directory.Exists).ToList();
+            var binDir = outputDirs.Count == 1 ? outputDirs[0] : string.Join(", ", outputDirs);
+            if (outputDirs.Count == 0)
             {
                 log($"No bin directory under {projectDir}; rendering framework-only.");
                 return null;
@@ -50,8 +51,9 @@ namespace WinUIXamlPreview.Protocol
 
             try
             {
-                var dlls = Directory
-                    .EnumerateFiles(binDir, assemblyName + ".dll", SearchOption.AllDirectories)
+                var dlls = outputDirs
+                    .SelectMany(d => Directory.EnumerateFiles(d, assemblyName + ".dll", SearchOption.AllDirectories))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderByDescending(File.GetLastWriteTimeUtc)
                     .ToList();
 
@@ -119,21 +121,15 @@ namespace WinUIXamlPreview.Protocol
         {
             try
             {
-                var projectDir = Path.GetDirectoryName(csprojPath);
-                if (projectDir == null)
+                if (Path.GetDirectoryName(csprojPath) == null)
                 {
                     return false;
                 }
 
-                var binDir = Path.Combine(projectDir, "bin");
-                if (!Directory.Exists(binDir))
-                {
-                    return false;
-                }
-
-                var assemblyName = Path.GetFileNameWithoutExtension(csprojPath);
+                var assemblyName = AssemblyNameFor(csprojPath);
                 var any = false;
-                foreach (var dll in Directory.EnumerateFiles(binDir, assemblyName + ".dll", SearchOption.AllDirectories))
+                foreach (var dll in OutputDirs(csprojPath).Where(Directory.Exists)
+                    .SelectMany(d => Directory.EnumerateFiles(d, assemblyName + ".dll", SearchOption.AllDirectories)))
                 {
                     if (!IsPackagedBuild(dll))
                     {
@@ -202,8 +198,195 @@ namespace WinUIXamlPreview.Protocol
                 return appXaml;
             }
 
+            // BB-008: App.xaml moved into a subfolder (e.g. Application\App.xaml).
+            var moved = FindApplicationDefinition(csproj);
+            if (moved != null)
+            {
+                log($"App.xaml: {moved}");
+                return moved;
+            }
+
             log($"No App.xaml next to {Path.GetFileName(csproj)}; app resource scope skipped.");
             return null;
+        }
+
+        // ---- project layout (BB-008) -------------------------------------------------------
+        //
+        // A cheap, literal read of the project and its Directory.Build.props — no MSBuild evaluation. It covers
+        // the common customizations: <AssemblyName>, <OutputPath>/<BaseOutputPath>, and the .NET 8 artifacts
+        // layout (UseArtifactsOutput → <props dir>\artifacts\bin\<project>\…). Anything computed from other
+        // properties falls back to the defaults.
+
+        /// <summary>The output assembly name: a literal &lt;AssemblyName&gt;, else the project file name.</summary>
+        internal static string AssemblyNameFor(string csproj)
+        {
+            var projectName = Path.GetFileNameWithoutExtension(csproj);
+            foreach (var file in ProjectAndProps(csproj))
+            {
+                var value = ExpandLiteral(ReadProperty(SafeRead(file), "AssemblyName"), csproj);
+                if (!string.IsNullOrWhiteSpace(value) && value!.IndexOfAny(Path.GetInvalidFileNameChars()) < 0)
+                {
+                    return value;
+                }
+            }
+
+            return projectName;
+        }
+
+        /// <summary>Folders a build of <paramref name="csproj"/> may write its assembly to (existing or not).</summary>
+        internal static List<string> OutputDirs(string csproj) => BuildDirs(csproj, "bin", "OutputPath", "BaseOutputPath");
+
+        /// <summary>Folders holding the project's intermediate output (project.assets.json).</summary>
+        internal static List<string> IntermediateDirs(string csproj) => BuildDirs(csproj, "obj", "BaseIntermediateOutputPath");
+
+        private static List<string> BuildDirs(string csproj, string kind, params string[] pathProps)
+        {
+            var projectDir = Path.GetDirectoryName(csproj)!;
+            var projectName = Path.GetFileNameWithoutExtension(csproj);
+            var dirs = new List<string> { Path.Combine(projectDir, kind) };
+
+            var text = SafeRead(csproj);
+            foreach (var prop in pathProps)
+            {
+                var value = ExpandLiteral(ReadProperty(text, prop), csproj);
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    try { dirs.Add(Path.GetFullPath(Path.Combine(projectDir, value!.Trim()))); }
+                    catch { }
+                }
+            }
+
+            try
+            {
+                var dir = new DirectoryInfo(projectDir);
+                for (int i = 0; dir != null && i < 6; i++, dir = dir.Parent)
+                {
+                    var artifacts = Path.Combine(dir.FullName, "artifacts", kind, projectName);
+                    if (Directory.Exists(artifacts) ||
+                        HasBoolProp(SafeRead(Path.Combine(dir.FullName, "Directory.Build.props")) ?? "", "UseArtifactsOutput") ||
+                        (i == 0 && HasBoolProp(text ?? "", "UseArtifactsOutput")))
+                    {
+                        dirs.Add(artifacts);
+                    }
+                }
+            }
+            catch { }
+
+            return dirs.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static IEnumerable<string> ProjectAndProps(string csproj)
+        {
+            yield return csproj;
+            var dir = new FileInfo(csproj).Directory;
+            for (int i = 0; dir != null && i < 6; i++, dir = dir.Parent)
+            {
+                var props = Path.Combine(dir.FullName, "Directory.Build.props");
+                if (File.Exists(props))
+                {
+                    yield return props;
+                }
+            }
+        }
+
+        /// <summary>The first literal value of &lt;<paramref name="name"/>&gt; in an MSBuild file, or null.</summary>
+        internal static string? ReadProperty(string? text, string name)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return null;
+            }
+
+            var m = System.Text.RegularExpressions.Regex.Match(text,
+                "<" + name + @"(\s[^>]*)?>([^<]*)</" + name + @"\s*>",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return m.Success ? m.Groups[2].Value.Trim() : null;
+        }
+
+        // Expands $(…) references from the props chain; null when something can't be resolved statically.
+        private static string? ExpandLiteral(string? value, string csproj) =>
+            string.IsNullOrWhiteSpace(value) ? null : WinUISurface.Shared.ProjectFiles.ExpandProperties(value!, csproj);
+
+        // <ApplicationDefinition Include="Application\App.xaml" />, else a shallow scan for an <Application> root.
+        private static string? FindApplicationDefinition(string csproj)
+        {
+            var projectDir = Path.GetDirectoryName(csproj)!;
+            var text = SafeRead(csproj);
+            if (text != null)
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(text,
+                    @"<ApplicationDefinition\s[^>]*Include\s*=\s*""([^""$*]+)""",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (m.Success)
+                {
+                    var p = Path.Combine(projectDir, m.Groups[1].Value.Trim());
+                    if (File.Exists(p))
+                    {
+                        return Path.GetFullPath(p);
+                    }
+                }
+            }
+
+            try
+            {
+                return EnumerateXaml(projectDir, depth: 3)
+                    .OrderBy(f => string.Equals(Path.GetFileName(f), "App.xaml", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                    .FirstOrDefault(IsApplicationRoot);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static IEnumerable<string> EnumerateXaml(string dir, int depth)
+        {
+            IEnumerable<string> files;
+            try { files = Directory.EnumerateFiles(dir, "*.xaml", SearchOption.TopDirectoryOnly).ToList(); }
+            catch { yield break; }
+            foreach (var f in files)
+            {
+                yield return f;
+            }
+
+            if (depth <= 0)
+            {
+                yield break;
+            }
+
+            IEnumerable<string> subdirs;
+            try { subdirs = Directory.EnumerateDirectories(dir).ToList(); }
+            catch { yield break; }
+            foreach (var sub in subdirs)
+            {
+                var name = Path.GetFileName(sub);
+                if (name.StartsWith(".", StringComparison.Ordinal) ||
+                    name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("artifacts", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("node_modules", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                foreach (var f in EnumerateXaml(sub, depth - 1))
+                {
+                    yield return f;
+                }
+            }
+        }
+
+        private static bool IsApplicationRoot(string xamlPath)
+        {
+            try
+            {
+                using var reader = System.Xml.XmlReader.Create(xamlPath, new System.Xml.XmlReaderSettings { DtdProcessing = System.Xml.DtdProcessing.Prohibit });
+                return reader.MoveToContent() == System.Xml.XmlNodeType.Element && reader.LocalName == "Application";
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>
@@ -441,12 +624,49 @@ namespace WinUIXamlPreview.Protocol
             }
         }
 
-        internal static string? FindOwningCsproj(string startPath)
+        // BB-066: owners Visual Studio reported for open documents (linked pages, folders with several projects).
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> s_knownOwners =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Records the project that owns <paramref name="xamlPath"/> (from Visual Studio). A null or non-.csproj
+        /// owner forgets any earlier answer, so discovery falls back to walking up from the file.
+        /// </summary>
+        internal static void RememberOwner(string xamlPath, string? csproj)
         {
+            string key;
+            try { key = Path.GetFullPath(xamlPath); }
+            catch { return; }
+
+            if (!string.IsNullOrEmpty(csproj) && csproj!.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) && File.Exists(csproj))
+            {
+                s_knownOwners[key] = csproj;
+            }
+            else
+            {
+                s_knownOwners.TryRemove(key, out _);
+            }
+        }
+
+        /// <summary>
+        /// The project that owns <paramref name="startPath"/>: the one Visual Studio reported (see
+        /// <see cref="RememberOwner"/>), else the nearest <c>.csproj</c> walking up from it.
+        /// </summary>
+        internal static string? FindOwningCsproj(string? startPath)
+        {
+            if (string.IsNullOrWhiteSpace(startPath))
+            {
+                return null;
+            }
+
             DirectoryInfo? dir;
             try
             {
-                dir = File.Exists(startPath) ? new FileInfo(startPath).Directory : new DirectoryInfo(startPath);
+                if (s_knownOwners.TryGetValue(Path.GetFullPath(startPath!), out var known) && File.Exists(known))
+                {
+                    return known;
+                }
+                dir = File.Exists(startPath) ? new FileInfo(startPath!).Directory : new DirectoryInfo(startPath!);
             }
             catch
             {
@@ -457,11 +677,10 @@ namespace WinUIXamlPreview.Protocol
             {
                 try
                 {
-                    var csproj = Directory.EnumerateFiles(dir.FullName, "*.csproj", SearchOption.TopDirectoryOnly)
-                        .FirstOrDefault();
-                    if (csproj != null)
+                    var found = Directory.EnumerateFiles(dir.FullName, "*.csproj", SearchOption.TopDirectoryOnly).ToList();
+                    if (found.Count > 0)
                     {
-                        return csproj;
+                        return PickCsproj(found, dir.FullName);
                     }
                 }
                 catch
@@ -473,6 +692,26 @@ namespace WinUIXamlPreview.Protocol
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// BB-066: picks among several <c>.csproj</c> files in one folder instead of the alphabetically first: a
+        /// restored project (it has <c>obj\&lt;file&gt;.nuget.g.props</c>) beats a never-built one, then a project
+        /// named after its folder, then the first by name.
+        /// </summary>
+        internal static string PickCsproj(IReadOnlyList<string> candidates, string dir)
+        {
+            if (candidates.Count == 1)
+            {
+                return candidates[0];
+            }
+
+            var folder = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            return candidates
+                .OrderByDescending(p => File.Exists(Path.Combine(dir, "obj", Path.GetFileName(p) + ".nuget.g.props")))
+                .ThenByDescending(p => string.Equals(Path.GetFileNameWithoutExtension(p), folder, StringComparison.OrdinalIgnoreCase))
+                .ThenBy(p => Path.GetFileName(p), StringComparer.OrdinalIgnoreCase)
+                .First();
         }
     }
 }

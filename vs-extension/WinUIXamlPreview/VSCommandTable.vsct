@@ -27,6 +27,18 @@
           <ToolTipText>Show the live WinUI XAML preview pane</ToolTipText>
         </Strings>
       </Button>
+      <!-- BB-004: keyboard entry point into the in-editor preview toolbar. Deliberately no default
+           KeyBinding (every free-looking chord is taken by something); users can bind one under
+           Tools -> Options -> Keyboard, or run it from View -> Other Windows / Ctrl+Q. -->
+      <Button guid="guidPreviewCmdSet" id="FocusPreviewToolbarCommandId" priority="0x0101" type="Button">
+        <Parent guid="guidPreviewCmdSet" id="ViewOtherWindowsGroup" />
+        <CommandFlag>DefaultDisabled</CommandFlag>
+        <Strings>
+          <ButtonText>Focus WinUI XAML Preview Toolbar</ButtonText>
+          <MenuText>Focus WinUI XAML Preview Toolbar</MenuText>
+          <ToolTipText>Move keyboard focus to the preview toolbar of the current XAML editor (Esc returns to the code)</ToolTipText>
+        </Strings>
+      </Button>
     </Buttons>
   </Commands>
 
@@ -36,6 +48,7 @@
     <GuidSymbol name="guidPreviewCmdSet" value="{5c97e212-6033-4935-8de3-82e1bd9245df}">
       <IDSymbol name="ViewOtherWindowsGroup" value="0x1020" />
       <IDSymbol name="ShowPreviewCommandId" value="0x0100" />
+      <IDSymbol name="FocusPreviewToolbarCommandId" value="0x0101" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

@@ -157,5 +157,28 @@ namespace WinUIXamlPreview
 
             return null;
         }
+
+        /// <summary>
+        /// BB-066: full path of the project Visual Studio says contains <paramref name="path"/>, or null (not in the
+        /// solution, or DTE unavailable). Must be called on the UI thread.
+        /// </summary>
+        public static string? GetOwningProjectPath(string path)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                if (Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(SDTE)) is DTE dte)
+                {
+                    var project = dte.Solution?.FindProjectItem(path)?.ContainingProject?.FullName;
+                    return string.IsNullOrEmpty(project) ? null : project;
+                }
+            }
+            catch
+            {
+                // no solution / DTE unavailable / project kind without a FullName
+            }
+
+            return null;
+        }
     }
 }
