@@ -33,7 +33,7 @@ namespace WinUIXamlPreview.IntegrationTests
 
             Run("Load: closing the preview window brings the margin back and it renders", () =>
             {
-                HideWindow();
+                CloseWindow();
                 var s = WaitFor("MainPage margin rendered", x => Rendered(Preview(x, _fx.MainPage)), 120_000);
                 var m = Margin(s, _fx.MainPage)!;
                 Eq("Right", (string?)m["location"], "margin location");

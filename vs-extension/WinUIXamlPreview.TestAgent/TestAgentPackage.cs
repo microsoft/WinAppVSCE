@@ -160,7 +160,7 @@ namespace WinUIXamlPreview.TestAgent
                 case "dteCommand": Dte().ExecuteCommand(Str(req, "name"), (string?)req["args"] ?? ""); return true;
                 case "mainWindowSize": return MainWindowSize((int?)req["width"], (int?)req["height"], (string?)req["state"]);
                 case "toolWindowVisible": return ToolWindowVisible(Str(req, "guid"));
-                case "hideToolWindow": return HideToolWindow(Str(req, "guid"));
+                case "closeToolWindow": return CloseToolWindow(Str(req, "guid"));
                 case "closeSolution":
                     Dte().Documents.CloseAll(vsSaveChanges.vsSaveChangesNo);
                     RevertDirtyDocData();
@@ -524,7 +524,8 @@ namespace WinUIXamlPreview.TestAgent
             return frame.IsVisible() == 0;
         }
 
-        private bool HideToolWindow(string guid)
+        // Close like the user's X, not frame.Hide(): the preview treats a hide (tab switch, auto-hide) as still open (BB-020).
+        private bool CloseToolWindow(string guid)
         {
             var shell = (IVsUIShell)GetGlobalService(typeof(SVsUIShell));
             var g = new Guid(guid);
@@ -532,7 +533,7 @@ namespace WinUIXamlPreview.TestAgent
             {
                 return false;
             }
-            return frame.Hide() == 0;
+            return frame.CloseFrame((uint)__FRAMECLOSE.FRAMECLOSE_NoSave) == 0;
         }
     }
 }

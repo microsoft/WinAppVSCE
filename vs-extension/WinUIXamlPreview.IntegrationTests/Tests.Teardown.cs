@@ -18,6 +18,19 @@ namespace WinUIXamlPreview.IntegrationTests
             Assert(left.Count == 0, $"{what}: {left.Count} of {all.Count} surfaces still running ({string.Join(", ", left)})");
         }
 
+        /// <summary>
+        /// Moving between the tool window and a margin parks the live surface for the other side to adopt, so a
+        /// surviving surface is fine only if <paramref name="adopter"/> now owns it; anything else leaked.
+        /// </summary>
+        private static void AssertExitedOrAdopted(IEnumerable<int> pids, JsonObject? adopter, string what)
+        {
+            var all = pids.ToList();
+            Assert(all.Count > 0, $"no surfaces to check for {what}");
+            var owned = Pids(adopter).ToHashSet();
+            var leaked = SurvivingSurfaces(all).Where(p => !owned.Contains(p)).ToList();
+            Assert(leaked.Count == 0, $"{what}: {leaked.Count} of {all.Count} surfaces still running and not adopted ({string.Join(", ", leaked)})");
+        }
+
         /// <summary>Surface lifetime when documents, the tool window, and the solution go away. The post-exit check lives in Main.</summary>
         private static void Group_Teardown()
         {
@@ -37,27 +50,27 @@ namespace WinUIXamlPreview.IntegrationTests
                 AssertAllExited(pids, "after closing all documents");
             });
 
-            Run("Teardown: closing the tool window ends its surfaces", () =>
+            Run("Teardown: closing the tool window hands its surface to the margin without leaking", () =>
             {
                 Fresh();
                 ShowWindow();
                 var s = OpenInWindow(_fx.MainPage);
                 var pids = Pids(ToolSession(s)).ToList();
-                HideWindow();
-                AssertAllExited(pids, "after closing the tool window");
-                WaitFor("margin renders again", x => Rendered(Preview(x, _fx.MainPage)), 120_000);
+                CloseWindow();
+                s = WaitFor("margin renders again", x => Rendered(Preview(x, _fx.MainPage)), 120_000);
+                AssertExitedOrAdopted(pids, Preview(s, _fx.MainPage), "after closing the tool window");
             });
 
-            Run("Teardown: opening the tool window collapses the margin and ends its surfaces", () =>
+            Run("Teardown: opening the tool window collapses the margin and hands it the surface without leaking", () =>
             {
                 Fresh();
                 var s = OpenRendered(_fx.MainPage);
                 var margin = Pids(Preview(s, _fx.MainPage)).ToList();
                 ShowWindow();
-                WaitFor("tool window rendered", x => ToolSession(x) is JsonObject t
-                                                    && SamePath((string?)t["currentPath"], _fx.MainPage) && Rendered(t), 60_000);
+                s = WaitFor("tool window rendered", x => ToolSession(x) is JsonObject t
+                                                        && SamePath((string?)t["currentPath"], _fx.MainPage) && Rendered(t), 60_000);
                 WaitFor("margin is a strip", x => IsStrip(Margin(x, _fx.MainPage)), 15_000);
-                AssertAllExited(margin, "margin after opening the tool window");
+                AssertExitedOrAdopted(margin, ToolSession(s), "margin after opening the tool window");
             });
 
             Run("Teardown: closing the last XAML tab releases the tool window's surfaces", () =>

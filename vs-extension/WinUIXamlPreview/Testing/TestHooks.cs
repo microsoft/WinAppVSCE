@@ -99,10 +99,12 @@ namespace WinUIXamlPreview.Testing
             return true;
         }
 
-        /// <summary>Resets persisted options to the product defaults, with background full-fidelity builds off, and
-        /// forgets documents learned as risky in earlier runs.</summary>
+        /// <summary>Resets persisted options to the product defaults, with background full-fidelity builds off,
+        /// forgets documents learned as risky in earlier runs, and drops parked surfaces so none is adopted (and
+        /// caught up with an extra reload) by the next test.</summary>
         public static void ResetOptions()
         {
+            UI.SurfaceParking.ReleaseAll();
             PreviewOptions.Location = PreviewLocation.Right;
             PreviewOptions.RightWidth = PreviewOptions.DefaultWidth;
             PreviewOptions.BottomHeight = PreviewOptions.DefaultHeight;

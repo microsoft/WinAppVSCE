@@ -156,9 +156,20 @@ namespace WinUIXamlPreview.IntegrationTests
                 var s = WaitFor("overflow shown", x => Margin(x, _fx.MainPage)?["overflowVisible"]?.GetValue<bool>() == true, 30_000);
                 var narrow = Num(Margin(s, _fx.MainPage)!["toolbarLevel"]);
                 Fresh();
-                s = OpenRendered(_fx.MainPage);
-                Eq(false, Margin(s, _fx.MainPage)!["overflowVisible"]!.GetValue<bool>(), "overflow at default width");
-                Assert(Num(Margin(s, _fx.MainPage)!["toolbarLevel"]) < narrow, $"toolbar collapse level wide={Margin(s, _fx.MainPage)!["toolbarLevel"]} narrow={narrow}");
+                // The default width only fits the toolbar when the tab isn't capping the margin (a small VS window
+                // on a high-DPI desktop does), so give VS room for it.
+                var before = Call("mainWindowSize", new { width = 2400, height = 1200 })!.AsObject();
+                try
+                {
+                    s = OpenRendered(_fx.MainPage);
+                    var m = Margin(s, _fx.MainPage)!;
+                    Eq(false, m["overflowVisible"]!.GetValue<bool>(), $"overflow at default width (margin {m["width"]}, tab {m["hostWidth"]}, level {m["toolbarLevel"]})");
+                    Assert(Num(m["toolbarLevel"]) < narrow, $"toolbar collapse level wide={m["toolbarLevel"]} narrow={narrow}");
+                }
+                finally
+                {
+                    Call("mainWindowSize", new { width = (int)Num(before["width"]), height = (int)Num(before["height"]), state = (string?)before["state"] });
+                }
             });
         }
     }

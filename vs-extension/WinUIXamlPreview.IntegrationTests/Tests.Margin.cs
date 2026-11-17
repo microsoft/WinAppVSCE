@@ -28,10 +28,10 @@ namespace WinUIXamlPreview.IntegrationTests
             WaitFor("tool window visible", _ => ToolWindowVisible(), 15_000);
         }
 
-        internal static void HideWindow()
+        internal static void CloseWindow()
         {
-            Call("hideToolWindow", new { guid = ToolWindowGuid });
-            WaitFor("tool window hidden", _ => !ToolWindowVisible(), 10_000);
+            Call("closeToolWindow", new { guid = ToolWindowGuid });
+            WaitFor("tool window closed", _ => !ToolWindowVisible(), 10_000);
         }
 
         /// <summary>While the preview window is open every editor margin is a strip (no surface of its own).</summary>
@@ -54,7 +54,7 @@ namespace WinUIXamlPreview.IntegrationTests
             Call("closeAll");
             if (ToolWindowVisible())
             {
-                HideWindow();
+                CloseWindow();
             }
             Call("resetOptions");
             if (collapsed)

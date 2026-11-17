@@ -106,6 +106,16 @@ namespace WinUIXamlPreview.UI
             return p;
         }
 
+        /// <summary>Disposes every parked surface (integration tests: no surface carries over between tests).</summary>
+        internal static void ReleaseAll()
+        {
+            foreach (var p in _lot.Clear())
+            {
+                Release(p);
+                p.Dispose();
+            }
+        }
+
         private static void Expire(ParkedSurface p, string why)
         {
             if (!_lot.Remove(p))
