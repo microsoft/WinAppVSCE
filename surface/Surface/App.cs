@@ -448,9 +448,14 @@ public partial class App : Application, IXamlMetadataProvider
         if (XamlErrorText.IsLayoutCycle(ex) || (e.Message ?? "").Contains("Layout cycle", StringComparison.OrdinalIgnoreCase) ||
             (userFrame == null && Environment.TickCount64 - Interlocked.Read(ref s_layoutCycleAt) < LayoutCycleWindowMs))
         {
-            Log($"ERROR: {XamlErrorText.LayoutCycleMarker}: a control on the page keeps changing its size, so WinUI " +
-                "stopped laying it out and will close the preview host: " +
-                (ex != null ? DescribeExceptionChain(ex) : e.Message));
+            string? control = null;
+            try { control = _renderHost?.FindLayoutCycleSuspect(t => IsUserAssembly(t.Assembly)); }
+            catch (Exception findEx) { Log("Layout-cycle suspect lookup failed: " + findEx.Message); }
+            // The exception WinUI raises here carries an unrelated message (e.g. "ClassFactory cannot supply
+            // requested class"), so log only its HRESULT rather than presenting it as the cause.
+            Log($"ERROR: {XamlErrorText.LayoutCycleMarker}{XamlErrorText.ControlTag(control)}: " +
+                (control ?? "a control on the page") + " keeps changing its size, so WinUI stopped laying it out " +
+                "and will close the preview host" + (ex != null ? $" (HRESULT 0x{ex.HResult:X8})." : "."));
             return;
         }
         if (userFrame != null)

@@ -133,12 +133,16 @@ namespace WinUIXamlPreview.Protocol
         /// </summary>
         public AppFatalCause FatalCause { get; private set; }
 
+        /// <summary>BB-061: the control the surface named as the cause of <see cref="FatalCause"/>, or null.</summary>
+        public string? FatalControl { get; private set; }
+
         /// <summary>Records why the page's code is ending this surface; the first cause wins.</summary>
-        internal void MarkAppFatal(AppFatalCause cause)
+        internal void MarkAppFatal(AppFatalCause cause, string? control = null)
         {
             if (FatalCause == AppFatalCause.None)
             {
                 FatalCause = cause;
+                FatalControl = control;
             }
         }
 
@@ -354,7 +358,7 @@ namespace WinUIXamlPreview.Protocol
                 }
                 else if (AppFatal.FromStderr(e.Data) == AppFatalCause.LayoutCycle)
                 {
-                    MarkAppFatal(AppFatalCause.LayoutCycle);
+                    MarkAppFatal(AppFatalCause.LayoutCycle, AppFatal.ControlFromStderr(e.Data));
                 }
                 else if (IsRuntimeFatalLine(e.Data))
                 {

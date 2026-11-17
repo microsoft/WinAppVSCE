@@ -812,9 +812,21 @@ namespace WinUIXamlPreview.Editor
 
             _toolbar.SetButton(_dockButton, DockMoniker(), DockLabel(), DockTooltip());
 
+            // Detach from the old slot before attaching to the new one: a WPF element can have only one parent.
             foreach (var slot in _slots.Values)
             {
-                slot.Host(slot.Location == _location ? _root : null);
+                if (slot.Location != _location)
+                {
+                    slot.Host(null);
+                }
+            }
+
+            foreach (var slot in _slots.Values)
+            {
+                if (slot.Location == _location)
+                {
+                    slot.Host(_root);
+                }
             }
 
             ApplyCollapsedState();

@@ -407,17 +407,17 @@ namespace WinUIXamlPreview.Smoke
         }
 
         /// <summary>
-        /// P1 (coverage hardening): non-page classification. Feeds the three non-designable root families the
-        /// gallery corpus surfaces — a ResourceDictionary, a Window root, and a $safeprojectname$ VS template
-        /// placeholder — and asserts each comes back as a DISTINCT structured NonPage result
-        /// (phase="nonpage", NotDesignable=true, human-readable reason) rather than a generic error. Finally
+        /// P1 (coverage hardening): non-page classification. Feeds a ResourceDictionary and a $safeprojectname$
+        /// VS template placeholder and asserts each comes back as a DISTINCT structured NonPage result
+        /// (phase="nonpage", NotDesignable=true, human-readable reason) rather than a generic error. A Window root
+        /// is fed in between and must render (BB-011). Finally
         /// re-feeds a real page to prove the classification never touches a designable root (the certified
         /// default path is unaffected). Framework-only — classification is markup-driven, needs no --user-dll.
         /// </summary>
         private static async Task RunNonPageClient(string surfaceExe)
         {
             Console.WriteLine();
-            Console.WriteLine("--- P1 non-page classification (ResourceDictionary / Window / template placeholder) ---");
+            Console.WriteLine("--- P1 non-page classification (ResourceDictionary / Window renders / template placeholder) ---");
             using var client = CreateClient(surfaceExe, null, s => Console.Error.WriteLine("  " + s));
             var box = new FrameBox(client);
             await client.StartAsync(TimeSpan.FromSeconds(20));
@@ -431,13 +431,10 @@ namespace WinUIXamlPreview.Smoke
             Check("RD: reason mentions ResourceDictionary", rd.Message?.Contains("ResourceDictionary") == true);
             Console.WriteLine($"    RD -> phase={rd.Phase} notDesignable={rd.NotDesignable} msg={Trunc(rd.Message)}");
 
-            // (2) Window root — a window is not a designable page.
+            // (2) Window root: rewritten as a UserControl and rendered (BB-011), not classified as a non-page.
             client.LoadXaml(WindowRootXaml, 400, 300, 1.0);
-            var win = await box.NextError(TimeSpan.FromSeconds(20));
-            Check("Window: phase == nonpage", win!.Phase == "nonpage");
-            Check("Window: flagged NotDesignable", win.NotDesignable);
-            Check("Window: reason mentions Window", win.Message?.Contains("Window") == true);
-            Console.WriteLine($"    Window -> phase={win.Phase} msg={Trunc(win.Message)}");
+            var winFrame = await box.NextFrame(TimeSpan.FromSeconds(20));
+            Check("Window: content renders", winFrame != null && IsPng(winFrame.Data));
 
             // (3) $safeprojectname$ VS project-template placeholder — never a resolvable type.
             client.LoadXaml(TemplatePlaceholderXaml, 400, 300, 1.0);

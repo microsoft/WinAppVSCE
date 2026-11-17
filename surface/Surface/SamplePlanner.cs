@@ -300,8 +300,8 @@ internal static partial class SamplePlanner
             el.Attribute(Design + property) is not null ||
             !XamlCleaner.TryParseBind(a.Value, out var path, out var named) ||
             named.Keys.Any(k => k is "ElementName" or "RelativeSource" or "Source" or "FallbackValue" or "TargetNullValue") ||
-            el.AncestorsAndSelf().Any(x => x.Name.LocalName is "DataTemplate" or "ControlTemplate" or "Setter" ||
-                x.Attribute("DataContext") is not null ||
+            el.AncestorsAndSelf().Any(x =>             x.Name.LocalName is "DataTemplate" or "ControlTemplate" or "Setter" ||
+                x.Attributes().Any(xa => xa.Name.LocalName == "DataContext") ||
                 x.Elements().Any(c => c.Name.LocalName.EndsWith(".DataContext", StringComparison.Ordinal))))
         {
             return null;

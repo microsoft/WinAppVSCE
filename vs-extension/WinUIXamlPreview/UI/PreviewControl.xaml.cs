@@ -2600,8 +2600,9 @@ namespace WinUIXamlPreview.UI
                     _hasFrame = false;
                     _hasNative = false;
                     TelemetrySurfaceCrashed(reason, action, usedSpare: false, hadRender);
-                    Log.Write($"Surface ended by the page's code ({source.FatalCause}); not restarting.");
-                    ShowReconnectBanner(PreviewErrorText.AppFatalDetail(source.FatalCause), PreviewErrorText.AppFatalTitle);
+                    Log.Write($"Surface ended by the page's code ({source.FatalCause}" +
+                        (source.FatalControl != null ? $", in {source.FatalControl}" : "") + "); not restarting.");
+                    ShowReconnectBanner(PreviewErrorText.AppFatalDetail(source.FatalCause, source.FatalControl), PreviewErrorText.AppFatalTitle);
                     return;
                 }
 

@@ -1803,6 +1803,7 @@ namespace Surface.Tests
                 "<ProgressBar x:Name=\"Bar\" Value=\"{Binding Progress}\" />" +
                 "<Border Visibility=\"{Binding IsBusy, Converter={StaticResource B2V}}\" x:Name=\"Conv\" />" +
                 "<StackPanel DataContext=\"{Binding Child}\"><TextBlock x:Name=\"Scoped\" Text=\"{Binding Name}\" /></StackPanel>" +
+                "<StackPanel d:DataContext=\"{d:DesignInstance Type=f:Vm}\"><TextBlock x:Name=\"DesignScoped\" Text=\"{Binding Name}\" /></StackPanel>" +
                 "</StackPanel>");
             var r = CleanRoot(xaml, sample: true);
             Check("page {Binding} text -> sample", Attr(Named(r, "Title"), "Text") is { Length: > 0 } t && !t.StartsWith('{'), Attr(Named(r, "Title"), "Text"));
@@ -1812,6 +1813,7 @@ namespace Surface.Tests
             Eq("number -> sample", "72.5", Attr(Named(r, "Bar"), "Value"));
             Check("converted bool kept", (Attr(Named(r, "Conv"), "Visibility") ?? "{").StartsWith('{') || Attr(Named(r, "Conv"), "Visibility") is null, Attr(Named(r, "Conv"), "Visibility"));
             Eq("explicit DataContext scope kept", "{Binding Name}", Attr(Named(r, "Scoped"), "Text"));
+            Eq("d:DataContext scope kept", "{Binding Name}", Attr(Named(r, "DesignScoped"), "Text"));
             var off = CleanRoot(xaml, sample: false);
             Eq("sample data off -> binding kept", "{Binding Title}", Attr(Named(off, "Title"), "Text"));
         }

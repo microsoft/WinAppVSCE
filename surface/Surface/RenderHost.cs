@@ -55,6 +55,49 @@ internal sealed class RenderHost
     private bool _designMode = true;
     private PreviewSurface? _design;
 
+    /// <summary>
+    /// BB-061: the app control most likely causing a layout cycle — the deepest element in the live preview whose
+    /// type is app code (<paramref name="isUserType"/>) that overrides MeasureOverride or ArrangeOverride. Returned
+    /// as "TypeName" or "TypeName 'x:Name'"; null when no such element is in the tree. UI thread only.
+    /// </summary>
+    internal string? FindLayoutCycleSuspect(Func<Type, bool> isUserType)
+    {
+        string? best = null;
+        int bestDepth = -1;
+        var pending = new Stack<(DependencyObject Node, int Depth)>();
+        foreach (var root in new[] { _renderWindow?.Content, _anchor?.Content })
+        {
+            if (root is not null) { pending.Push((root, 0)); }
+        }
+        for (int visited = 0; pending.Count > 0 && visited < 20_000; visited++)
+        {
+            var (node, depth) = pending.Pop();
+            if (node is FrameworkElement fe && depth > bestDepth && OverridesLayout(fe.GetType(), isUserType))
+            {
+                best = string.IsNullOrEmpty(fe.Name) ? fe.GetType().Name : $"{fe.GetType().Name} '{fe.Name}'";
+                bestDepth = depth;
+            }
+            int count = VisualTreeHelper.GetChildrenCount(node);
+            for (int i = 0; i < count; i++) { pending.Push((VisualTreeHelper.GetChild(node, i), depth + 1)); }
+        }
+        return best;
+    }
+
+    private static bool OverridesLayout(Type? type, Func<Type, bool> isUserType)
+    {
+        const System.Reflection.BindingFlags Declared = System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.DeclaredOnly;
+        for (var t = type; t != null && isUserType(t); t = t.BaseType)
+        {
+            if (t.GetMethod("MeasureOverride", Declared) != null || t.GetMethod("ArrangeOverride", Declared) != null)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Size preview (user-requested) + the image-path theme baseline. _currentTheme is baked into the
     // IMAGE path's host Grid (RenderElementAsync) and stays Light so the streamed-image (VS Code) preview
     // renders Light regardless of the app-global theme. The NATIVE (VS) path ignores this and inherits the

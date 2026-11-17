@@ -42,4 +42,27 @@ internal static class AppFatal
         }
         return line.IndexOf(LayoutFaultMarker, StringComparison.Ordinal) >= 0 ? AppFatalCause.LayoutCodeThrew : AppFatalCause.None;
     }
+
+    private const string ControlTagStart = " [control: ";
+
+    /// <summary>
+    /// BB-061: the control a layout-cycle stderr line names right after <see cref="LayoutCycleMarker"/> as
+    /// " [control: X]" (surface\Surface\XamlErrorText.cs ControlTag; keep in sync), or null.
+    /// </summary>
+    public static string? ControlFromStderr(string? line)
+    {
+        if (string.IsNullOrEmpty(line))
+        {
+            return null;
+        }
+        int marker = line!.IndexOf(LayoutCycleMarker + ControlTagStart, StringComparison.Ordinal);
+        if (marker < 0)
+        {
+            return null;
+        }
+        int start = marker + LayoutCycleMarker.Length + ControlTagStart.Length;
+        int end = line.IndexOf(']', start);
+        var control = end > start ? line.Substring(start, end - start).Trim() : "";
+        return control.Length > 0 ? control : null;
+    }
 }

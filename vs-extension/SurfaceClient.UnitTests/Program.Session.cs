@@ -407,6 +407,15 @@ internal static partial class Program
             PreviewErrorText.AppFatalDetail(WinUIXamlPreview.Protocol.AppFatalCause.LayoutCycle).Contains("layout cycle"));
         Check("app fatal detail: hang says not restarted",
             PreviewErrorText.AppFatalDetail(WinUIXamlPreview.Protocol.AppFatalCause.Unresponsive).Contains("not restarted"));
+        const string cycleLine = "[12:00:01] ERROR: page layout never settled (layout cycle) [control: BBTempCycle 'Spinner']: BBTempCycle 'Spinner' keeps …";
+        Eq("app fatal: layout cycle with control tag", WinUIXamlPreview.Protocol.AppFatalCause.LayoutCycle,
+            WinUIXamlPreview.Protocol.AppFatal.FromStderr(cycleLine));
+        Eq("app fatal: control parsed from tag", "BBTempCycle 'Spinner'",
+            WinUIXamlPreview.Protocol.AppFatal.ControlFromStderr(cycleLine));
+        Eq("app fatal: no tag → no control", null,
+            WinUIXamlPreview.Protocol.AppFatal.ControlFromStderr("ERROR: page layout never settled (layout cycle): a control …"));
+        Check("app fatal detail: names the control",
+            PreviewErrorText.AppFatalDetail(WinUIXamlPreview.Protocol.AppFatalCause.LayoutCycle, "BBTempCycle").Contains("BBTempCycle keeps changing"));
 
         // ---- unbuilt-project build hint ----
         var someKeys = new[] { "PillCornerRadius", "AccentBrush" };

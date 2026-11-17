@@ -62,10 +62,13 @@ namespace WinUIXamlPreview.UI
         public const string AppFatalTitle = "The page's code stopped the preview";
 
         /// <summary>BB-060/061: why the page's code ended the preview, and what to do. Not auto-restarted.</summary>
-        public static string AppFatalDetail(Protocol.AppFatalCause cause)
+        public static string AppFatalDetail(Protocol.AppFatalCause cause, string? control = null)
         {
             var what = cause switch
             {
+                Protocol.AppFatalCause.LayoutCycle when !string.IsNullOrEmpty(control) =>
+                    $"Its layout never settled: {control} keeps changing its size on every layout pass (a layout cycle). " +
+                    "Check its MeasureOverride/ArrangeOverride and any SizeChanged handler that resizes it.",
                 Protocol.AppFatalCause.LayoutCycle =>
                     "Its layout never settled: a control keeps changing its size on every layout pass (a layout cycle), " +
                     "for example a custom panel's MeasureOverride/ArrangeOverride or a SizeChanged handler that resizes it.",

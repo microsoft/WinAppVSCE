@@ -84,6 +84,13 @@ internal static class XamlErrorText
     /// </summary>
     internal const string LayoutCycleMarker = "page layout never settled (layout cycle)";
 
+    /// <summary>
+    /// BB-061: names the suspected control right after <see cref="LayoutCycleMarker"/> as " [control: X]"; the
+    /// extension parses it (AppFatal.ControlFromStderr; keep in sync). Empty when there is no suspect.
+    /// </summary>
+    internal static string ControlTag(string? control) =>
+        string.IsNullOrWhiteSpace(control) ? "" : $" [control: {control!.Replace("]", "")}]";
+
     internal const string LayoutCycleMessage =
         "Layout cycle: the page's layout never settled. A control keeps changing its size on every layout pass " +
         "(for example a custom panel's MeasureOverride/ArrangeOverride, or a SizeChanged handler that resizes it).";
