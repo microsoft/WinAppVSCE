@@ -46,6 +46,8 @@ namespace Surface
         public static string[] LastUnmappedTypes { get; set; } = Array.Empty<string>();
         public static string[] LastNewerTypes { get; set; } = Array.Empty<string>();
         public static bool LastDesignValuesSkipped { get; set; }
+    public static string[] LastPlaceholderTypes { get; set; } = Array.Empty<string>();
+    public static string[] LastPlaceholderReasons { get; set; } = Array.Empty<string>();
         public string? Path;
         public (double X, double Y)? Point;
         public (int Id, string Name, string Value)? Property;

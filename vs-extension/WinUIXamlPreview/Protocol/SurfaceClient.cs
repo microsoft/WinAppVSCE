@@ -244,7 +244,7 @@ namespace WinUIXamlPreview.Protocol
                 }
             }
 
-            var launchExe = _privateRun == null ? _surfaceExe : Path.Combine(_privateRun, "Surface.exe");
+            var launchExe = _privateRun == null ? _surfaceExe : Path.Combine(_privateRun, Path.GetFileName(_surfaceExe));
             _log($"Launching surface: \"{launchExe}\" {args}");
 
             var psi = new ProcessStartInfo

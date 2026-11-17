@@ -16,6 +16,8 @@
     <Compile Include="..\Surface\FrameServer.cs" Link="Production\FrameServer.cs" />
     <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\Messages.cs" Link="Production\Messages.cs" />
     <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\SurfaceClient.cs" Link="Production\SurfaceClient.cs" />
+    <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\AppFatal.cs" Link="Production\AppFatal.cs" />
+    <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\SurfaceIdentity.cs" Link="Production\SurfaceIdentity.cs" />
     <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\ChildProcessJob.cs" Link="Production\ChildProcessJob.cs" />
     <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\CommandLine.cs" Link="Production\CommandLine.cs" />
     <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\LineDecoder.cs" Link="Production\LineDecoder.cs" />
