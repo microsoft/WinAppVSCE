@@ -47,6 +47,7 @@ namespace WinUIXamlPreview.Editor
             _preview = preview;
             Element = BuildToolbar(hostGroup);
             _preview.SettingsSynced += RefreshSettingLabels;
+            _preview.FidelityAvailabilityChanged += RefreshFidelityButton;
         }
 
         // Another preview (or the options page) changed a shared setting; show the current values.
@@ -58,7 +59,7 @@ namespace WinUIXamlPreview.Editor
                 SetMenuButton(_themeButton, KnownMonikers.DarkTheme, ThemeLabel(), ThemeTooltip(), BuildThemeMenu());
                 SetMenuButton(_sizeButton, KnownMonikers.Monitor, SizeLabel(), SizeTooltip(), BuildSizeMenu());
                 SetButton(_dtdButton, DtdMoniker(), DtdLabel(), DtdTooltip());
-                SetButton(_fidelityButton, FidelityMoniker(), FidelityLabel(), FidelityTooltip());
+                RefreshFidelityButton();
             }
             catch (Exception ex) { Log.Write("Toolbar label refresh failed: " + ex); }
         }
@@ -70,6 +71,7 @@ namespace WinUIXamlPreview.Editor
         internal string? SizeLabelState => _sizeButton != null ? AutomationProperties.GetName(_sizeButton) : null;
         internal string? DtdLabelState => _dtdButton != null ? AutomationProperties.GetName(_dtdButton) : null;
         internal string? FidelityLabelState => _fidelityButton != null ? AutomationProperties.GetName(_fidelityButton) : null;
+        internal bool? FidelityEnabledState => _fidelityButton?.IsEnabled;
         internal int Level => _toolbarLevel;
         internal bool OverflowVisible => _overflowButton?.Visibility == Visibility.Visible;
 
@@ -113,7 +115,9 @@ namespace WinUIXamlPreview.Editor
             _themeButton = MakeMenuButton(KnownMonikers.DarkTheme, ThemeLabel(), ThemeTooltip(), "PreviewThemeButton", BuildThemeMenu());
             _sizeButton = MakeMenuButton(KnownMonikers.Monitor, SizeLabel(), SizeTooltip(), "PreviewSizeButton", BuildSizeMenu());
             _dtdButton = MakeButton(DtdMoniker(), DtdLabel(), DtdTooltip(), OnToggleDtdClick, "PreviewDtdToggle", () => PreviewOptions.DesignTimeData);
-            _fidelityButton = MakeButton(FidelityMoniker(), FidelityLabel(), FidelityTooltip(), OnToggleFidelityClick, "PreviewFidelityToggle", () => PreviewOptions.FullFidelityAutoBuild);
+            _fidelityButton = MakeButton(FidelityMoniker(), FidelityLabel(), FidelityTooltip(), OnToggleFidelityClick, "PreviewFidelityToggle", FidelityIsOn);
+            ToolTipService.SetShowOnDisabled(_fidelityButton, true);
+            _fidelityButton.IsEnabled = _preview.FidelityUnavailableReason == null;
 
             _toolbarGroups.Add(new List<ToolbarItem> { new ToolbarItem(reload, 9, () => MakeOverflowCommand(KnownMonikers.Refresh, "Reload", OnReloadClick, "PreviewOverflowReload")) });
             _toolbarGroups.Add(new List<ToolbarItem>
@@ -129,7 +133,7 @@ namespace WinUIXamlPreview.Editor
             _toolbarGroups.Add(new List<ToolbarItem>
             {
                 new ToolbarItem(_dtdButton, 3, () => MakeOverflowCommand(DtdMoniker(), DtdLabel(), OnToggleDtdClick, "PreviewOverflowDtd")),
-                new ToolbarItem(_fidelityButton, 2, () => MakeOverflowCommand(FidelityMoniker(), FidelityLabel(), OnToggleFidelityClick, "PreviewOverflowFidelity")),
+                new ToolbarItem(_fidelityButton, 2, MakeFidelityOverflowItem),
             });
             var host = hostGroup?.Invoke(this);
             if (host != null && host.Count > 0)
@@ -416,6 +420,11 @@ namespace WinUIXamlPreview.Editor
             pressed.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMouseDownBackgroundBeginBrushKey), "Bd"));
             pressed.Setters.Add(new Setter(Border.BorderBrushProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuBorderBrushKey), "Bd"));
             template.Triggers.Add(pressed);
+
+            // Greyed out while unavailable (e.g. Full fidelity with no SDK); the icon and label dim together.
+            var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.45, "Bd"));
+            template.Triggers.Add(disabled);
 
             style.Setters.Add(new Setter(Control.TemplateProperty, template));
             return style;
@@ -868,20 +877,48 @@ namespace WinUIXamlPreview.Editor
         // Flips PreviewOptions.FullFidelityAutoBuild: whether a project on a WinAppSDK version other than the
         // bundled host gets a version-matched host built and swapped in. Applied live by the preview.
 
-        private static string FidelityLabel() => PreviewOptions.FullFidelityAutoBuild ? "Full fidelity: On" : "Full fidelity: Off";
+        private string FidelityLabel() =>
+            _preview.FidelityUnavailableReason != null ? "Full fidelity: Unavailable"
+            : PreviewOptions.FullFidelityAutoBuild ? "Full fidelity: On" : "Full fidelity: Off";
 
         private static ImageMoniker FidelityMoniker() => KnownMonikers.BuildSelection;
 
-        private static string FidelityTooltip() => PreviewOptions.FullFidelityAutoBuild
-            ? "Full fidelity is ON: projects on another Windows App SDK version get a matching preview host, built in the background. Click to turn it off."
-            : "Full fidelity is OFF: the preview always uses the bundled host, so controls newer than it show as placeholders. Click to turn it on.";
+        private string FidelityTooltip() =>
+            _preview.FidelityUnavailableReason is { } reason
+                ? "Full fidelity is unavailable for this file, so the preview uses the bundled host. " + reason
+                : PreviewOptions.FullFidelityAutoBuild
+                    ? "Full fidelity is ON: projects on another Windows App SDK version get a matching preview host, built in the background. Click to turn it off."
+                    : "Full fidelity is OFF: the preview always uses the bundled host, so controls newer than it show as placeholders. Click to turn it on.";
+
+        private bool FidelityIsOn() => PreviewOptions.FullFidelityAutoBuild && _preview.FidelityUnavailableReason == null;
+
+        // Relabels the button and greys it out (tooltip still shown) while full fidelity can't apply to this file.
+        private void RefreshFidelityButton()
+        {
+            if (_fidelityButton == null) { return; }
+            _fidelityButton.IsEnabled = _preview.FidelityUnavailableReason == null;
+            SetButton(_fidelityButton, FidelityMoniker(), FidelityLabel(), FidelityTooltip());
+        }
+
+        private MenuItem MakeFidelityOverflowItem()
+        {
+            var item = MakeOverflowCommand(FidelityMoniker(), FidelityLabel(), OnToggleFidelityClick, "PreviewOverflowFidelity");
+            if (_preview.FidelityUnavailableReason != null)
+            {
+                item.IsEnabled = false;
+                item.ToolTip = FidelityTooltip();
+                ToolTipService.SetShowOnDisabled(item, true);
+            }
+            return item;
+        }
 
         private void OnToggleFidelityClick(object sender, RoutedEventArgs e)
         {
             try
             {
+                if (_preview.FidelityUnavailableReason != null) { return; }
                 _preview.SetFullFidelity(!PreviewOptions.FullFidelityAutoBuild);
-                SetButton(_fidelityButton, FidelityMoniker(), FidelityLabel(), FidelityTooltip());
+                RefreshFidelityButton();
             }
             catch (Exception ex) { Log.Write("Toggle full fidelity failed: " + ex); }
         }

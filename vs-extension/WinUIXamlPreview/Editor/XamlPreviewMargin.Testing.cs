@@ -45,6 +45,7 @@ namespace WinUIXamlPreview.Editor
                 ["sizeLabel"] = _toolbar.SizeLabelState,
                 ["dtdLabel"] = _toolbar.DtdLabelState,
                 ["fidelityLabel"] = _toolbar.FidelityLabelState,
+                ["fidelityEnabled"] = _toolbar.FidelityEnabledState,
                 ["toolbarLevel"] = _toolbar.Level,
                 ["overflowVisible"] = _toolbar.OverflowVisible,
                 ["caret"] = caret,

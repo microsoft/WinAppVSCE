@@ -19,6 +19,8 @@ namespace WinUIXamlPreview.IntegrationTests
         /// <summary>Outside every project, so VS opens these in the XML editor.</summary>
         public string LoosePage => Path.Combine(Root, "Loose", "LoosePage.xaml");
         public string LooseXml => Path.Combine(Root, "Loose", "settings.xml");
+        /// <summary>In a project (outside the solution) whose WinAppSDK version can't be resolved without a build.</summary>
+        public string UnresolvedPage => Path.Combine(Root, "Unresolved", "UnresolvedPage.xaml");
 
         public Fixture(string root)
         {
@@ -70,6 +72,20 @@ namespace WinUIXamlPreview.IntegrationTests
             Directory.CreateDirectory(Path.GetDirectoryName(LoosePage)!);
             File.WriteAllText(LoosePage, SecondPageXaml);
             File.WriteAllText(LooseXml, "<settings><item key=\"a\" /></settings>\r\n");
+            Directory.CreateDirectory(Path.GetDirectoryName(UnresolvedPage)!);
+            File.WriteAllText(Path.Combine(Path.GetDirectoryName(UnresolvedPage)!, "Unresolved.csproj"),
+@"<Project Sdk=""Microsoft.NET.Sdk"">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWinUI>true</UseWinUI>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include=""Microsoft.WindowsAppSDK"" Version=""$(WasdkVersionNotSet)"" />
+  </ItemGroup>
+</Project>
+");
+            File.WriteAllText(UnresolvedPage, SecondPageXaml);
             const string sdkProject = "9A19103F-16F7-4668-BE54-9A1E7A4F7556";
             File.WriteAllText(Solution,
 "\r\nMicrosoft Visual Studio Solution File, Format Version 12.00\r\n# Visual Studio Version 17\r\n" +

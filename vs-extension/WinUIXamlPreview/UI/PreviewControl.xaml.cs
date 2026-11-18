@@ -190,6 +190,37 @@ namespace WinUIXamlPreview.UI
         /// <summary>Raised on the UI thread after this preview caught up with a shared settings change.</summary>
         internal event Action? SettingsSynced;
 
+        /// <summary>
+        /// Why full fidelity can't apply to this document (no SDK, unresolved version, failed build...), or null when
+        /// it can. Per preview: the shared Full fidelity preference is left alone so other projects keep it.
+        /// </summary>
+        internal string? FidelityUnavailableReason { get; private set; }
+
+        /// <summary>Raised on the UI thread when <see cref="FidelityUnavailableReason"/> changes.</summary>
+        internal event Action? FidelityAvailabilityChanged;
+
+        private void SetFidelityUnavailable(string? reason)
+        {
+            if (string.Equals(FidelityUnavailableReason, reason, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            FidelityUnavailableReason = reason;
+            Log.Write(reason == null ? "Full fidelity available." : "Full fidelity unavailable: " + reason);
+            FidelityAvailabilityChanged?.Invoke();
+        }
+
+        private const string IdentityFallbackFidelityNote =
+            "This packaged build needs app identity, which only the bundled preview host has.";
+
+        // What blocks the upgrade for this plan before trying it. A failed version only blocks while full fidelity is
+        // on: turning it on is the BB-025 retry, so the button has to stay clickable while it's off.
+        private static string? FidelityBlocker(HostSelection plan) =>
+            plan.NeedsUpgrade && PreviewOptions.FullFidelityAutoBuild && FailedHostVersions.Contains(plan.TargetVersion)
+                ? BuildFailedNote(plan.TargetVersion!)
+                : plan.Note;
+
         private void OnPreviewSettingsChanged()
         {
             if (_disposed || _settingsSyncQueued)
@@ -707,6 +738,7 @@ namespace WinUIXamlPreview.UI
                 // A P7 matched recovery is already on the matched host, so there's nothing to upgrade. Under the
                 // identity fallback the matched host (an unregistered run-copy) can't get identity, so stay bundled.
                 _fidelityPlan = recoverPri == null && !identityFallback ? plan : null;
+                SetFidelityUnavailable(identityFallback ? IdentityFallbackFidelityNote : recoverPri == null ? plan?.Note : null);
                 if (recoverPri == null && !identityFallback)
                 {
                     KickFidelityUpgrade(plan);
@@ -1660,6 +1692,9 @@ namespace WinUIXamlPreview.UI
                 return;
             }
 
+            // BB-025: a failed version only blocks while full fidelity is on; turning it on clears the failure and retries.
+            SetFidelityUnavailable(FidelityBlocker(plan));
+
             // No upgrade needed (bundled version, or undiscoverable): surface only the gentle no-toolchain note.
             if (!plan.NeedsUpgrade)
             {
@@ -1722,7 +1757,9 @@ namespace WinUIXamlPreview.UI
                 {
                     _session.AbortUpgradeStart();
                     TelemetryFullFidelityBuild("build", "no-sdk", version, null);
-                    ShowFidelityNote($"Install the .NET SDK for a full-fidelity WinAppSDK {version} preview.");
+                    var noSdk = $"Install the .NET SDK for a full-fidelity WinAppSDK {version} preview.";
+                    SetFidelityUnavailable(noSdk);
+                    ShowFidelityNote(noSdk);
                     return;
                 }
 
@@ -1770,6 +1807,7 @@ namespace WinUIXamlPreview.UI
                             TelemetryFullFidelityBuild(telemetryKind, "build-failed", version, upSw);
                             Log.Write($"Fidelity upgrade for {version}: build did not yield a matched host ({outcome.Error}); staying on bundled 2.2.0.");
                             EndUpgrade(gen, note: null);
+                            SetFidelityUnavailable(BuildFailedNote(version!));
                             ShowBuildFailedNote(version!);
                             UpdateNewerTypesNote(_lastNewerTypes);
                         });
@@ -1813,7 +1851,14 @@ namespace WinUIXamlPreview.UI
                     Log.Write("Fidelity upgrade: matched host failed to start: " + ex.Message);
                     TelemetryFullFidelityBuild(telemetryKind, "start-failed", version, upSw);
                     try { matched?.Dispose(); } catch { }
-                    await MarshalAsync(() => EndUpgrade(gen, note: null));
+                    await MarshalAsync(() =>
+                    {
+                        if (_session.IsUpgradeCurrent(gen))
+                        {
+                            SetFidelityUnavailable($"The WinAppSDK {version} preview host failed to start. Reopen the file to try again; details are in preview.log.");
+                        }
+                        EndUpgrade(gen, note: null);
+                    });
                     return;
                 }
 
@@ -2176,6 +2221,10 @@ namespace WinUIXamlPreview.UI
         {
             _appliedFullFidelity = on;
             Log.Write($"Full fidelity toggled {(on ? "ON" : "off")}.");
+            if (_fidelityPlan != null)
+            {
+                SetFidelityUnavailable(FidelityBlocker(_fidelityPlan));
+            }
             var path = _pinnedPath ?? _currentPath;
             var action = _session.OnFullFidelityToggled(on, live: _client != null,
                 onMatchedHost: !string.IsNullOrEmpty(_activeUserPri), upgradable: _fidelityPlan != null);
@@ -3084,6 +3133,7 @@ namespace WinUIXamlPreview.UI
 
                 // Same as a cold start on the bundled host: kick (or rejoin) the version-matched upgrade.
                 _fidelityPlan = p.UserPri == null ? plan : null;
+                SetFidelityUnavailable(p.UserPri == null ? plan?.Note : null);
                 if (p.UserPri == null)
                 {
                     KickFidelityUpgrade(plan);

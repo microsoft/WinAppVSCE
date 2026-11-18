@@ -73,6 +73,20 @@ namespace WinUIXamlPreview.IntegrationTests
                 Assert(Rendered(Preview(Snap(), _fx.MainPage)), "still rendered");
             });
 
+            Run("Toolbar: full fidelity is greyed out per file when the WinAppSDK version can't be resolved", () =>
+            {
+                Fresh();
+                OpenRendered(_fx.MainPage);
+                var s = OpenRendered(_fx.UnresolvedPage);
+                s = WaitFor("unavailable", x => Label(x, _fx.UnresolvedPage, "fidelityLabel") == "Full fidelity: Unavailable"
+                                             && Margin(x, _fx.UnresolvedPage)?["fidelityEnabled"]?.GetValue<bool>() == false);
+                Eq(false, Opt(s)["fullFidelityAutoBuild"]!.GetValue<bool>(), "fullFidelityAutoBuild untouched");
+                // The shared preference isn't changed, so a resolvable project keeps a working toggle.
+                Eq("Full fidelity: Off", Label(s, _fx.MainPage, "fidelityLabel"), "MainPage label");
+                Eq(true, Margin(s, _fx.MainPage)?["fidelityEnabled"]?.GetValue<bool>(), "MainPage enabled");
+                Call("close", new { path = _fx.UnresolvedPage });
+            });
+
             Run("Toolbar: full-fidelity toggle syncs to other tabs and persists into new ones", () =>
             {
                 Fresh();
