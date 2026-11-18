@@ -1,0 +1,65 @@
+name: XAML Previewer Preview VSIX
+
+# Runs the non-VS test lane, then builds the Visual Studio WinUI XAML previewer VSIX for teammate testing.
+# Trigger: push a tag, e.g. `git tag previewer-preview-1 && git push origin previewer-preview-1`.
+# Tag-push workflows run from the tagged commit, so this works without merging to main.
+
+on:
+  push:
+    tags: [ "previewer-preview-*" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-vsix:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: '24'
+
+    - name: Install npm dependencies
+      run: npm ci
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: '10.0.x'
+
+    # Non-VS, non-renderer lane: fault-injection, unit, source-map, XamlCleaner, identity-logic,
+    # provisioner and protocol compatibility tests. A failure stops the VSIX from being published.
+    - name: Run tests
+      shell: pwsh
+      run: ./vs-extension/Test-Migration.ps1
+
+    - name: Build VSIX
+      shell: pwsh
+      run: ./vs-extension/WinUIXamlPreview/Build-Vsix.ps1 -Configuration Release -NoDeploy
+
+    - name: Upload VSIX
+      id: upload
+      uses: actions/upload-artifact@v7
+      with:
+        name: WinUIXamlPreview-${{ github.ref_name }}
+        path: vs-extension/WinUIXamlPreview/bin/Release/WinUIXamlPreview.vsix
+        if-no-files-found: error
+        retention-days: 90
+
+    - name: Summary
+      shell: pwsh
+      env:
+        ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+      run: |
+        @"
+        ## WinUI XAML Previewer preview ``$env:GITHUB_REF_NAME``
+
+        **Download:** $env:ARTIFACT_URL
+
+        Unzip, then double-click ``WinUIXamlPreview.vsix`` (Visual Studio 17.8+). Link expires in 90 days.
+        "@ | Add-Content $env:GITHUB_STEP_SUMMARY

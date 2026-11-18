@@ -1,0 +1,7 @@
+; Companion to the retained handcrafted CodeBase package registration.
+; Must match PackageGuids.PropertiesToolWindowGuidString and ProvideToolWindow.
+[$RootKey$\ToolWindows\{6b1e9d4a-7c83-4f2e-a1d6-2b9c8e5f0a37}]
+@="{d4245f7f-5871-4a4d-97c1-84595921b383}"
+"Name"="WinUIXamlPreview.PropertiesToolWindow"
+"Style"="Tabbed"
+"Window"="{3AE79031-E1BC-11D0-8F78-00A0C9110057}"

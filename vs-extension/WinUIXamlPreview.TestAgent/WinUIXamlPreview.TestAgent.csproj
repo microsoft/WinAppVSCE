@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    TEST-ONLY VSIX. Never shipped and never installed into a normal VS hive: Test-VsIntegration.ps1 installs it
+    (beside the product VSIX) into the dedicated WinUIPreviewTest root suffix only. It is inert unless VS is
+    started with WINUI_PREVIEW_TEST_PIPE set; then it serves the IntegrationTests runner over that named pipe,
+    driving VS through DTE / editor APIs and reading product state through WinUIXamlPreview.Testing.TestHooks
+    (by reflection, so there is no compile-time coupling to the product assembly).
+
+    Same VSSDK quirks as the product (see WinUIXamlPreview.csproj): build with DESKTOP MSBuild, flat obj path,
+    hand-rolled pkgdef with CodeBase=.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>WinUIXamlPreview.TestAgent</RootNamespace>
+    <AssemblyName>WinUIXamlPreview.TestAgent</AssemblyName>
+    <GeneratePkgDefFile>false</GeneratePkgDefFile>
+    <CreateVsixContainer>true</CreateVsixContainer>
+    <DeployExtension>false</DeployExtension>
+    <NoWarn>$(NoWarn);VSTHRD010;VSTHRD012;VSTHRD109;VSTHRD002;VSTHRD100;VSTHRD110;VSTHRD200;VSSDK007</NoWarn>
+
+    <NuGetPackageRoot Condition="'$(NuGetPackageRoot)' == ''">$(UserProfile)\.nuget\packages\</NuGetPackageRoot>
+    <VSSDKTargetsPath Condition="'$(VSSDKTargetsPath)' == '' and '$(MSBuildRuntimeType)' != 'Core' and Exists('$(NuGetPackageRoot)microsoft.vssdk.buildtools\18.6.38345\tools\vssdk\Microsoft.VsSDK.targets')">$(NuGetPackageRoot)microsoft.vssdk.buildtools\18.6.38345\tools\vssdk</VSSDKTargetsPath>
+    <DotnetVsixBuild Condition="'$(DotnetVsixBuild)' == '' and '$(MSBuildRuntimeType)' != 'Core' and Exists('$(VSSDKTargetsPath)\Microsoft.VsSDK.targets')">false</DotnetVsixBuild>
+    <DotnetVsixBuild Condition="'$(DotnetVsixBuild)' == ''">true</DotnetVsixBuild>
+    <AppendTargetFrameworkToOutputPath Condition="'$(DotnetVsixBuild)' != 'true'">false</AppendTargetFrameworkToOutputPath>
+    <BaseIntermediateOutputPath Condition="'$(DotnetVsixBuild)' != 'true'">obj\</BaseIntermediateOutputPath>
+    <IntermediateOutputPath Condition="'$(DotnetVsixBuild)' != 'true'">obj\$(Configuration)\</IntermediateOutputPath>
+    <TargetName Condition="'$(TargetName)' == ''">$(AssemblyName)</TargetName>
+    <TargetVsixContainerName Condition="'$(DotnetVsixBuild)' != 'true' and '$(TargetVsixContainerName)' == ''">$(AssemblyName).vsix</TargetVsixContainerName>
+    <TargetVsixContainer Condition="'$(DotnetVsixBuild)' != 'true' and '$(TargetVsixContainer)' == ''">$(MSBuildProjectDirectory)\bin\$(Configuration)\$(AssemblyName).vsix</TargetVsixContainer>
+    <FileManifest Condition="'$(DotnetVsixBuild)' != 'true' and '$(FileManifest)' == ''">$(MSBuildProjectDirectory)\$(IntermediateOutputPath)files.json</FileManifest>
+    <TemplateFileManifest Condition="'$(DotnetVsixBuild)' != 'true' and '$(TemplateFileManifest)' == ''">$(MSBuildProjectDirectory)\$(IntermediateOutputPath)templateFiles.json</TemplateFileManifest>
+    <ResourceManifest Condition="'$(DotnetVsixBuild)' != 'true' and '$(ResourceManifest)' == ''">$(MSBuildProjectDirectory)\$(IntermediateOutputPath)resources.json</ResourceManifest>
+    <CreatePkgDefAssemblyToProcess Condition="'$(DotnetVsixBuild)' != 'true' and '$(CreatePkgDefAssemblyToProcess)' == ''">$(MSBuildProjectDirectory)\bin\$(Configuration)\$(AssemblyName).dll</CreatePkgDefAssemblyToProcess>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.6.38345" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
+    <PackageReference Include="MessagePack" Version="2.5.301" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="WinUIXamlPreview.TestAgent.pkgdef" CopyToOutputDirectory="PreserveNewest">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
+
+  <Import Project="$(VSSDKTargetsPath)\Microsoft.VsSDK.targets" Condition="'$(DotnetVsixBuild)' != 'true' and Exists('$(VSSDKTargetsPath)\Microsoft.VsSDK.targets')" />
+
+  <Target Name="CreateDesktopVsixContainerAfterBuild" AfterTargets="Build" DependsOnTargets="GeneratePkgDef;CopyPkgDef;CreateVsixContainer" Condition="'$(DotnetVsixBuild)' != 'true' and '$(CreateVsixContainer)' == 'true'" />
+
+</Project>

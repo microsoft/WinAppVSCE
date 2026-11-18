@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:lib="using:TestFixtureLib">
+    <StackPanel Padding="16" Spacing="12">
+        <lib:LibBadge Label="From another project" />
+        <lib:LibStack>
+            <TextBlock Text="First" />
+            <TextBlock Text="Second" />
+        </lib:LibStack>
+    </StackPanel>
+</Page>

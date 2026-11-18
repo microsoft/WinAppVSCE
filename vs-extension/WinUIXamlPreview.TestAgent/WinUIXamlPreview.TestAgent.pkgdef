@@ -1,0 +1,11 @@
+; Test-only agent. Background-autoloads on ShellInitialized; inert unless WINUI_PREVIEW_TEST_PIPE is set.
+
+[$RootKey$\Packages\{6b0c3a4e-2f5d-4b8e-9a51-7c3e2d9f1a60}]
+@="WinUIXamlPreview.TestAgent.TestAgentPackage"
+"InprocServer32"="$WinDir$\SYSTEM32\MSCOREE.DLL"
+"Class"="WinUIXamlPreview.TestAgent.TestAgentPackage"
+"CodeBase"="$PackageFolder$\WinUIXamlPreview.TestAgent.dll"
+"AllowsBackgroundLoad"=dword:00000001
+
+[$RootKey$\AutoLoadPackages\{E80EF1CB-6D64-4609-8FAA-FEACFD3BC89F}]
+"{6b0c3a4e-2f5d-4b8e-9a51-7c3e2d9f1a60}"=dword:00000002
