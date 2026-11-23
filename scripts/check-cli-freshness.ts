@@ -78,12 +78,13 @@ if (short === pinned.commit) {
     console.log('[cli-freshness] Re-sync with .github/skills/devtools-cli-sync/AGENTS.md.');
 }
 
-const run = gh([
-    'api',
-    `repos/${pinned.repository}/actions/runs?branch=${pinned.branch}&status=success&per_page=20`,
-    '--jq',
-    `[.workflow_runs[] | select(.name == "${WORKFLOW_NAME}")] | first | {id: .id, sha: .head_sha, date: .created_at}`,
-]) as { id: number; sha: string; date: string } | null | undefined;
+// Filter by workflow on the server: other workflows can fill the newest runs on the branch.
+const runs = gh([
+    'run', 'list', '-R', pinned.repository, '--branch', pinned.branch, '--workflow', WORKFLOW_NAME,
+    '--status', 'success', '--limit', '1', '--json', 'databaseId,headSha,createdAt',
+]) as { databaseId: number; headSha: string; createdAt: string }[] | undefined;
+const latest = runs?.[0];
+const run = latest ? { id: latest.databaseId, sha: latest.headSha, date: latest.createdAt } : undefined;
 
 if (!run) {
     console.log(`[cli-freshness] No successful "${WORKFLOW_NAME}" run found on ${pinned.branch}.`);
