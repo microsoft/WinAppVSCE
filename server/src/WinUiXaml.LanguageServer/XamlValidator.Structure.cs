@@ -321,6 +321,24 @@ internal static partial class XamlValidator
             $"The resource '{key}' of type '{resourceType.Name}' cannot be assigned to '{attribute.Name.LocalName}' ({target.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)})."));
     }
 
+    /// <summary>True for an event (Click, Button.Click, local:Owner.Event) or a non-member directive (x:Name, d:Text).</summary>
+    private static bool IsEventOrDirectiveAttribute(
+        XamlName name, INamedTypeSymbol elementType, XamlNamespaceScope scope, XamlTypeSystem typeSystem)
+    {
+        int dot = name.LocalName.LastIndexOf('.');
+        if (dot < 0)
+        {
+            return name.HasPrefix ||
+                typeSystem.FindAttributeMember(elementType, name.LocalName) is { Kind: XamlMemberKind.Event };
+        }
+
+        return !scope.TryResolvePrefix(name.Prefix, out var uri) ||
+            uri == XamlTypeSystem.XamlLanguageNamespace ||
+            XamlNamespaces.IsDesignTime(uri) ||
+            (typeSystem.ResolveType(uri, name.LocalName[..dot]) is { } owner &&
+             typeSystem.FindMember(owner, name.LocalName[(dot + 1)..]) is { Kind: XamlMemberKind.Event });
+    }
+
     private static void ValidateBindTargetMember(
         XamlAttribute attribute, INamedTypeSymbol? elementType, INamedTypeSymbol bindRoot,
         INamedTypeSymbol? pageClass, XamlNamespaceScope scope, XamlTypeSystem typeSystem,
@@ -328,8 +346,7 @@ internal static partial class XamlValidator
     {
         // Any non-event attribute can host the property-only checks; event attributes bind methods legitimately.
         if (elementType is null ||
-            attribute.Name.HasPrefix ||
-            typeSystem.FindAttributeMember(elementType, attribute.Name.LocalName) is { Kind: XamlMemberKind.Event } ||
+            IsEventOrDirectiveAttribute(attribute.Name, elementType, scope, typeSystem) ||
             attribute.Value?.MarkupExtension is not { IsClosed: true } extension ||
             !XamlSemanticFacts.IsXBind(extension, scope) ||
             extension.Arguments.FirstOrDefault(argument =>

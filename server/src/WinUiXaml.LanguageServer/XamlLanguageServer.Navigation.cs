@@ -97,7 +97,7 @@ internal sealed partial class XamlLanguageServer
         XamlTypeSystem typeSystem,
         List<(Lsp.Range Range, bool IsDeclaration)> occurrences)
     {
-        var declaration = XamlSemanticFacts.FindElementNameBindingTarget(doc, context, name, typeSystem);
+        var declaration = ResolveNameTarget(doc, context, name, typeSystem);
         var scopeContext = (XamlNode?)declaration ?? context;
         var inScope = new HashSet<XamlElement>(XamlSemanticFacts.EnumerateElementsInNameScope(doc, scopeContext, typeSystem));
         foreach (var element in inScope)
@@ -122,6 +122,12 @@ internal sealed partial class XamlLanguageServer
             }
         }
     }
+
+    /// <summary>The element a name at context refers to; only a classic ElementName argument looks outside template namescopes.</summary>
+    internal static XamlElement? ResolveNameTarget(TextDocument doc, XamlNode? context, string name, XamlTypeSystem typeSystem) =>
+        context is XamlMarkupExtensionArgument { Name.LocalName: "ElementName" }
+            ? XamlSemanticFacts.FindElementNameBindingTarget(doc, context, name, typeSystem)
+            : XamlSemanticFacts.FindNamedElementInScope(doc, context, name, typeSystem);
 
     /// <summary>Every classic Binding ElementName argument in the document.</summary>
     internal static List<(XamlElement Element, XamlAttribute Attribute, string Name, TextSpan Span)> EnumerateElementNameReferences(
@@ -543,7 +549,7 @@ internal sealed partial class XamlLanguageServer
     {
         // Check the declaration's scope, which may enclose the template the caret is in.
         var context = doc.Parsed.FindNode(offset);
-        var scopeContext = (XamlNode?)XamlSemanticFacts.FindElementNameBindingTarget(doc, context, name, typeSystem) ?? context;
+        var scopeContext = (XamlNode?)ResolveNameTarget(doc, context, name, typeSystem) ?? context;
         foreach (var element in XamlSemanticFacts.EnumerateElementsInNameScope(doc, scopeContext, typeSystem))
         {
             foreach (var extension in element.Attributes.SelectMany(attribute =>
@@ -771,7 +777,7 @@ internal sealed partial class XamlLanguageServer
         }
 
         var (name, referenceSpan) = reference.Value;
-        var declarationElement = XamlSemanticFacts.FindElementNameBindingTarget(
+        var declarationElement = ResolveNameTarget(
             doc,
             doc.Parsed.FindNode(referenceSpan.Start),
             name,

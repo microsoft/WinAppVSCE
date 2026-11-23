@@ -491,9 +491,10 @@ public class XamlRenameTests
     }
 
     [Theory]
-    [InlineData("Out|er", "Inner", "Inner")]
-    [InlineData("Outer", "In|ner", "Outer")]
-    public void Rename_RefusesWhenTemplateElementNameWouldResolveDifferently(string outer, string inner, string newName)
+    [InlineData("Out|er", "Inner", "Inner", "Outer")]
+    [InlineData("Outer", "In|ner", "Outer", "Outer")]
+    [InlineData("Out|er", "Inner", "Missing", "Missing")]
+    public void Rename_RefusesWhenTemplateElementNameWouldResolveDifferently(string outer, string inner, string newName, string reference)
     {
         var (doc, offset) = Caret($$"""
             <Page xmlns="using:Microsoft.UI.Xaml"
@@ -502,7 +503,7 @@ public class XamlRenameTests
               <controls:Grid x:Name="{{outer}}" />
               <DataTemplate>
                 <controls:Grid x:Name="{{inner}}" />
-                <controls:TextBox Text="{Binding ElementName=Outer}" />
+                <controls:TextBox Text="{Binding ElementName={{reference}}}" />
               </DataTemplate>
             </Page>
             """);
@@ -889,6 +890,23 @@ public class XamlRenameTests
         var edits = RenameEdits(buffer, "Pivot", CreateFrameworkTypeSystem());
         Assert.Equal(3, edits.Count); // declaration + RightOf + AlignTopWith
         Assert.All(edits, e => Assert.Equal("Pivot", e.NewText));
+    }
+
+    [Fact]
+    public void References_DanglingTargetNameInTemplateDoesNotReachOuterElement()
+    {
+        var (doc, offset) = Caret(
+            "<Grid xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
+            "xmlns:anim=\"using:Microsoft.UI.Xaml.Media.Animation\">\n" +
+            "  <Border x:Name=\"Hero\" />\n" +
+            "  <DataTemplate>\n" +
+            "    <DoubleAnimation anim:Storyboard.TargetName=\"He|ro\" />\n" +
+            "  </DataTemplate>\n" +
+            "</Grid>");
+
+        var occurrences = XamlLanguageServer.ResolveOccurrences(doc, doc.Parsed.Root!, offset, CreateFrameworkTypeSystem());
+
+        Assert.DoesNotContain(occurrences ?? [], occurrence => occurrence.IsDeclaration);
     }
 
     [Fact]

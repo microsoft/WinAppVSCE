@@ -2466,6 +2466,7 @@ public class XamlValidatorTests
     [InlineData("<ui:ResourceDictionary><Child /></ui:ResourceDictionary>", XamlValidator.MissingResourceKeyCode)]
     [InlineData("<ui:ResourceDictionary><x:String>a</x:String></ui:ResourceDictionary>", XamlValidator.MissingResourceKeyCode)]
     [InlineData("<ui:ResourceDictionary><ui:DataTemplate /></ui:ResourceDictionary>", XamlValidator.MissingResourceKeyCode)]
+    [InlineData("<ui:ResourceDictionary><ui:Style /></ui:ResourceDictionary>", XamlValidator.MissingResourceKeyCode)]
     [InlineData("""<Child Text="{x:Static local:BindStatics.Flag}" />""", XamlValidator.UnsupportedMarkupExtensionCode)]
     [InlineData("""<Child Text="{x:Type local:Child}" />""", XamlValidator.UnsupportedMarkupExtensionCode)]
     [InlineData("""<Child Text="{ui:DynamicResource Key}" />""", XamlValidator.UnsupportedMarkupExtensionCode)]
@@ -2535,6 +2536,8 @@ public class XamlValidatorTests
         Assert.Contains(Validate(Page("""Text="{x:Bind local:BindStatics.Format}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
         Assert.Contains(Validate(Page("""Grid.Row="{x:Bind local:BindStatics.Format}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
         Assert.Contains(Validate(Page("""Grid.Row="{x:Bind Zero}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
+        Assert.Contains(Validate(Page("""local:Grid.Row="{x:Bind local:BindStatics.Format}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
+        Assert.DoesNotContain(Validate(Page("""Page.Clicked="{x:Bind OnClick}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
         Assert.DoesNotContain(Validate(Page("""Text="{x:Bind Zero()}" """)), d => d.Code == XamlValidator.BindMethodWithoutCallCode);
 
         Assert.Contains(Validate(Page("""Text="{x:Bind Child.Name, Mode=TwoWay}" """)), d => d.Code == XamlValidator.ReadOnlyTwoWayBindCode);

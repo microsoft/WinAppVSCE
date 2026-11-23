@@ -161,7 +161,10 @@ internal static partial class CompletionProvider
     {
         for (var node = doc.Parsed.FindNode(Math.Max(0, ctx.ReplaceStart - 2)); node != null; node = node.Parent)
         {
-            if (node is XamlElement { Name: not null } enclosing && enclosing.Span.Start < ctx.ReplaceStart - 1)
+            // A sibling that closed right before the new '<' (<A/><|) is not the enclosing element.
+            if (node is XamlElement { Name: not null } enclosing &&
+                enclosing.Span.Start < ctx.ReplaceStart - 1 &&
+                enclosing.Span.End > ctx.ReplaceStart - 1)
             {
                 return XamlSemanticFacts.IsResourceDictionary(enclosing, typeSystem) ||
                     XamlSemanticFacts.IsResourceDictionaryPropertyElement(enclosing, typeSystem);
@@ -1306,12 +1309,13 @@ internal static partial class CompletionProvider
     {
         // x:DataType and SourcePageType name project types; TargetType keeps framework matches first.
         var sortPrefix = rankProjectTypesFirst ? "0" : "\uffff";
+        int caretEnd = doc.OffsetAt(replaceRange.End);
+        bool caretMidWord = caretEnd < doc.Text.Length && (char.IsLetterOrDigit(doc.Text[caretEnd]) || doc.Text[caretEnd] is ':' or '_');
         var defaultReachable = new HashSet<string>(typeSystem.ClrNamespacesForUri(defaultUri), StringComparer.Ordinal);
         foreach (var type in typeSystem.GetSourceTypes())
         {
             var clrNamespace = type.ContainingNamespace?.ToDisplayString();
-            if (!StartsWith(type.Name, local) ||
-                !IsUserInstanceType(type) ||
+            if (!IsUserInstanceType(type) ||
                 (!allTypeKinds && type.TypeKind != TypeKind.Class) ||
                 (requiredBaseType is not null && !XamlTypeSystem.IsAssignableTo(type, requiredBaseType)) ||
                 type.ContainingNamespace is null or { IsGlobalNamespace: true } ||
@@ -1321,8 +1325,9 @@ internal static partial class CompletionProvider
                 continue;
             }
 
+            // Match and filter on the full prefix:Type label so typing either the prefix or the type name finds it.
             var label = itemPrefix + ":" + type.Name;
-            if (!seen.Add(label))
+            if ((!StartsWith(type.Name, local) && (caretMidWord || !StartsWith(label, local))) || !seen.Add(label))
             {
                 continue;
             }
@@ -1335,7 +1340,7 @@ internal static partial class CompletionProvider
                 Detail = declarationEdit is null ? clrNamespace : $"{clrNamespace} (adds xmlns:{itemPrefix})",
                 TextEdit = new TextEdit { Range = replaceRange, NewText = label },
                 AdditionalTextEdits = declarationEdit is null ? null : new List<TextEdit> { declarationEdit },
-                FilterText = type.Name,
+                FilterText = label,
                 SortText = sortPrefix + type.Name,
             });
         }

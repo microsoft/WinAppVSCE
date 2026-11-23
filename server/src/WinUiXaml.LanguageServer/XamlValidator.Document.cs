@@ -263,7 +263,7 @@ internal static partial class XamlValidator
         }
     }
 
-    /// <summary>Only Style supports an implicit key (its TargetType); every other resolved entry needs x:Key.</summary>
+    /// <summary>Only a Style with a TargetType has an implicit key; every other resolved entry needs x:Key.</summary>
     private static bool RequiresExplicitResourceKey(XamlElement entry, XamlTypeSystem typeSystem)
     {
         if (entry.Name is not { IsDotted: false } name ||
@@ -279,7 +279,8 @@ internal static partial class XamlValidator
 
         return XamlSemanticFacts.ResolveElementType(entry, typeSystem) is { } entryType &&
             !XamlSemanticFacts.IsStaticResourceElement(name, uri) &&
-            !(typeSystem.Capabilities.Style is { } style && XamlTypeSystem.IsAssignableTo(entryType, style));
+            !(typeSystem.Capabilities.Style is { } style && XamlTypeSystem.IsAssignableTo(entryType, style) &&
+              entry.GetAttribute("TargetType") is not null);
     }
 
     private static bool IsThemeDictionariesPropertyElement(

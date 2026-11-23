@@ -135,6 +135,13 @@ public sealed class AttributeCompletionTests
             public class RowDefinitionCollection : System.Collections.Generic.List<TestApp.RowDefinition> { }
             public class ColumnDefinitionCollection : System.Collections.Generic.List<TestApp.ColumnDefinition> { }
             public class ControlTemplate : Microsoft.UI.Xaml.ControlTemplate { }
+            public class Page : Microsoft.UI.Xaml.DependencyObject { }
+            public class Frame : Microsoft.UI.Xaml.DependencyObject { public System.Type SourcePageType { get; set; } = typeof(object); }
+        }
+
+        namespace TestApp.Views
+        {
+            public sealed class SettingsPage : Microsoft.UI.Xaml.Controls.Page { }
         }
 
         namespace Microsoft.UI.Xaml.Media.Animation
@@ -573,6 +580,15 @@ public sealed class AttributeCompletionTests
         Assert.DoesNotContain(items, item => item.Label == "ItemViewModel");
         Assert.DoesNotContain(items, item => item.Label == "AppShell");
 
+        // A '<' typed straight after a self-closing entry is still a dictionary child.
+        Assert.Contains("x:String", CompleteLabels("""
+            <Page xmlns="using:TestApp" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Page.Resources>
+                <Button x:Key="A"/><|
+              </Page.Resources>
+            </Page>
+            """));
+
         var outside = CompleteLabels("""
             <Page xmlns="using:TestApp" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
               <|
@@ -594,7 +610,23 @@ public sealed class AttributeCompletionTests
         Assert.Equal("converters:ItemViewModel", viewModel.TextEdit!.NewText);
         Assert.NotNull(viewModel.AdditionalTextEdits);
         Assert.StartsWith("0", viewModel.SortText);
+        Assert.Equal("converters:ItemViewModel", viewModel.FilterText);
         Assert.DoesNotContain(dataTypes, item => item.Label is "converters:AppShell" or "converters:Formatting");
+
+        // Typing the xmlns prefix still finds the project type.
+        Assert.Contains(CompleteLabels("""
+            <Page xmlns="using:TestApp" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Button x:DataType="conv|" />
+            </Page>
+            """), label => label == "converters:ItemViewModel");
+
+        // SourcePageType offers only Pages, project pages first.
+        var pages = CompleteItems("""
+            <Frame xmlns="using:Microsoft.UI.Xaml.Controls" SourcePageType="|" />
+            """);
+        var settings = Assert.Single(pages, item => item.Label == "views:SettingsPage");
+        Assert.StartsWith("0", settings.SortText);
+        Assert.DoesNotContain(pages, item => item.Label.EndsWith("ItemViewModel", StringComparison.Ordinal));
 
         var targetTypeItems = CompleteItems("""
             <Style xmlns="using:Microsoft.UI.Xaml" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"

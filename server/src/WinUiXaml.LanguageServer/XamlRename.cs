@@ -217,11 +217,11 @@ internal static class XamlRename
         {
             var current = XamlSemanticFacts.FindElementNameBindingTarget(doc, reference.Attribute, reference.Name, typeSystem);
 
-            // A renamed reference must not be shadowed by newName, and a newName reference must not be captured.
+            // A renamed reference must not be shadowed by newName, and a newName reference (even an unresolved one) must not be captured.
             if ((reference.Name == oldName && ReferenceEquals(current, declaration) &&
                  XamlSemanticFacts.FindElementNameBindingTarget(doc, reference.Attribute, newName, typeSystem) is { } other &&
                  IsFoundFirst(doc, reference.Attribute, other, declaration, typeSystem)) ||
-                (reference.Name == newName && current is not null &&
+                (reference.Name == newName &&
                  IsFoundFirst(doc, reference.Attribute, declaration, current, typeSystem)))
             {
                 return true;
@@ -231,9 +231,9 @@ internal static class XamlRename
         return false;
     }
 
-    /// <summary>True when an ElementName lookup from context reaches first's namescope before second's, regardless of names.</summary>
+    /// <summary>True when an ElementName lookup from context reaches first's namescope before second's (or at all, when second is null).</summary>
     private static bool IsFoundFirst(
-        TextDocument doc, XamlNode context, XamlElement first, XamlElement second, XamlTypeSystem typeSystem)
+        TextDocument doc, XamlNode context, XamlElement first, XamlElement? second, XamlTypeSystem typeSystem)
     {
         foreach (var (_, element) in XamlSemanticFacts.EnumerateElementNameBindingTargets(doc, context, typeSystem, includeShadowed: true))
         {
