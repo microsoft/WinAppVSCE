@@ -87,9 +87,10 @@ function createHost(trusted = false) {
 			console,
 			require: (request: string) => {
 				if (request in imports) { return imports[request]; }
-				if (request === './workspace-trust' || request === './new-command') {
-					return loadSource(request.slice(2));
+				if (request === './workspace-trust' || request === '../workspace-trust' || request === './new-command') {
+					return loadSource(request.replace(/^\.\.?\//, ''));
 				}
+				if (request === './devtools/commands') { return loadSource('devtools/commands'); }
 				if (!request.startsWith('.')) { return nodeRequire(request); }
 				return new Proxy({}, {
 					get: (_target, key) => {
@@ -123,7 +124,7 @@ test('every trust-gated command is hidden from the Command Palette until trusted
 		.filter((command: string) => !command.startsWith('winapp.xaml.') && command !== 'winapp.openManifestEditor');
 	assert.ok(host.commands.size > 0);
 	for (const command of gated) {
-		assert.equal(palette.get(command), 'isWorkspaceTrusted', `${command} is hidden in Restricted Mode`);
+		assert.match(palette.get(command) ?? '', /^isWorkspaceTrusted(?: && .+)?$/, `${command} is hidden in Restricted Mode`);
 	}
 	assert.equal(palette.get('winapp.openManifestEditor'), undefined, 'manifest editing stays available');
 });

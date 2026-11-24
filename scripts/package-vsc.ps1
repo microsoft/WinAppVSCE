@@ -205,8 +205,8 @@ try
     if ($resolvedCliBin -and $resolvedVscBin -and ($resolvedCliBin -eq $resolvedVscBin)) {
         Write-Host "  CLI binaries already in place (source = destination)" -ForegroundColor Gray
     } else {
-        Copy-Item "$CliBinariesPath\win-x64\*.exe" "$VscBinPath\win-x64\" -Force
-        Copy-Item "$CliBinariesPath\win-arm64\*.exe" "$VscBinPath\win-arm64\" -Force
+        Copy-Item "$CliBinariesPath\win-x64\*" "$VscBinPath\win-x64\" -Recurse -Exclude '*.pdb' -Force
+        Copy-Item "$CliBinariesPath\win-arm64\*" "$VscBinPath\win-arm64\" -Recurse -Exclude '*.pdb' -Force
     }
 
     # Sync manifest schemas from NuGet cache after the CLI binaries are available
@@ -326,6 +326,15 @@ try
             Write-Host "[VALIDATE] Embedded extension version: $($Matches[1])" -ForegroundColor Green
         } finally {
             $VsixArchive.Dispose()
+        }
+
+        # Fail loudly if packaging dropped part of the CLI payload (the DevTools
+        # engine needs sidecar files that only fail at runtime when missing).
+        $VerifyScript = Join-Path $PSScriptRoot "verify-vsix-payload.ps1"
+        & $VerifyScript -VsixPath $CreatedVsix.FullName -BinPath $CliBinariesPath
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "VSIX payload verification failed; the package is incomplete."
+            exit 1
         }
 
         $VsixSize = [math]::Round($CreatedVsix.Length / 1MB, 2)

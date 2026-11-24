@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="SmokeFixture.DevToolsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Read by the DevTools E2E specs: renaming an element or changing a value fails them. -->
+    <Grid x:Name="FixtureRoot">
+        <StackPanel x:Name="FixturePanel" Margin="24" Spacing="12">
+            <TextBlock x:Name="FixtureHeading" Text="DevTools Fixture" FontSize="24" />
+            <TextBlock x:Name="FixtureBoundLabel" Text="{Binding Title, Mode=OneWay}" />
+            <Button x:Name="FixtureButton" Content="Fixture Button" />
+        </StackPanel>
+    </Grid>
+</Page>

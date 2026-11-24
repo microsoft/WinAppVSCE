@@ -1,3 +1,8 @@
 {
-  "releaseTag": "v0.8.0"
+  "ciBuild": {
+    "runId": 42685220193,
+    "artifactId": 13704209576,
+    "commit": "cf21887f60965dfaff887d5a3ebd5a48f110818d",
+    "sha256": "fea2d78ca9bcbfad7a3191a59d6dd2561b4b29d703075d1716e564ff5c166dda"
+  }
 }

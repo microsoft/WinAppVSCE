@@ -110,15 +110,22 @@ export function createTempWorkspace(fixtureName: string): string {
 /**
  * Launches VS Code with the extension under test, opens the given workspace,
  * and returns the Electron app + main window page.
+ *
+ * `openManifest` controls whether an AppxManifest.xml in the workspace root is
+ * passed on the command line. The DevTools spec uses a workspace that has no
+ * manifest at all, so it opts out.
  */
-export async function launchVSCode(workspacePath: string): Promise<VSCodeTestContext> {
-    const manifestPath = path.join(workspacePath, 'AppxManifest.xml');
+export async function launchVSCode(
+    workspacePath: string,
+    options: { openManifest?: boolean } = {},
+): Promise<VSCodeTestContext> {
+    const { openManifest = true } = options;
     const userDataDir = prepareUserDataDir();
     const app = await electron.launch({
         executablePath: VSCODE_EXE,
         args: [
             workspacePath,
-            manifestPath,
+            ...(openManifest ? [path.join(workspacePath, 'AppxManifest.xml')] : []),
             '--new-window',
             `--user-data-dir=${userDataDir}`,
             ...EXTENSION_ARGS,
@@ -143,17 +150,36 @@ export async function launchVSCode(workspacePath: string): Promise<VSCodeTestCon
  * "Make It Yours"), which is modal and blocks the command palette. Dismiss it.
  */
 async function dismissStartupDialogs(page: Page): Promise<void> {
-    for (let i = 0; i < 5; i++) {
+    // The onboarding overlay can arrive seconds after the window settles, so keep looking briefly.
+    const deadline = Date.now() + 12_000;
+    let dismissed = 0;
+    while (Date.now() < deadline && dismissed < 5) {
         const close = page.getByRole('button', { name: /^Close$/i }).first();
         const skipSignIn = page.getByRole('button', { name: /Continue without Signing In/i }).first();
-        if (await close.isVisible({ timeout: 2_000 }).catch(() => false)) {
+        const onboarding = page.locator('.onboarding-a-overlay.visible, [role="dialog"][aria-label^="Welcome to Visual Studio Code"]').first();
+        if (await close.isVisible({ timeout: 500 }).catch(() => false)) {
             await close.click();
-        } else if (await skipSignIn.isVisible({ timeout: 1_000 }).catch(() => false)) {
+        } else if (await skipSignIn.isVisible({ timeout: 500 }).catch(() => false)) {
             await skipSignIn.click();
+        } else if (await onboarding.isVisible({ timeout: 500 }).catch(() => false)) {
+            await page.keyboard.press('Escape');
         } else {
-            return;
+            await page.waitForTimeout(1_000);
+            continue;
         }
+        dismissed++;
         await page.waitForTimeout(1_500);
+    }
+}
+
+/** Dismisses first-run dialogs that appeared after launch, before a test points at the page. */
+export async function dismissLateStartupDialogs(page: Page): Promise<void> {
+    const onboarding = page.locator('.onboarding-a-overlay.visible').first();
+    for (let i = 0; i < 3 && await onboarding.isVisible({ timeout: 500 }).catch(() => false); i++) {
+        const close = onboarding.getByRole('button', { name: /^(Close|Skip|Continue without Signing In)$/i }).first();
+        if (await close.isVisible({ timeout: 500 }).catch(() => false)) { await close.click(); }
+        else { await page.keyboard.press('Escape'); }
+        await page.waitForTimeout(1_000);
     }
 }
 
@@ -195,20 +221,54 @@ export async function runCommand(page: Page, command: string): Promise<void> {
  * Useful for re-acquiring the frame after the webview reloads (e.g., fixture swap).
  */
 export async function getWebviewFrame(page: Page): Promise<FrameLocator> {
+    return getWebviewFrameWaitingFor(page, '.tab-bar');
+}
+
+/**
+ * Locates a VS Code webview frame and waits for a caller-supplied selector.
+ *
+ * The frame-tree walk is identical for every webview this extension renders;
+ * only the "is it ready" signal differs, so the manifest editor and the
+ * DevTools panel share this and pass their own root selector.
+ *
+ * `timeout` applies to each phase separately rather than to the pair. Sharing
+ * one budget means a slow frame appearance eats the rendering budget, which is
+ * a silent regression on a loaded CI runner.
+ */
+export async function getWebviewFrameWaitingFor(
+    page: Page,
+    readySelector: string,
+    timeout = 15_000,
+): Promise<FrameLocator> {
     // The custom editor renders inside VS Code webview frames.
     // VS Code uses a named iframe for the webview container, and a nested
     // iframe with name="pending-frame" (or "active-frame") for the actual content.
     // We navigate the frame tree to find the inner content frame.
-    const webviewOuterFrame = page.frames().find(f => f.url().includes('vscode-webview://') && !f.url().includes('fake.html'));
+    //
+    // page.frames() is a snapshot, so poll: a webview opened in response to an
+    // async action (such as a debug launch) does not exist yet when this is
+    // first called.
+    const deadline = Date.now() + timeout;
+    let webviewOuterFrame = findWebviewOuterFrame(page);
+    while (!webviewOuterFrame && Date.now() < deadline) {
+        await page.waitForTimeout(500);
+        webviewOuterFrame = findWebviewOuterFrame(page);
+    }
     if (!webviewOuterFrame) {
         throw new Error('Could not find webview outer frame');
     }
     const innerFrame = webviewOuterFrame.frameLocator('#active-frame');
 
-    // Wait for the editor to render (the tab bar should appear)
-    await innerFrame.locator('.tab-bar').waitFor({ state: 'visible', timeout: 15_000 });
+    await innerFrame.locator(readySelector).waitFor({
+        state: 'visible',
+        timeout,
+    });
 
     return innerFrame;
+}
+
+function findWebviewOuterFrame(page: Page) {
+    return page.frames().find(f => f.url().includes('vscode-webview://') && !f.url().includes('fake.html'));
 }
 
 /**

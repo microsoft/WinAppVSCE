@@ -36,6 +36,23 @@ test('shows at least one application card', async () => {
     expect(cards).toBeGreaterThanOrEqual(1);
 });
 
+test('cancelling the color picker preserves a transparent manifest background', async () => {
+    await switchAppSubTab(frame, 0, 'visual');
+    const selector = '[data-field-name="visualElements.backgroundColor"]';
+    const text = frame.locator('input[type="text"]' + selector);
+    await text.fill('transparent');
+    await text.dispatchEvent('input');
+    await waitForDebounce(ctx.page);
+    await readManifestXml(ctx.page, ctx.workspacePath, 'BackgroundColor="transparent"');
+    await frame.locator('input[type="color"]' + selector).dispatchEvent('mousedown');
+    await frame.locator('.wcp-preset').nth(3).click();
+    await frame.locator('.wcp-hex').press('Escape');
+    await expect(text).toHaveValue('transparent');
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'BackgroundColor="transparent"');
+    expect(xml).toContain('BackgroundColor="transparent"');
+    await switchAppSubTab(frame, 0, 'info');
+});
+
 test('application card has title', async () => {
     const title = frame.locator('.app-card').first().locator('.app-card-title');
     await expect(title).toBeVisible();

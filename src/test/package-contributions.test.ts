@@ -245,8 +245,11 @@ describe('package.json contributions', () => {
 		const properties = manifest.contributes.debuggers[0].configurationAttributes.launch.properties;
 
 		// Not run options: the positional input, its deprecated alias, and the
-		// two keys the adapter itself consumes.
-		const adapterOwned = new Set(['input', 'inputFolder', 'debuggerType', 'workingDirectory', 'port']);
+		// keys the adapter itself consumes (including the DevTools launch keys).
+		const adapterOwned = new Set([
+			'input', 'inputFolder', 'debuggerType', 'workingDirectory', 'port',
+			'devTools', 'noDebug'
+		]);
 		const declared = new Set(Object.keys(properties).filter(name => !adapterOwned.has(name)));
 
 		for (const option of RUN_OPTIONS) {

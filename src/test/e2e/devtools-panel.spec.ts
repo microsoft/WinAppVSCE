@@ -1,0 +1,382 @@
+/**
+ * E2E tests: the WinUI DevTools panel, driven against a real running WinUI app.
+ *
+ * This is the only test that covers `devtools-panel.ts` and the panel's webview
+ * running inside real VS Code against a real DevTools engine. Everything below
+ * the panel (the JSON-RPC client, the protocol types) has fast unit coverage;
+ * what is unique here is the wiring — F5 launches the app, the extension spawns
+ * `winapp run --devtools`, connects over the named pipe, and renders the tree.
+ *
+ * The launch config sets `noDebug`, so no language-debugger extension is needed.
+ * That keeps the spec runnable on a clean machine and in CI.
+ */
+
+import { test, expect } from '@playwright/test';
+import { spawnSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+import {
+    launchVSCode,
+    getWebviewFrameWaitingFor,
+    dismissLateStartupDialogs,
+    teardown,
+    type VSCodeTestContext,
+} from './helpers';
+import {
+    ensureFixtureAppBuilt,
+    createDevToolsWorkspace,
+    cliSupportsDevTools,
+    readOverlayState,
+    FIXTURE_APP_DIR,
+    type OverlayState,
+} from './devtools-fixture';
+import { NO_HIGHLIGHT } from '../../devtools/overlay';
+import { DevToolsClient } from '../../devtools/devtools-client';
+import { RUN_EXIT_GRACE_MS } from '../../process-tree';
+
+// One VS Code instance and one launched app shared by the whole file: starting a
+// WinUI app per test would multiply the slowest part of the run.
+test.describe.configure({ mode: 'serial' });
+
+let ctx: VSCodeTestContext | undefined;
+let launchFailure: string | undefined;
+
+/** The DevTools panel's webview root; present only once the panel has rendered. */
+const TREE_VIEWPORT = '#tree-viewport';
+
+function devToolsCliPath(): string {
+    const arch = process.arch === 'arm64' ? 'win-arm64' : 'win-x64';
+    return path.resolve(__dirname, '..', '..', '..', 'bin', arch, 'winapp.exe');
+}
+
+function fixtureProcessId(): number {
+    const result = spawnSync(
+        devToolsCliPath(),
+        ['devtools', 'list', '--include-available', '--json'],
+        { encoding: 'utf-8', timeout: 60_000 },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const parsed = JSON.parse(result.stdout) as {
+        apps?: { processId?: number; processName?: string }[];
+    };
+    const app = parsed.apps?.find(candidate => candidate.processName === 'SmokeFixture');
+    expect(app?.processId).toBeTruthy();
+    return app!.processId!;
+}
+
+function readNativeWindowOpen(): boolean {
+    const result = spawnSync(
+        devToolsCliPath(),
+        ['devtools', 'call', 'Window.getState', '-a', 'SmokeFixture', '--json'],
+        { encoding: 'utf-8', timeout: 60_000 },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const parsed = JSON.parse(result.stdout) as { result?: { open?: boolean }; open?: boolean };
+    return parsed.result?.open ?? parsed.open ?? true;
+}
+
+function hasDotnet(): boolean {
+    const probe = spawnSync('dotnet', ['--version'], { shell: true, encoding: 'utf-8' });
+    return probe.status === 0;
+}
+
+test.beforeAll(async () => {
+    // A cold build restores the Windows App SDK, which dominates this budget.
+    test.setTimeout(20 * 60_000);
+
+    if (!hasDotnet()) {
+        launchFailure = 'the .NET SDK is not available';
+        return;
+    }
+
+    // Probed before the fixture is built: without DevTools CLI support the app
+    // cannot launch at all, so building it would waste several minutes.
+    if (!cliSupportsDevTools()) {
+        launchFailure = 'the winapp CLI in bin/ does not support "run --devtools"';
+        return;
+    }
+
+    const inputFolder = ensureFixtureAppBuilt();
+    const workspace = createDevToolsWorkspace(inputFolder);
+
+    // The workspace holds only a launch.json — there is no manifest to open.
+    ctx = await launchVSCode(workspace, { openManifest: false });
+
+    // F5 runs the sole configuration in launch.json.
+    await ctx.page.keyboard.press('F5');
+});
+
+test.afterAll(async () => {
+    test.setTimeout(RUN_EXIT_GRACE_MS + 30_000);
+    if (!ctx) {
+        return;
+    }
+    // Stop the debug session first so the extension's own teardown runs.
+    try {
+        await ctx.page.keyboard.press('Shift+F5');
+        // Keep the extension host alive until the CLI finishes unregistering.
+        await ctx.page.waitForTimeout(RUN_EXIT_GRACE_MS + 1_000);
+    } catch { /* window may already be gone */ }
+
+    await teardown(ctx);
+
+});
+
+/**
+ * Acquires the DevTools webview, failing with a useful message when the panel
+ * never appeared — otherwise every assertion in the file reports the same
+ * opaque frame-not-found error.
+ *
+ * The default budget is generous because the first acquisition covers a cold
+ * WinUI app start plus the engine handshake over the named pipe.
+ */
+async function devToolsFrame(timeout = 180_000) {
+    if (launchFailure) {
+        test.skip(true, `DevTools E2E skipped: ${launchFailure}`);
+    }
+    if (!ctx) {
+        throw new Error('VS Code was not launched');
+    }
+    const frame = await getWebviewFrameWaitingFor(ctx.page, TREE_VIEWPORT, timeout);
+    await dismissLateStartupDialogs(ctx.page);
+    return frame;
+}
+
+/**
+ * Polls the engine until the overlay reaches an expected state.
+ *
+ * The panel's overlay calls are fire-and-forget, so there is no moment at which
+ * the engine is guaranteed to have caught up with a pointer move.
+ */
+async function waitForOverlayState(
+    predicate: (state: OverlayState) => boolean,
+    timeout = 30_000,
+): Promise<OverlayState> {
+    const deadline = Date.now() + timeout;
+    let last: OverlayState | undefined;
+    while (Date.now() < deadline) {
+        last = readOverlayState();
+        if (last && predicate(last)) {
+            return last;
+        }
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    throw new Error(`Overlay never reached the expected state; last seen: ${JSON.stringify(last)}`);
+}
+
+test('launching with DevTools opens the panel and renders the visual tree @winui-app', async () => {
+    test.setTimeout(260_000);
+
+    const frame = await devToolsFrame();
+
+    // The tree is populated from the live app, so any rows at all prove the
+    // full chain: app launched, engine up, pipe connected, tree enumerated.
+    const rows = frame.locator('.tree-row');
+    await expect(rows.first()).toBeVisible({ timeout: 60_000 });
+    expect(await rows.count()).toBeGreaterThan(0);
+});
+
+// Deliberately placed before any test that selects an element: highlightTarget
+// falls back to the selection when the pointer leaves the tree, so a lingering
+// selection from an earlier test would mask the NO_HIGHLIGHT path.
+test('clearing the tree highlight leaves the app toolbar up @winui-app', async () => {
+    test.setTimeout(120_000);
+
+    const frame = await devToolsFrame();
+
+    // Read the overlay state from the engine itself rather than from the panel.
+    // The panel is the thing under test, so asking it to confirm its own effect
+    // would prove nothing; the CLI is a second, independent protocol client.
+    const initial = await waitForOverlayState(s => s.toolbarVisible);
+    expect(initial.highlightHandle).toBe(NO_HIGHLIGHT);
+
+    await frame.locator('#filter').fill('FixtureHeading');
+    const row = frame.locator('.tree-row', { hasText: 'FixtureHeading' }).first();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+
+    await row.hover();
+    const highlighted = await waitForOverlayState(s => s.highlightHandle !== NO_HIGHLIGHT);
+    expect(highlighted.toolbarVisible).toBe(true);
+
+    // Leaving the tree sends Overlay.highlight with the panel's NO_HIGHLIGHT
+    // sentinel. That the engine reads it as "nothing highlighted" — rather than
+    // as a real handle, or as a request to tear the overlay down — is the
+    // assumption src/devtools/overlay.ts encodes and this test pins.
+    await frame.locator('#filter').hover();
+    const cleared = await waitForOverlayState(s => s.highlightHandle === NO_HIGHLIGHT);
+    expect(cleared.toolbarVisible).toBe(true);
+
+    await frame.locator('#filter').fill('');
+});
+
+test('the tree contains the fixture app element names @winui-app', async () => {
+    test.setTimeout(120_000);
+
+    const frame = await devToolsFrame();
+
+    // Filter rather than expand: the tree is virtualised and collapsed by
+    // default, and filtering is itself part of the panel's contract.
+    const filter = frame.locator('#filter');
+    await filter.fill('FixtureButton');
+
+    const named = frame.locator('.tree-row .node-name', { hasText: 'FixtureButton' });
+    await expect(named.first()).toBeVisible({ timeout: 30_000 });
+});
+
+test('the tree reports the XAML file each element came from @winui-app', async () => {
+    test.setTimeout(120_000);
+
+    const frame = await devToolsFrame();
+
+    await frame.locator('#filter').fill('FixtureHeading');
+    const row = frame.locator('.tree-row', { hasText: 'FixtureHeading' }).first();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+
+    // Source attribution is what makes "go to source" possible; assert the
+    // element is traced back to the fixture's page, not just that it exists.
+    await expect(row.locator('.node-file')).toContainText('DevToolsPage.xaml');
+});
+
+test('the tree captions each row with the element\u2019s own text @winui-app', async () => {
+    test.setTimeout(120_000);
+
+    const frame = await devToolsFrame();
+
+    await frame.locator('#filter').fill('FixtureHeading');
+    const row = frame.locator('.tree-row', { hasText: 'FixtureHeading' }).first();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+
+    // Captions come from a second call (VisualTree.getPreviews) made only for
+    // the rows on screen, so this also proves the lazy fetch reaches the row
+    // the user is looking at. DevToolsPage.xaml sets Text="DevTools Fixture".
+    await expect(row.locator('.node-preview')).toContainText('DevTools Fixture', { timeout: 30_000 });
+});
+
+test('selecting an element populates the property grid @winui-app', async () => {    test.setTimeout(120_000);
+
+    const frame = await devToolsFrame();
+
+    await frame.locator('#filter').fill('FixtureHeading');
+    const row = frame.locator('.tree-row', { hasText: 'FixtureHeading' }).first();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await row.click();
+
+    // The header names the selected element and the grid fills with its
+    // properties — an empty grid here means the properties request failed.
+    await expect(frame.locator('#props-header')).toContainText('FixtureHeading', { timeout: 30_000 });
+    await expect(frame.locator('#props-viewport')).not.toBeEmpty();
+});
+
+test('the property grid shows a value set in the fixture XAML @winui-app', async () => {
+    test.setTimeout(120_000);
+
+    const frame = await devToolsFrame();
+
+    await frame.locator('#filter').fill('FixtureHeading');
+    const row = frame.locator('.tree-row', { hasText: 'FixtureHeading' }).first();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await row.click();
+    await expect(frame.locator('#props-header')).toContainText('FixtureHeading', { timeout: 30_000 });
+
+    // DevToolsPage.xaml sets Text="DevTools Fixture" on this element. Reading it
+    // back proves real property values cross the pipe, not just property names.
+    await frame.locator('#prop-filter').fill('Text');
+    await expect(frame.locator('#props-viewport')).toContainText('DevTools Fixture', { timeout: 30_000 });
+});
+
+test('switching to the Comments tab shows the comments view @winui-app', async () => {
+    test.setTimeout(120_000);
+
+    const frame = await devToolsFrame();
+
+    await frame.locator('#tab-comments').click();
+    await expect(frame.locator('#comments-viewport')).toBeVisible();
+    await expect(frame.locator('#compose-add')).toBeVisible();
+
+    // Return to the tree so a retry of a later test starts from the default view.
+    await frame.locator('#tab-tree').click();
+    await expect(frame.locator(TREE_VIEWPORT)).toBeVisible();
+});
+
+test('cancelling a staged literal and returning to Binding preserves the live binding @winui-app', async () => {
+    const frame = await devToolsFrame();
+    await frame.locator('#filter').fill('FixtureBoundLabel');
+    await frame.locator('.tree-row', { hasText: 'FixtureBoundLabel' }).last().click();
+    await expect(frame.locator('#props-header')).toContainText('FixtureBoundLabel');
+    await frame.locator('#prop-filter').fill('Text');
+    const row = frame.locator('.prow[data-prop="Text"]');
+    await row.locator('.pvalue').click();
+    const kind = row.getByRole('combobox', { name: 'Kind of value for Text' });
+    await kind.click();
+    await row.getByRole('option', { name: 'Text', exact: true }).click();
+    await row.getByRole('textbox', { name: 'Text', exact: true }).fill('do not write');
+    await row.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(row.locator('.pvalue')).toHaveText('Bound fixture');
+    await kind.click();
+    await row.getByRole('option', { name: 'Text', exact: true }).click();
+    await kind.click();
+    await row.getByRole('option', { name: 'A binding', exact: true }).click();
+    await expect(row.locator('.pstaged')).toHaveCount(0);
+    const read = spawnSync(devToolsCliPath(), ['devtools', 'get-property', 'FixtureBoundLabel', 'Text',
+        '-a', 'SmokeFixture', '--json'], { encoding: 'utf8' });
+    expect(read.status, read.stderr).toBe(0);
+    expect(read.stdout).toContain('Bound fixture');
+    expect(read.stdout).not.toContain('do not write');
+});
+
+test('a live property change preserves all pending Margin fields @winui-app', async () => {
+    const frame = await devToolsFrame();
+    await frame.locator('#filter').fill('FixtureHeading');
+    await frame.locator('.tree-row', { hasText: 'FixtureHeading' }).last().click();
+    await expect(frame.locator('#props-header')).toContainText('FixtureHeading');
+    await frame.locator('#prop-filter').fill('Margin');
+    await frame.locator('.prow[data-prop="Margin"] .pvalue').click();
+    const left = frame.getByRole('textbox', { name: 'Margin Left', exact: true });
+    const top = frame.getByRole('textbox', { name: 'Margin Top', exact: true });
+    await left.fill('77');
+    await top.fill('88');
+    const write = spawnSync(devToolsCliPath(), ['devtools', 'set-property', 'FixtureHeading', 'Text',
+        'Live tick', '-a', 'SmokeFixture'], { encoding: 'utf8' });
+    expect(write.status, write.stderr).toBe(0);
+    await ctx!.page.waitForTimeout(2_000);
+    await expect(left).toHaveValue('77');
+    await expect(top).toHaveValue('88');
+    await expect(top).toBeFocused();
+});
+
+test('VS Code registers as the exclusive external inspector @winui-app', async () => {
+    test.setTimeout(120_000);
+
+    const frame = await devToolsFrame();
+    await expect(frame.locator(TREE_VIEWPORT)).toBeVisible();
+
+    const client = await DevToolsClient.connect(fixtureProcessId());
+    try {
+        expect(client.supports('Inspector.registerExternal')).toBe(true);
+        await expect(client.send('Window.open', {})).rejects.toMatchObject({
+            data: { token: 'inspector-external' },
+        });
+    } finally {
+        client.dispose();
+    }
+    expect(readNativeWindowOpen()).toBe(false);
+});
+
+test('the fixture app source is committed without build output @winui-app', async () => {
+    // Guards the fixture's own contract: the app is built on demand, so a
+    // committed bin/ would bloat the repo and go stale silently.
+    // --cached --others --exclude-standard lists both committed and
+    // not-yet-committed files while still honouring .gitignore, so this guard
+    // works before the fixture is committed as well as after.
+    const tracked = spawnSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '.'], {
+        cwd: FIXTURE_APP_DIR,
+        encoding: 'utf-8',
+        shell: true,
+    });
+    expect(tracked.status).toBe(0);
+
+    const files = tracked.stdout.split('\n').map(f => f.trim()).filter(Boolean);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.filter(f => /(^|\/)(bin|obj)\//.test(f))).toEqual([]);
+    expect(fs.existsSync(path.join(FIXTURE_APP_DIR, 'DevToolsPage.xaml'))).toBe(true);
+});

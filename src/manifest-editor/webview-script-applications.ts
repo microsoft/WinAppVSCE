@@ -379,11 +379,14 @@ export function getApplicationsScript(): string {
                 // Bind field events
                 card.querySelectorAll('input[data-section]').forEach(inp => {
                     if (inp.type === 'color') {
+                        const textInput = card.querySelector('input[type="text"][data-field-name="' + inp.getAttribute('data-field-name') + '"]');
+                        let originalText;
+                        inp.addEventListener('coloropen', () => { originalText = textInput && textInput.value; });
+                        inp.addEventListener('colorcancel', () => { if (textInput) textInput.value = originalText; });
                         inp.addEventListener('input', () => {
-                            const textInput = card.querySelector('input[type="text"][data-field-name="' + inp.getAttribute('data-field-name') + '"]');
                             if (textInput) textInput.value = inp.value;
-                            debouncedFieldChange(inp);
                         });
+                        inp.addEventListener('change', () => debouncedFieldChange(inp));
                     } else {
                         inp.addEventListener('input', () => debouncedFieldChange(inp));
                     }

@@ -1,0 +1,10 @@
+{
+    "version": "0.7.2-prerelease.156",
+    "repository": "microsoft/winappCli",
+    "branch": "main",
+    "pullRequest": 1296,
+    "commit": "cf21887f60965dfaff887d5a3ebd5a48f110818d",
+    "runId": 42685220193,
+    "syncedOn": "2026-11-09",
+    "comment": "Main CI cli-binaries artifact 13704209576, including the merged external inspector. Download identity and SHA256 are pinned in cli-version.json."
+}

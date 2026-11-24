@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 
 import { buildRunArgs, WinAppRunOptions } from '../run-options';
 import { classifyRunTargetFile } from '../run-target';
+import { devToolsSpawnArgs } from '../devtools/launch-options';
 
 /**
  * Flag names are checked against the CLI --cli-schema; reads bin/ and skips when absent.
@@ -167,6 +168,11 @@ function walkArgs(args: string[]): Set<string> {
 }
 
 describe('buildRunArgs matches the real winapp run schema', { skip: skipReason }, () => {
+	it('checks the complete debug launch arguments, including DevTools overrides', () => {
+		for (const config of [{}, { devTools: 'on' }, { devTools: 'headless' }, { devTools: 'off' }]) {
+			walkArgs([...buildRunArgs({ input: 'C:\\src\\App\\App.csproj', json: true }), ...devToolsSpawnArgs(config)]);
+		}
+	});
 	it('emits only flags the CLI actually defines', () => {
 		const emitted = walkArgs(buildRunArgs(maximalOptions));
 		assert.ok(emitted.size > 0, 'expected the maximal options to emit flags');
