@@ -587,6 +587,7 @@ namespace WinUiXaml.Xaml
         {
             int valueStart = p;
             int parenDepth = 0;
+            int bracketDepth = 0;
             while (p < limit)
             {
                 char c = _text[p];
@@ -596,9 +597,9 @@ namespace WinUiXaml.Xaml
                     continue;
                 }
 
-                // Quotes delimit a value only at its start, or as x:Bind function string arguments.
+                // Quotes delimit a value at its start, in x:Bind function arguments, or in indexer keys.
                 // The text is still XML-escaped, so any spelling of the quote character counts.
-                if ((p == valueStart || parenDepth > 0) && TryReadQuote(p, limit, out char quote, out int openLength))
+                if ((p == valueStart || parenDepth > 0 || bracketDepth > 0) && TryReadQuote(p, limit, out char quote, out int openLength))
                 {
                     int close = p + openLength;
                     int closeLength = 0;
@@ -628,7 +629,18 @@ namespace WinUiXaml.Xaml
                         parenDepth--;
                     }
                 }
-                else if (c == ',' && parenDepth == 0)
+                else if (c == '[')
+                {
+                    bracketDepth++;
+                }
+                else if (c == ']')
+                {
+                    if (bracketDepth > 0)
+                    {
+                        bracketDepth--;
+                    }
+                }
+                else if (c == ',' && parenDepth == 0 && bracketDepth == 0)
                 {
                     break;
                 }
@@ -679,10 +691,10 @@ namespace WinUiXaml.Xaml
 
             int digitsStart = i;
             int value = 0;
-            while (i < limit && i - digitsStart < 8 &&
-                   (hex ? Uri.IsHexDigit(_text[i]) : _text[i] >= '0' && _text[i] <= '9'))
+            while (i < limit && (hex ? Uri.IsHexDigit(_text[i]) : _text[i] >= '0' && _text[i] <= '9'))
             {
-                value = (value * (hex ? 16 : 10)) + (hex ? Uri.FromHex(_text[i]) : _text[i] - '0');
+                // Saturate so long zero-padded references stay overflow-safe without being rejected.
+                value = Math.Min((value * (hex ? 16 : 10)) + (hex ? Uri.FromHex(_text[i]) : _text[i] - '0'), 0x110000);
                 i++;
             }
 

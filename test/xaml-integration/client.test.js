@@ -353,6 +353,17 @@ describe("WinUI XAML — client commands & lifecycle", function () {
       }
       return undefined;
     };
+    const waitForInitialized = async () => {
+      const started = Date.now();
+      while (Date.now() - started < 60000) {
+        const { tokens } = await h.semanticTokensAt(`<Page ${h.NS}>\n  <Button />\n</Page>`);
+        if (tokens.length > 0) {
+          return;
+        }
+        await h.delay(250);
+      }
+      assert.fail("the restarted server never answered a semantic tokens request");
+    };
 
     await waitForSemanticButton(true, 60000);
     const killed = new Set();
@@ -360,6 +371,8 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     for (let crash = 1; crash <= 5; crash++) {
       const pid = await waitForServer(killed);
       assert.ok(pid, `expected a running server before crash ${crash}`);
+      // A kill during initialize fails the start instead of counting as a crash, so wait until it answers.
+      await waitForInitialized();
       killed.add(pid);
       process.kill(pid);
     }
@@ -371,12 +384,14 @@ describe("WinUI XAML — client commands & lifecycle", function () {
       "the client should stop restarting after the crash limit"
     );
 
-    // Re-opening a XAML document must not resurrect a server the client gave up on.
-    await h.revertProbe();
-    await h.openProbe();
-    await h.delay(2000);
-    const stopped = await hasSemanticButtonCompletion();
-    assert.ok(!stopped.found, `expected syntax-only while stopped; got ${stopped.labels.join(", ")}`);
+    // Opening another XAML document fires the demand-driven start; it must not resurrect the server.
+    const other = await vscode.workspace.openTextDocument({ language: "xaml", content: `<Page ${h.NS} />` });
+    await h.delay(3000);
+    assert.deepEqual(
+      serverPids().filter((pid) => !killed.has(pid)),
+      [],
+      `opening ${other.uri.toString()} must not restart a server the client gave up on`
+    );
 
     await assert.doesNotReject(() => vscode.commands.executeCommand("winapp.xaml.restartServer"));
     await h.warmUp();
