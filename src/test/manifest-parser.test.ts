@@ -1126,6 +1126,109 @@ describe('updateExtensionField', () => {
     });
 });
 
+describe('repeated extension elements (#128, #151)', () => {
+    const XML_REPEATED = `<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10">
+  <Applications>
+    <Application Id="App" Executable="App.exe" EntryPoint="App.App">
+      <Extensions>
+        <Extension Category="windows.backgroundTasks" EntryPoint="Tasks.Bg">
+          <BackgroundTasks>
+            <!-- comments are not counted as children -->
+            <Task Type="timer" />
+            <Task Type="systemEvent" />
+          </BackgroundTasks>
+        </Extension>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="docs">
+            <uap:SupportedFileTypes>
+              <uap:FileType>.txt</uap:FileType>
+              <uap:FileType><![CDATA[.md]]></uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>`;
+
+    const fieldsOf = (extIndex: number) => parseManifest(XML_REPEATED).applications[0].extensions[extIndex].fields;
+
+    it('numbers repeated elements in display labels and records their element paths', () => {
+        const tasks = fieldsOf(0).filter(f => f.label === 'Task.Type');
+        assert.deepEqual(tasks.map(f => f.displayLabel), ['Task[1].Type', 'Task[2].Type']);
+        assert.deepEqual(tasks.map(f => f.elementPath), [[0, 0], [0, 1]]);
+        assert.equal(fieldsOf(0).find(f => f.label === 'Extension.EntryPoint')?.displayLabel, undefined);
+    });
+
+    it('edits the second repeated attribute without touching the first', () => {
+        const second = fieldsOf(0).filter(f => f.label === 'Task.Type')[1];
+        const result = updateExtensionField(XML_REPEATED, 0, 0, 'Task.Type', 'pushNotification', false, second.elementPath);
+        assert.ok(result.includes('<Task Type="timer" />'));
+        assert.ok(result.includes('<Task Type="pushNotification" />'));
+    });
+
+    it('edits the second repeated text element and keeps its CDATA wrapper', () => {
+        const fileTypes = fieldsOf(1).filter(f => f.label === 'FileType');
+        assert.deepEqual(fileTypes.map(f => f.displayLabel), ['FileType[1]', 'FileType[2]']);
+        const result = updateExtensionField(XML_REPEATED, 0, 1, 'FileType', '.markdown', true, fileTypes[1].elementPath);
+        assert.ok(result.includes('<uap:FileType>.txt</uap:FileType>'));
+        assert.ok(result.includes('<uap:FileType><![CDATA[.markdown]]></uap:FileType>'));
+    });
+
+    it('leaves the XML unchanged when the element path no longer names the expected element', () => {
+        assert.equal(updateExtensionField(XML_REPEATED, 0, 0, 'Task.Type', 'x', false, [0, 5]), XML_REPEATED);
+        assert.equal(updateExtensionField(XML_REPEATED, 0, 0, 'Task.Type', 'x', false, [0]), XML_REPEATED);
+    });
+});
+
+describe('CDATA preservation on edit (#152)', () => {
+    const withDescription = (inner: string) => `<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+  <Properties>
+    <DisplayName>App</DisplayName>
+    <Description>${inner}</Description>
+  </Properties>
+</Package>`;
+
+    it('keeps a CDATA section when the description is edited', () => {
+        const result = applyFieldChange(withDescription('<![CDATA[Old & <b>]]>'), 'properties', 'description', 'New & <i>');
+        assert.ok(result.includes('<Description><![CDATA[New & <i>]]></Description>'));
+    });
+
+    it('splits a literal "]]>" so the CDATA section stays well-formed', () => {
+        const result = applyFieldChange(withDescription('<![CDATA[old]]>'), 'properties', 'description', 'a]]>b');
+        assert.ok(result.includes('<Description><![CDATA[a]]]]><![CDATA[>b]]></Description>'));
+        assert.equal(parseManifest(result).properties.description, 'a]]>b');
+    });
+
+    it('still escapes plain text content', () => {
+        const result = applyFieldChange(withDescription('Old'), 'properties', 'description', 'A & B');
+        assert.ok(result.includes('<Description>A &amp; B</Description>'));
+    });
+});
+
+describe('Application isUwp (#263)', () => {
+    const appWith = (attrs: string) => parseManifest(`<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10">
+  <Applications><Application Id="App" Executable="App.exe" ${attrs} /></Applications>
+</Package>`).applications[0];
+
+    it('treats packaged desktop apps as non-UWP', () => {
+        assert.equal(appWith('uap10:RuntimeBehavior="packagedClassicApp"').isUwp, false);
+        assert.equal(appWith('uap10:RuntimeBehavior="win32App"').isUwp, false);
+        assert.equal(appWith('EntryPoint="Windows.FullTrustApplication"').isUwp, false);
+        assert.equal(appWith('EntryPoint="windows.partialTrustApplication"').isUwp, false);
+    });
+
+    it('treats windowsApp and custom entry points as UWP', () => {
+        assert.equal(appWith('uap10:RuntimeBehavior="windowsApp" EntryPoint="App.App"').isUwp, true);
+        assert.equal(appWith('EntryPoint="App.App"').isUwp, true);
+    });
+});
+
 describe('extension text content parsing', () => {
     it('reads CDATA text content from extension leaf elements', () => {
         const xml = `<?xml version="1.0" encoding="utf-8"?>

@@ -44,7 +44,7 @@ export function applyFlushedChanges(text: string, changes: FlushedChange[]): Flu
     for (const change of changes) {
         try {
             result = change.kind === 'extField'
-                ? updateExtensionField(result, change.appIndex, change.extIndex, change.fieldPath, change.value, change.isTextContent)
+                ? updateExtensionField(result, change.appIndex, change.extIndex, change.fieldPath, change.value, change.isTextContent, change.elementPath)
                 : applyFieldChange(result, change.section, change.field, change.value, change.index);
         } catch {
             failed.push(describeChange(change));

@@ -367,6 +367,7 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     selectionEnd: focused.selectionEnd,
                     type: focused.type,
                     extField: focused.getAttribute('data-ext-field'),
+                    extElementPath: focused.getAttribute('data-ext-element-path'),
                     appIndex: focused.getAttribute('data-app-index'),
                     extIndex: focused.getAttribute('data-ext-index')
                 };
@@ -618,7 +619,8 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                 document.querySelectorAll('input[data-ext-field]').forEach(el => {
                     if (el.getAttribute('data-ext-field') === info.extField &&
                         el.getAttribute('data-app-index') === info.appIndex &&
-                        el.getAttribute('data-ext-index') === info.extIndex) {
+                        el.getAttribute('data-ext-index') === info.extIndex &&
+                        el.getAttribute('data-ext-element-path') === info.extElementPath) {
                         target = el;
                     }
                 });
@@ -662,13 +664,14 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
 
             // Show new errors
             errors.forEach(err => {
-                // Check if this is an extension field error (applications.N.extensions.M.FieldLabel)
-                const extMatch = err.field.match(/^applications\\.(\d+)\\.extensions\\.(\d+)\\.(.+)$/);
+                // Extension field error: applications.N.extensions.M.FieldLabel[@elementPath]
+                const extMatch = err.field.match(/^applications\\.(\\d+)\\.extensions\\.(\\d+)\\.([^@]+)(?:@([0-9.]*))?$/);
                 if (extMatch) {
                     const appIdx = extMatch[1];
                     const extIdx = extMatch[2];
                     const fieldLabel = extMatch[3];
-                    const inp = document.querySelector('input[data-app-index="' + appIdx + '"][data-ext-index="' + extIdx + '"][data-ext-field="' + fieldLabel + '"]');
+                    const pathSelector = extMatch[4] !== undefined ? '[data-ext-element-path="' + extMatch[4] + '"]' : '';
+                    const inp = document.querySelector('input[data-app-index="' + appIdx + '"][data-ext-index="' + extIdx + '"][data-ext-field="' + fieldLabel + '"]' + pathSelector);
                     if (inp) {
                         const fg = inp.closest('.form-group');
                         if (fg) {
@@ -848,6 +851,10 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                         fg.classList.add('has-warning');
                         vmsg.classList.add('warning');
                         vmsg.innerHTML = 'Image not in package directory. <a href="#" class="copy-to-assets-link" data-copy-token="' + escapeHtml(msg.copyToken) + '" data-field="' + escapeHtml(msg.field) + '" data-index="' + (msg.index !== undefined ? msg.index : '') + '">Copy to Assets folder?</a>';
+                    } else if (msg.status === 'outsideRoots') {
+                        fg.classList.add('has-warning');
+                        vmsg.classList.add('warning');
+                        vmsg.innerHTML = 'Image is outside the package and workspace. <a href="#" class="choose-image-to-copy-link" data-field="' + escapeHtml(msg.field) + '" data-index="' + (msg.index !== undefined ? msg.index : '') + '">Choose file to copy into Assets?</a>';
                     } else {
                         fg.classList.add('has-warning');
                         vmsg.classList.add('warning');
@@ -933,6 +940,19 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
 
         // Delegated click handler for "Copy to Assets" links
         document.addEventListener('click', (e) => {
+            const pickLink = e.target.closest('.choose-image-to-copy-link');
+            if (pickLink) {
+                e.preventDefault();
+                const pickField = pickLink.getAttribute('data-field');
+                const pickIdx = pickLink.getAttribute('data-index');
+                vscode.postMessage({
+                    type: 'chooseImageToCopy',
+                    section: pickField === 'logo' ? 'properties' : 'applications',
+                    field: pickField,
+                    index: pickIdx !== '' ? parseInt(pickIdx, 10) : undefined
+                });
+                return;
+            }
             const link = e.target.closest('.copy-to-assets-link');
             if (!link) return;
             e.preventDefault();

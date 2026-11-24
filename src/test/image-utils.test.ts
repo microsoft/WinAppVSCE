@@ -336,7 +336,7 @@ describe('checkAspectRatio with MRT qualifiers', () => {
 
 /**
  * Covers the branches that used to live inline in the webview `checkImagePath` switch: the
- * package hit, the `..\`-escaping in-workspace case, the external copy offer, and misses.
+ * package hit, the `..\`-escaping in-workspace case, the external copy offer, out-of-root paths, and misses.
  */
 describe('resolveManifestImagePath', () => {
     let pathTmpDir: string;
@@ -359,6 +359,8 @@ describe('resolveManifestImagePath', () => {
         writeUnder('workspace/app/Assets/MrtLogo.scale-200.png');
         writeUnder('workspace/app/Assets/PlainLogo.png');
         writeUnder('workspace/Shared/SharedLogo.scale-200.png');
+        writeUnder('workspace/Other/InWorkspace.png');
+        writeUnder('workspace/Other/WorkspaceMrt.scale-200.png');
         writeUnder('outside/External.png');
         writeUnder('outside/ExternalMrt.scale-200.png');
     });
@@ -398,19 +400,19 @@ describe('resolveManifestImagePath', () => {
         );
     });
 
-    it('offers to copy an existing file outside the package', () => {
-        const outcome = resolveManifestImagePath(manifestDir, path.join(outsideDir, 'External.png'), [workspaceDir]);
+    it('offers to copy an existing workspace file outside the package', () => {
+        const outcome = resolveManifestImagePath(manifestDir, path.join(workspaceDir, 'Other', 'InWorkspace.png'), [workspaceDir]);
 
         assert.equal(outcome.status, 'external');
-        assert.equal(outcome.status === 'external' && path.basename(outcome.sourcePath), 'External.png');
+        assert.equal(outcome.status === 'external' && path.basename(outcome.sourcePath), 'InWorkspace.png');
     });
 
-    // Copying a variant would rewrite the manifest to "Assets\ExternalMrt.scale-200.png",
-    // which is a qualified name the user never typed and MRT would then re-qualify.
-    it('does not offer to copy an out-of-package MRT variant', () => {
-        const outcome = resolveManifestImagePath(manifestDir, path.join(outsideDir, 'ExternalMrt.png'), [workspaceDir]);
-
-        assert.equal(outcome.status, 'notFound');
+    // Webview-supplied paths outside every trusted root must not reveal whether the file exists.
+    it('gives the same answer for existing and missing files outside the package and workspace', () => {
+        assert.equal(resolve(path.join(outsideDir, 'External.png')).status, 'outsideRoots');
+        assert.equal(resolve(path.join(outsideDir, 'Missing.png')).status, 'outsideRoots');
+        assert.equal(resolve(path.join(outsideDir, 'ExternalMrt.png')).status, 'outsideRoots');
+        assert.equal(resolve('Assets\\..\\..\\..\\outside\\External.png').status, 'outsideRoots');
     });
 
     it('reports genuinely missing references as not found', () => {
@@ -430,15 +432,17 @@ describe('resolveManifestImagePath', () => {
     it('does not resolve outside the workspace when no folder is open', () => {
         const outcome = resolveManifestImagePath(manifestDir, '..\\Shared\\SharedLogo.png', []);
 
-        assert.equal(outcome.status, 'notFound');
+        assert.equal(outcome.status, 'outsideRoots');
     });
 
-    // A reference that escapes into a real file outside every workspace root must not be
-    // reported as found — it is only ever offered as a copy-into-Assets source.
-    it('does not report an escaping reference outside the workspace as found', () => {
-        const outcome = resolve('..\\..\\outside\\External.png');
+    // Copying a variant would rewrite the manifest to "Assets\WorkspaceMrt.scale-200.png",
+    // which is a qualified name the user never typed and MRT would then re-qualify.
+    it('does not offer to copy an out-of-package MRT variant', () => {
+        assert.equal(resolve(path.join(workspaceDir, 'Other', 'WorkspaceMrt.png')).status, 'notFound');
+    });
 
-        assert.equal(outcome.status, 'external');
+    it('does not report an escaping reference outside the workspace as found', () => {
+        assert.equal(resolve('..\\..\\outside\\External.png').status, 'outsideRoots');
     });
 });
 

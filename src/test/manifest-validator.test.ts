@@ -1379,6 +1379,21 @@ describe('Applications Validation', () => {
         m.applications[0].visualElements.splashScreenImage = 'Assets\\Splash.jpeg';
         expectNoError(validateManifest(m, schema), 'applications.0.visualElements.splashScreenImage');
     });
+
+    it('should warn when a packaged desktop app declares SupportsMultipleInstances (#263)', () => {
+        const m = makeValidManifest();
+        m.applications[0].supportsMultipleInstances = 'true';
+        const warnings = errorsFor(validateManifest(m, schema), 'applications.0.supportsMultipleInstances');
+        assert.equal(warnings.length, 1);
+        assert.equal(warnings[0].severity, 'warning');
+    });
+
+    it('should accept SupportsMultipleInstances on a UWP app', () => {
+        const m = makeValidManifest();
+        m.applications[0].entryPoint = 'App.App';
+        m.applications[0].supportsMultipleInstances = 'true';
+        expectNoError(validateManifest(m, schema), 'applications.0.supportsMultipleInstances');
+    });
 });
 
 // ─── 13. Cross-section: valid manifest produces no errors ──────────────────

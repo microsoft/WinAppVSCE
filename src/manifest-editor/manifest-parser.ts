@@ -9,6 +9,7 @@ export * from './manifest-xml-ops';
 import { XMLSerializer } from '@xmldom/xmldom';
 import type { Element } from '@xmldom/xmldom';
 import { parseXml } from '../xml-read';
+import { isUwpApplication } from '../manifest-schema/semantic-validation';
 import {
     ManifestData,
     IdentityData,
@@ -83,13 +84,25 @@ const EXTENSION_FIELD_DESCRIPTIONS: Record<string, string> = {
     'ToastNotificationActivation.ToastActivatorCLSID': 'COM CLSID for toast activation, format: {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}',
 };
 
+interface FieldOwner { field: ExtensionField; elementName: string; ordinal: number }
+
 /**
  * Recursively walk a DOM element extracting fields for the extension editor form.
  * Produces fully enriched fields with descriptions, editability, and text-content flags
  * so the webview can render them without re-parsing XML.
  */
-function walkExtensionElement(element: Element, fields: ExtensionField[], isRoot: boolean): void {
+function walkExtensionElement(
+    element: Element, fields: ExtensionField[], isRoot: boolean,
+    elementPath: number[] = [], owners: FieldOwner[] = [], occurrences = new Map<string, number>(),
+): void {
     const localName = element.localName || element.nodeName.split(':').pop() || '';
+    const ordinal = (occurrences.get(localName) ?? 0) + 1;
+    occurrences.set(localName, ordinal);
+    const addField = (field: ExtensionField): void => {
+        field.elementPath = elementPath;
+        fields.push(field);
+        owners.push({ field, elementName: localName, ordinal });
+    };
 
     // Category attribute on root is read-only
     if (isRoot) {
@@ -107,7 +120,7 @@ function walkExtensionElement(element: Element, fields: ExtensionField[], isRoot
         if (attrName === 'xmlns' || attr.nodeName.startsWith('xmlns:')) { continue; }
         if (attrName === 'Category' && isRoot) { continue; }
         const fieldKey = `${localName}.${attrName}`;
-        fields.push({
+        addField({
             label: fieldKey,
             value: attr.value || '',
             editable: true,
@@ -126,7 +139,7 @@ function walkExtensionElement(element: Element, fields: ExtensionField[], isRoot
     }
 
     if (!hasChildElements && textContent.trim()) {
-        fields.push({
+        addField({
             label: localName,
             value: textContent.trim(),
             editable: true,
@@ -141,7 +154,7 @@ function walkExtensionElement(element: Element, fields: ExtensionField[], isRoot
             if (attr && !attr.nodeName.startsWith('xmlns')) { nonXmlnsAttrs++; }
         }
         if (nonXmlnsAttrs === 0) {
-            fields.push({
+            addField({
                 label: localName,
                 value: '',
                 editable: true,
@@ -152,11 +165,24 @@ function walkExtensionElement(element: Element, fields: ExtensionField[], isRoot
     }
 
     // Recurse into child elements
+    let childIndex = 0;
     for (let i = 0; i < childNodes.length; i++) {
         const child = childNodes.item(i);
         if (child && child.nodeType === 1) {
-            walkExtensionElement(child as Element, fields, false);
+            walkExtensionElement(child as Element, fields, false, [...elementPath, childIndex++], owners, occurrences);
         }
+    }
+}
+
+/** Number repeated element names in labels (e.g. "Task[2].Type") so siblings are distinguishable. */
+function labelRepeatedElements(owners: FieldOwner[]): void {
+    const totals = new Map<string, number>();
+    for (const { elementName, ordinal } of owners) {
+        totals.set(elementName, Math.max(totals.get(elementName) ?? 0, ordinal));
+    }
+    for (const { field, elementName, ordinal } of owners) {
+        if ((totals.get(elementName) ?? 0) < 2) { continue; }
+        field.displayLabel = `${elementName}[${ordinal}]${field.label.substring(elementName.length)}`;
     }
 }
 
@@ -397,24 +423,29 @@ function parseApplications(root: Element): ApplicationData[] {
                 if (child.nodeType === 1) {
                     const xml = serializer.serializeToString(child as Element);
                     const fields: ExtensionField[] = [];
-                    walkExtensionElement(child as Element, fields, true);
+                    const owners: FieldOwner[] = [];
+                    walkExtensionElement(child as Element, fields, true, [], owners);
+                    labelRepeatedElements(owners);
                     extensions.push({ xml, fields });
                 }
             }
         }
 
+        const runtimeBehavior = appEl.getAttribute('uap10:RuntimeBehavior') ?? appEl.getAttribute('RuntimeBehavior') ?? '';
+        const entryPoint = appEl.getAttribute('EntryPoint') ?? '';
         apps.push({
             id: appEl.getAttribute('Id') ?? '',
             executable: appEl.getAttribute('Executable') ?? '',
-            entryPoint: appEl.getAttribute('EntryPoint') ?? '',
+            entryPoint,
             trustLevel: appEl.getAttribute('uap10:TrustLevel') ?? appEl.getAttribute('TrustLevel') ?? '',
-            runtimeBehavior: appEl.getAttribute('uap10:RuntimeBehavior') ?? appEl.getAttribute('RuntimeBehavior') ?? '',
+            runtimeBehavior,
             supportsMultipleInstances:
                 appEl.getAttribute('uap4:SupportsMultipleInstances')
                 ?? appEl.getAttribute('uap10:SupportsMultipleInstances')
                 ?? appEl.getAttribute('desktop4:SupportsMultipleInstances')
                 ?? appEl.getAttribute('iot2:SupportsMultipleInstances')
                 ?? '',
+            isUwp: isUwpApplication(runtimeBehavior, entryPoint),
             parameters: appEl.getAttribute('uap10:Parameters') ?? '',
             visualElements: {
                 displayName: visualEl?.getAttribute('DisplayName') ?? '',

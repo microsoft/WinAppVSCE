@@ -71,6 +71,20 @@ export function executableRequiresEntryPoint(
 }
 
 /**
+ * Whether an Application is a UWP app. RuntimeBehavior decides when present; otherwise the
+ * full/partial-trust EntryPoint values mark a packaged desktop app (see the Application schema).
+ */
+export function isUwpApplication(
+    runtimeBehavior: string | null | undefined,
+    entryPoint: string | null | undefined,
+): boolean {
+    const behavior = (runtimeBehavior ?? '').trim();
+    if (behavior) { return behavior === 'windowsApp'; }
+    const ep = (entryPoint ?? '').trim().toLowerCase();
+    return ![...FULL_TRUST_ENTRY_POINTS].some(fullTrust => fullTrust.toLowerCase() === ep);
+}
+
+/**
  * Whether StartPage and Executable conflict.
  */
 export function hasStartPageExecutableConflict(

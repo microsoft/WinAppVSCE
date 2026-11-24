@@ -120,9 +120,24 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             removeApplication: (t, m) => removeApplication(t, m.index),
             addExtension: (t, m) => addExtension(t, m.index, m.xml),
             removeExtension: (t, m) => removeExtension(t, m.appIndex, m.extIndex),
-            updateExtensionField: (t, m) => updateExtensionField(t, m.appIndex, m.extIndex, m.fieldPath, m.value, m.isTextContent),
+            updateExtensionField: (t, m) => updateExtensionField(t, m.appIndex, m.extIndex, m.fieldPath, m.value, m.isTextContent, m.elementPath),
             setShowNameOnTiles: (t, m) => setShowNameOnTiles(t, m.appIndex, m.tiles),
         };
+
+        /** Copy a file into the manifest's Assets folder without overwriting; returns the manifest-relative path. */
+        function copyIntoAssets(sourcePath: string): string {
+            const assetsDir = path.join(path.dirname(document.uri.fsPath), 'Assets');
+            fs.mkdirSync(assetsDir, { recursive: true });
+            const fileName = path.basename(sourcePath);
+            const ext = path.extname(fileName);
+            const base = path.basename(fileName, ext);
+            let destName = fileName;
+            for (let counter = 1; fs.existsSync(path.join(assetsDir, destName)); counter++) {
+                destName = `${base}_${counter}${ext}`;
+            }
+            fs.copyFileSync(sourcePath, path.join(assetsDir, destName));
+            return `Assets\\${destName}`;
+        }
 
         /** Browse for a file and return its path relative to the manifest directory. */
         async function browseAndApplyField(title: string, filters: Record<string, string[]>): Promise<string | undefined> {
@@ -338,6 +353,8 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             } else if (outcome.status === 'external') {
                                 const copyToken = assetCopyTokens.issue(outcome.sourcePath);
                                 webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', copyToken });
+                            } else if (outcome.status === 'outsideRoots') {
+                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'outsideRoots' });
                             } else {
                                 webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'notFound' });
                             }
@@ -345,37 +362,26 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                         }
 
                         case 'copyToAssets': {
-                            const manifestDirPath2 = path.dirname(document.uri.fsPath);
-                            const assetsDir = path.join(manifestDirPath2, 'Assets');
                             const sourcePath = assetCopyTokens.consume(message.copyToken);
                             if (!sourcePath) {
                                 updateWebview(true);
                                 return;
                             }
-                            const fileName = path.basename(sourcePath);
+                            newText = applyFieldChange(text, message.section, message.field, copyIntoAssets(sourcePath), message.index);
+                            break;
+                        }
 
-                            let destName = fileName;
-                            if (!fs.existsSync(assetsDir)) {
-                                fs.mkdirSync(assetsDir, { recursive: true });
-                            }
-
-                            let destPath = path.join(assetsDir, destName);
-                            if (fs.existsSync(destPath)) {
-                                const ext = path.extname(fileName);
-                                const base = path.basename(fileName, ext);
-                                let counter = 1;
-                                while (fs.existsSync(destPath)) {
-                                    destName = `${base}_${counter}${ext}`;
-                                    destPath = path.join(assetsDir, destName);
-                                    counter++;
-                                }
-                            }
-
-                            fs.copyFileSync(sourcePath, destPath);
-                            const newRelPath = `Assets\\${destName}`;
-
-                            // Apply the field change with the new path
-                            newText = applyFieldChange(text, message.section, message.field, newRelPath, message.index);
+                        case 'chooseImageToCopy': {
+                            // Files outside the package and workspace are only read after the user picks them.
+                            // The dialog never opens at a webview-supplied path, which could be a UNC share.
+                            const picked = await vscode.window.showOpenDialog({
+                                canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
+                                title: 'Select image to copy into Assets',
+                                filters: { 'Images': ['png', 'jpg', 'jpeg', 'svg', 'ico'] },
+                                defaultUri: vscode.Uri.file(path.dirname(document.uri.fsPath)),
+                            });
+                            if (!picked || picked.length === 0) { return; }
+                            newText = applyFieldChange(text, message.section, message.field, copyIntoAssets(picked[0].fsPath), message.index);
                             break;
                         }
 
@@ -402,7 +408,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                         case 'browseFile': {
                             const relPath = await browseAndApplyField('Select JSON file', { 'JSON': ['json'] });
                             if (!relPath) { return; }
-                            newText = updateExtensionField(text, message.appIndex, message.extIndex, message.fieldPath, relPath, true);
+                            newText = updateExtensionField(text, message.appIndex, message.extIndex, message.fieldPath, relPath, true, message.elementPath);
                             break;
                         }
 

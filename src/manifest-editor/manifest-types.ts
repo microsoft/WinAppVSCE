@@ -105,6 +105,10 @@ export interface ExtensionField {
     description: string;
     /** True if the value comes from element text content rather than an attribute. */
     isTextContent?: boolean;
+    /** Child-element indexes from the extension root to the element that owns this field. */
+    elementPath?: number[];
+    /** Label shown in the form when it differs from `label`, e.g. "Task[2].Type" for repeated elements. */
+    displayLabel?: string;
 }
 
 /** Parsed extension data holding both raw XML and pre-extracted fields. */
@@ -120,6 +124,8 @@ export interface ApplicationData {
     trustLevel: string;
     runtimeBehavior: string;
     supportsMultipleInstances: string;
+    /** False for packaged desktop apps, which do not support UWP-only attributes. */
+    isUwp?: boolean;
     parameters: string;
     visualElements: VisualElementsData;
     extensions: ExtensionData[];
@@ -185,12 +191,13 @@ export type WebviewToExtensionMessage =
     | { type: 'removeApplication'; index: number }
     | { type: 'addExtension'; index: number; xml: string }
     | { type: 'removeExtension'; appIndex: number; extIndex: number }
-    | { type: 'updateExtensionField'; appIndex: number; extIndex: number; fieldPath: string; value: string; isTextContent?: boolean }
-    | { type: 'browseFile'; appIndex: number; extIndex: number; fieldPath: string }
+    | { type: 'updateExtensionField'; appIndex: number; extIndex: number; fieldPath: string; value: string; isTextContent?: boolean; elementPath?: number[] }
+    | { type: 'browseFile'; appIndex: number; extIndex: number; fieldPath: string; elementPath?: number[] }
     | { type: 'browseImage'; section: string; field: string; index?: number }
     | { type: 'removeVisualAsset'; field: string; index: number }
     | { type: 'checkImagePath'; imagePath: string; field: string; index?: number }
     | { type: 'copyToAssets'; copyToken: string; section: string; field: string; index?: number }
+    | { type: 'chooseImageToCopy'; section: string; field: string; index?: number }
     | { type: 'browseExe'; section: string; field: string; index?: number }
     | { type: 'movePackageDependency'; index: number; direction: 'up' | 'down' }
     | { type: 'addMainPackageDependency'; dependency: MainPackageDependencyData }
@@ -219,7 +226,7 @@ export type WebviewToExtensionMessage =
 /** A single edit flushed out of the webview's debounce queue when the document is saved. */
 export type FlushedChange =
     | { kind?: 'field'; section: string; field: string; value: string; index: number }
-    | { kind: 'extField'; appIndex: number; extIndex: number; fieldPath: string; value: string; isTextContent?: boolean };
+    | { kind: 'extField'; appIndex: number; extIndex: number; fieldPath: string; value: string; isTextContent?: boolean; elementPath?: number[] };
 
 /** Known capabilities organized by category for the checklist UI. */
 export const KNOWN_CAPABILITIES = {

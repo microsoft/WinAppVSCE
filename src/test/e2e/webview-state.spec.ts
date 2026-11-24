@@ -338,10 +338,8 @@ test('two extension inputs sharing a field path queue independently', async ({ p
     await postUpdate(page, manifestData);
 
     // Two <Host> elements render two inputs with the same data-ext-field, so a queue key built
-    // only from the field path would let one keystroke silently drop the other.
-    // Scope: this covers queueing only. Both changes currently rewrite the *first* <Host>, because
-    // updateExtensionField matches the first element for a field path. That is a pre-existing bug
-    // tracked in #289, so asserting the resulting XML here would lock in the wrong behaviour.
+    // only from the field path would let one keystroke silently drop the other. Each change
+    // carries its own element path so the host writes it to the matching <Host> (#289).
     const count = await page.locator('input[data-ext-field="Host.Name"]').count();
     expect(count).toBeGreaterThan(1);
 
@@ -352,9 +350,11 @@ test('two extension inputs sharing a field path queue independently', async ({ p
     const flushed = await page.evaluate(() =>
         (globalThis as unknown as { __posted: { type: string; changes?: Record<string, unknown>[] }[] })
             .__posted.filter(m => m.type === 'changesFlushed').pop());
-    const values = (flushed?.changes ?? []).filter(c => c.kind === 'extField').map(c => c.value);
-    expect(values).toContain('first.example.com');
-    expect(values).toContain('second.example.com');
+    const extChanges = (flushed?.changes ?? []).filter(c => c.kind === 'extField');
+    const byValue = Object.fromEntries(extChanges.map(c => [c.value as string, c.elementPath]));
+    expect(byValue['first.example.com']).toEqual([0, 0]);
+    expect(byValue['second.example.com']).toEqual([0, 1]);
+    await expect(page.locator('label', { hasText: 'Host[2].Name' })).toHaveCount(1);
 });
 
 test('a background re-render keeps an open dropdown open', async ({ page }) => {
@@ -517,4 +517,43 @@ test('hiding a tab for a non-application package clears its button selection', a
     await expect(page.locator('.tab-btn.active')).toHaveCount(1);
     await expect(page.locator('.tab-content.active')).toHaveCount(1);
     await expect(page.locator('.tab-btn[data-tab="identity"]')).toHaveClass(/active/);
+});
+
+test('Supports Multiple Instances is only offered to UWP applications (#263)', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, manifestData);
+    await page.click('.tab-btn[data-tab="applications"]');
+    await expect(page.locator('#add-app-0-multiinstance')).toBeVisible();
+
+    // dataWithAdvancedAttrs sets RuntimeBehavior="win32App", a packaged desktop app.
+    await postUpdate(page, dataWithAdvancedAttrs, true);
+    await expect(page.locator('#add-app-0-multiinstance')).toBeHidden();
+    await expect(page.locator('#app-0-multiinstance-group')).toBeHidden();
+
+    // An existing attribute stays visible so the user can see the warning and remove it.
+    const withAttr = JSON.parse(JSON.stringify(dataWithAdvancedAttrs));
+    withAttr.applications[0].supportsMultipleInstances = 'true';
+    await postUpdate(page, withAttr, true);
+    await expect(page.locator('#app-0-multiinstance-group')).toBeVisible();
+});
+
+test('an image outside the package and workspace offers a native picker, not a copy token (#167)', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, manifestData);
+    await page.evaluate(() => {
+        (globalThis as unknown as { postMessage(m: unknown, o: string): void }).postMessage({
+            type: 'imagePathStatus', field: 'logo', status: 'outsideRoots',
+        }, '*');
+    });
+
+    const link = page.locator('.choose-image-to-copy-link');
+    await expect(link).toHaveCount(1);
+    await expect(page.locator('.copy-to-assets-link')).toHaveCount(0);
+    await link.evaluate(el => (el as unknown as { click(): void }).click());
+
+    const posted = await page.evaluate(() =>
+        (globalThis as unknown as { __posted: Record<string, unknown>[] }).__posted.filter(m => m.type === 'chooseImageToCopy'));
+    expect(posted).toEqual([{
+        type: 'chooseImageToCopy', section: 'properties', field: 'logo', index: undefined,
+    }]);
 });

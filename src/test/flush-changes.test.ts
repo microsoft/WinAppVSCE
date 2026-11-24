@@ -3,6 +3,7 @@ import * as assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { applyFlushedChanges, documentParses } from '../manifest-editor/flush-changes';
+import { parseManifest } from '../manifest-editor/manifest-parser';
 import { FlushedChange } from '../manifest-editor/manifest-types';
 
 const FIXTURE = path.resolve(__dirname, 'fixtures', 'winui-gallery.appxmanifest');
@@ -65,22 +66,21 @@ test('mixed field and extension-field changes are all applied', () => {
     assert.ok(text.includes('Mixed Display'));
 });
 
-test('KNOWN LIMITATION: sibling elements sharing a field path both rewrite the first element', () => {
-    // The fixture's AppUriHandler has two <uap3:Host> children. updateExtensionField resolves a
-    // field path with the first regex match, so both changes land on Host[0] and Host[1] is never
-    // written. This predates the debounce-key work and is tracked by #289; the assertions
-    // below pin the current behaviour so the fix is forced to update this test.
-    const changes: FlushedChange[] = [
-        { kind: 'extField', appIndex: 0, extIndex: 0, fieldPath: 'Host.Name', value: 'first.example.com' },
-        { kind: 'extField', appIndex: 0, extIndex: 0, fieldPath: 'Host.Name', value: 'second.example.com' },
-    ];
+test('sibling elements sharing a field path are each written to their own element', () => {
+    // The fixture's AppUriHandler has two <uap3:Host> children that both render as Host.Name.
+    // The element path from the parser picks the right one (#128, #151, #289).
+    const hostFields = parseManifest(manifestXml).applications[0].extensions[0].fields
+        .filter(f => f.label === 'Host.Name');
+    assert.strictEqual(hostFields.length, 2);
+    assert.deepStrictEqual(hostFields.map(f => f.displayLabel), ['Host[1].Name', 'Host[2].Name']);
+
+    const changes: FlushedChange[] = hostFields.map((f, i) => ({
+        kind: 'extField', appIndex: 0, extIndex: 0, fieldPath: 'Host.Name',
+        value: i === 0 ? 'first.example.com' : 'second.example.com', elementPath: f.elementPath,
+    }));
     const { text, failed } = applyFlushedChanges(manifestXml, changes);
     assert.deepStrictEqual(failed, []);
 
     const hosts = [...text.matchAll(/<uap3:Host Name="([^"]*)"/g)].map(m => m[1]);
-    assert.deepStrictEqual(
-        hosts,
-        ['second.example.com', 'xamlcontrolsgallery.com'],
-        'today the last write wins on Host[0] and Host[1] keeps its original value',
-    );
+    assert.deepStrictEqual(hosts, ['first.example.com', 'second.example.com']);
 });

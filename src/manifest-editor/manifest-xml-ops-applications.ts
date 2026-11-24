@@ -7,10 +7,11 @@ import {
     NS,
     escapeRegex,
     escapeXmlAttr,
-    escapeXmlText,
+    encodeElementText,
     ensureNamespace,
     findParentBounds,
     findDirectChildElementBounds,
+    findElementByPath,
     findNthApplicationRegion,
     removeNamespaceIfUnused,
 } from './xml-utils';
@@ -201,11 +202,13 @@ export function removeExtension(xmlText: string, appIndex: number, extIndex: num
 }
 
 /**
- * Update an attribute on an extension element.
- * fieldPath is "ElementName.AttributeName" as produced by parseExtensionFields in the webview.
+ * Update an attribute or text value inside an extension element. fieldPath is "Element.Attribute"
+ * (or "Element" for text). elementPath, when given, picks the exact element by child indexes from
+ * the extension root; without it the first element with a matching name is used.
  */
 export function updateExtensionField(
     xmlText: string, appIndex: number, extIndex: number, fieldPath: string, value: string, isTextContent?: boolean,
+    elementPath?: readonly number[],
 ): string {
     // Use findNthApplicationRegion for reliable application boundary detection
     const appRegion = findNthApplicationRegion(xmlText, appIndex);
@@ -227,8 +230,12 @@ export function updateExtensionField(
     const children = findDirectChildElementBounds(xmlText, contentStart, contentEnd);
     if (extIndex < 0 || extIndex >= children.length) { return xmlText; }
 
-    const target = children[extIndex];
+    const extension = children[extIndex];
+    const target = elementPath ? findElementByPath(xmlText, extension, elementPath) : extension;
+    if (!target) { return xmlText; }
     let extXml = xmlText.substring(target.start, target.end);
+    // With an element path the match must be the target element itself, not a descendant.
+    const isTargetMatch = (match: RegExpExecArray): boolean => !elementPath || match.index === 0;
 
     if (isTextContent) {
         // fieldPath is just the element name — find <ElementName>text</ElementName>
@@ -236,8 +243,8 @@ export function updateExtensionField(
             `(<(?:[a-zA-Z0-9]+:)?${escapeRegex(fieldPath)}\\b[^>]*>)([\\s\\S]*?)(<\\/(?:[a-zA-Z0-9]+:)?${escapeRegex(fieldPath)}\\s*>)`
         );
         const match = elemPattern.exec(extXml);
-        if (!match) { return xmlText; }
-        extXml = extXml.substring(0, match.index) + match[1] + escapeXmlText(value) + match[3] + extXml.substring(match.index + match[0].length);
+        if (!match || !isTargetMatch(match)) { return xmlText; }
+        extXml = extXml.substring(0, match.index) + match[1] + encodeElementText(match[2], value) + match[3] + extXml.substring(match.index + match[0].length);
     } else {
         const dotIdx = fieldPath.indexOf('.');
         if (dotIdx < 0) { return xmlText; }
@@ -247,7 +254,7 @@ export function updateExtensionField(
         // Find the element's opening tag within the extension XML
         const elemPattern = new RegExp(`<(?:[a-zA-Z0-9]+:)?${escapeRegex(elemName)}\\b[^>]*\\/?>`, 's');
         const match = elemPattern.exec(extXml);
-        if (!match) { return xmlText; }
+        if (!match || !isTargetMatch(match)) { return xmlText; }
 
         // Replace the attribute value within the matched element tag
         const attrRegex = new RegExp(`(${escapeRegex(attrName)}\\s*=\\s*)(["'])((?:(?!\\2).)*?)\\2`);

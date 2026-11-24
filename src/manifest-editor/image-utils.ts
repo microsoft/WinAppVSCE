@@ -202,13 +202,16 @@ export function resolveMrtAsset(baseDir: string, referencePath: string, options?
 export type ImagePathResolution =
     /** The reference resolves inside the package (or a workspace folder) — show a preview. */
     | { status: 'found'; resolution: MrtResolution }
-    /** The literal file exists outside the package — offer to copy it into Assets. */
+    /** The literal file exists in a workspace folder outside the package — offer to copy it into Assets. */
     | { status: 'external'; sourcePath: string }
+    /** The path is outside the package and workspace, so it was not inspected at all. */
+    | { status: 'outsideRoots' }
     | { status: 'notFound' };
 
 /**
  * Decides how a manifest image reference should be reported in the editor.
  * `workspaceRoots` are the open workspace folders, used for `..\`-escaping references.
+ * Paths outside the manifest folder and workspace are never touched on disk.
  */
 export function resolveManifestImagePath(
     manifestDir: string,
@@ -220,8 +223,14 @@ export function resolveManifestImagePath(
     // Only these directories may be enumerated while probing for MRT variants.
     const probeRoots = [manifestDir, ...workspaceRoots];
     const escapesPackage = imagePath.startsWith('..\\') || imagePath.startsWith('../');
-    const resolved = path.resolve(manifestDir, imagePath);
+    let resolved: string;
+    try {
+        resolved = path.resolve(manifestDir, imagePath);
+    } catch {
+        return { status: 'notFound' };
+    }
     const inWorkspace = workspaceRoots.some(root => isPathWithin(root, resolved));
+    if (!inWorkspace && !isPathWithin(manifestDir, resolved)) { return { status: 'outsideRoots' }; }
 
     const packageResolution = resolveMrtAsset(manifestDir, imagePath, { probeRoots });
 
