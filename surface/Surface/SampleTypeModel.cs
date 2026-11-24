@@ -1,0 +1,544 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+
+namespace Surface;
+
+/// <summary>
+/// Source-only type model of the previewed project for sample data. Parses the project's <c>.cs</c> files with
+/// Roslyn against the .NET base libraries only (no build, no NuGet references, nothing executed), so
+/// <see cref="SamplePlanner"/> can learn the type behind an <c>{x:Bind}</c> path or a code-behind assignment.
+/// Types from packages stay unresolved; callers fall back to name-based values. One cached compilation per
+/// project, updated incrementally when files change. Never throws.
+/// </summary>
+internal sealed class SampleTypeModel
+{
+    private const int MaxSourceFiles = 4000;
+
+    private static readonly ConcurrentDictionary<string, ProjectState> Projects = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Lazy<IReadOnlyList<MetadataReference>> BclReferences = new(LoadBclReferences);
+
+    private readonly CSharpCompilation _compilation;
+    private readonly Dictionary<string, INamedTypeSymbol?> _typeCache = new(StringComparer.Ordinal);
+
+    private SampleTypeModel(CSharpCompilation compilation) => _compilation = compilation;
+
+    internal CSharpCompilation Compilation => _compilation;
+
+    /// <summary>A model over in-memory sources (tests).</summary>
+    internal static SampleTypeModel FromSources(params string[] sources)
+    {
+        var trees = sources.Select(s => CSharpSyntaxTree.ParseText(s, ParseOptions)).ToList();
+        trees.Add(CSharpSyntaxTree.ParseText(ImplicitUsings(Array.Empty<string>()), ParseOptions));
+        return new SampleTypeModel(CreateCompilation(trees));
+    }
+
+    /// <summary>
+    /// The model for the project that owns <paramref name="xamlPath"/> (nearest <c>.csproj</c> above it), waiting up
+    /// to <paramref name="wait"/> for a first build or a refresh. Null when there is no project, it is too large,
+    /// or it isn't ready in time (the build continues in the background for the next render).
+    /// </summary>
+    internal static SampleTypeModel? ForDocument(string? xamlPath, TimeSpan wait)
+    {
+        try
+        {
+            var csproj = FindProject(xamlPath);
+            if (csproj is null)
+            {
+                return null;
+            }
+
+            var state = Projects.GetOrAdd(csproj, p => new ProjectState(p));
+            var task = state.Refresh();
+            if (state.Last is null && wait < FirstBuildWait)
+            {
+                // The first parse of a large project takes seconds; a name-based first render that changes on the
+                // next edit is worse than a slower first render.
+                wait = FirstBuildWait;
+            }
+            if (!task.Wait(wait))
+            {
+                App.Log($"SAMPLE: type model for {Path.GetFileName(csproj)} not ready after {wait.TotalMilliseconds:0} ms; using name-based values.");
+                return state.Last;
+            }
+            return task.Result;
+        }
+        catch (Exception ex)
+        {
+            App.Log($"SAMPLE: type model failed: {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static readonly TimeSpan FirstBuildWait = TimeSpan.FromSeconds(10);
+
+    internal static string? FindProject(string? xamlPath)
+    {
+        if (string.IsNullOrEmpty(xamlPath))
+        {
+            return null;
+        }
+
+        for (var dir = Path.GetDirectoryName(Path.GetFullPath(xamlPath)); dir is not null; dir = Path.GetDirectoryName(dir))
+        {
+            var projects = Directory.EnumerateFiles(dir, "*.csproj").ToList();
+            if (projects.Count > 0)
+            {
+                // Several projects in one folder: the WinUI app, else the one named after the folder.
+                return projects.FirstOrDefault(IsWinUIProject)
+                    ?? projects.FirstOrDefault(p => Path.GetFileNameWithoutExtension(p).Equals(Path.GetFileName(dir), StringComparison.OrdinalIgnoreCase))
+                    ?? projects.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).First();
+            }
+        }
+        return null;
+    }
+
+    private static readonly Regex UseWinUI = new(@"<UseWinUI>\s*true\s*</UseWinUI>", RegexOptions.IgnoreCase);
+
+    private static bool IsWinUIProject(string csproj)
+    {
+        try
+        {
+            return UseWinUI.IsMatch(File.ReadAllText(csproj));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    // ---- type queries ---------------------------------------------------------------------------------
+
+    /// <summary>A source type by full CLR name, else by simple name when unique enough. Null when unknown.</summary>
+    internal INamedTypeSymbol? FindType(string fullName)
+    {
+        if (_typeCache.TryGetValue(fullName, out var cached))
+        {
+            return cached;
+        }
+
+        INamedTypeSymbol? found = null;
+        try
+        {
+            found = _compilation.GetTypeByMetadataName(fullName);
+            if (found is null)
+            {
+                var simple = fullName[(fullName.LastIndexOf('.') + 1)..];
+                var candidates = _compilation.GetSymbolsWithName(simple, SymbolFilter.Type).OfType<INamedTypeSymbol>().ToList();
+                found = candidates.FirstOrDefault(c => c.ToDisplayString() == fullName) ??
+                        (candidates.Count == 1 ? candidates[0] : null);
+            }
+        }
+        catch
+        {
+            found = null;
+        }
+
+        _typeCache[fullName] = found;
+        return found;
+    }
+
+    /// <summary>
+    /// The type of member <paramref name="name"/> on <paramref name="type"/> (property, field, or method return),
+    /// walking base types. A CommunityToolkit <c>[ObservableProperty]</c> field (<c>_name</c>/<c>m_name</c>) maps
+    /// to <c>Name</c> since source generators don't run here. Null when not found.
+    /// </summary>
+    internal static ITypeSymbol? MemberType(ITypeSymbol type, string name)
+    {
+        for (var cur = type; cur is not null; cur = cur.BaseType)
+        {
+            foreach (var m in cur.GetMembers(name))
+            {
+                switch (m)
+                {
+                    case IPropertySymbol p: return p.Type;
+                    case IFieldSymbol f: return f.Type;
+                    case IMethodSymbol ms when ms.MethodKind == MethodKind.Ordinary: return ms.ReturnType;
+                }
+            }
+
+            foreach (var f in cur.GetMembers().OfType<IFieldSymbol>())
+            {
+                var n = f.Name.TrimStart('_');
+                if (n.StartsWith("m_", StringComparison.Ordinal)) n = n[2..];
+                if (n.Length > 0 && f.Name != n &&
+                    string.Equals(char.ToUpperInvariant(n[0]) + n[1..], name, StringComparison.Ordinal))
+                {
+                    return f.Type;
+                }
+            }
+        }
+
+        if (type is ITypeParameterSymbol or { TypeKind: TypeKind.Interface })
+        {
+            foreach (var i in type.AllInterfaces)
+            {
+                if (MemberType(i, name) is { } t) return t;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>The element type of an array or a generic collection (<c>IEnumerable&lt;T&gt;</c>); null otherwise.</summary>
+    internal static ITypeSymbol? ElementType(ITypeSymbol type)
+    {
+        if (type is IArrayTypeSymbol arr)
+        {
+            return arr.ElementType;
+        }
+
+        if (type.SpecialType == SpecialType.System_String)
+        {
+            return null;
+        }
+
+        if (type is INamedTypeSymbol named)
+        {
+            var ienum = named.AllInterfaces.Append(named).FirstOrDefault(i =>
+                i.OriginalDefinition.ToDisplayString() == "System.Collections.Generic.IEnumerable<T>");
+            if (ienum is not null)
+            {
+                return ienum.TypeArguments[0];
+            }
+
+            // Unresolved collection types (e.g. a package's observable list) still carry their type argument.
+            if (named.IsGenericType && named.TypeArguments.Length == 1 &&
+                Regex.IsMatch(named.Name, "(Collection|List|Set|Enumerable|Array|Vector)$"))
+            {
+                return named.TypeArguments[0];
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Every <c>Name.Property = expression</c> assignment in the partial class <paramref name="className"/>
+    /// (full CLR name), with the semantic model that types it and the name of the enclosing method.
+    /// </summary>
+    internal IEnumerable<(string target, string property, ExpressionSyntax value, SemanticModel model, BaseMethodDeclarationSyntax? method)>
+        Assignments(string className)
+    {
+        var type = FindType(className);
+        if (type is null)
+        {
+            yield break;
+        }
+
+        foreach (var tree in type.DeclaringSyntaxReferences.Select(r => r.SyntaxTree).Distinct())
+        {
+            var model = _compilation.GetSemanticModel(tree);
+            foreach (var asg in tree.GetRoot().DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                if (!asg.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
+                    asg.Left is not MemberAccessExpressionSyntax { Name.Identifier.Text: var prop } access)
+                {
+                    continue;
+                }
+
+                var target = access.Expression switch
+                {
+                    IdentifierNameSyntax id => id.Identifier.Text,
+                    MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax, Name: var n } => n.Identifier.Text,
+                    _ => null,
+                };
+                if (target is null)
+                {
+                    continue;
+                }
+
+                var method = asg.FirstAncestorOrSelf<BaseMethodDeclarationSyntax>();
+                yield return (target, prop, asg.Right, model, method);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every <c>Name.Member.Add(argument)</c> call in the partial class <paramref name="className"/> — e.g.
+    /// <c>tree.RootNodes.Add(folder)</c> — with the enclosing method (null outside one).
+    /// </summary>
+    internal IEnumerable<(string target, string member, ExpressionSyntax argument, BaseMethodDeclarationSyntax? method)>
+        CollectionAdds(string className)
+    {
+        var type = FindType(className);
+        if (type is null)
+        {
+            yield break;
+        }
+
+        foreach (var tree in type.DeclaringSyntaxReferences.Select(r => r.SyntaxTree).Distinct())
+        {
+            foreach (var call in tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (call is not
+                    {
+                        Expression: MemberAccessExpressionSyntax
+                        {
+                            Name.Identifier.Text: "Add",
+                            Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: var member } collection,
+                        },
+                        ArgumentList.Arguments: [var arg],
+                    })
+                {
+                    continue;
+                }
+
+                var target = collection.Expression switch
+                {
+                    IdentifierNameSyntax id => id.Identifier.Text,
+                    MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax, Name: var n } => n.Identifier.Text,
+                    _ => null,
+                };
+                if (target is not null)
+                {
+                    yield return (target, member, arg.Expression, call.FirstAncestorOrSelf<BaseMethodDeclarationSyntax>());
+                }
+            }
+        }
+    }
+
+    // ---- compilation --------------------------------------------------------------------------------------
+
+    private static readonly CSharpParseOptions ParseOptions = new(LanguageVersion.Preview);
+
+    private static CSharpCompilation CreateCompilation(IEnumerable<SyntaxTree> trees) =>
+        CSharpCompilation.Create("WinUISurfaceSampleModel", trees, BclReferences.Value,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
+
+    private static IReadOnlyList<MetadataReference> LoadBclReferences()
+    {
+        var dir = Path.GetDirectoryName(typeof(object).Assembly.Location);
+        var refs = new List<MetadataReference>();
+        if (dir is null)
+        {
+            return refs;
+        }
+
+        foreach (var file in Directory.EnumerateFiles(dir, "*.dll"))
+        {
+            var name = Path.GetFileName(file);
+            if (!(name.StartsWith("System.", StringComparison.OrdinalIgnoreCase) ||
+                  name.Equals("netstandard.dll", StringComparison.OrdinalIgnoreCase) ||
+                  name.Equals("mscorlib.dll", StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            try
+            {
+                refs.Add(MetadataReference.CreateFromFile(file));
+            }
+            catch
+            {
+                // native or unreadable image: skip
+            }
+        }
+        return refs;
+    }
+
+    /// <summary>The SDK's implicit global usings plus the project's own <c>&lt;Using Include&gt;</c> items.</summary>
+    private static string ImplicitUsings(IEnumerable<string> extra)
+    {
+        var namespaces = new List<string>
+        {
+            "System", "System.Collections.Generic", "System.IO", "System.Linq", "System.Net.Http",
+            "System.Threading", "System.Threading.Tasks",
+        };
+        namespaces.AddRange(extra);
+        return string.Concat(namespaces.Distinct().Select(n => $"global using {n};\n"));
+    }
+
+    private static IEnumerable<string> ProjectUsings(string csproj)
+    {
+        try
+        {
+            var text = File.ReadAllText(csproj);
+            return Regex.Matches(text, @"<Using\s+Include\s*=\s*""([\w.]+)""\s*/?>")
+                .Select(m => m.Groups[1].Value)
+                .ToList();
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>The cached compilation for one project; refreshed by re-parsing only files whose timestamp changed.</summary>
+    private sealed class ProjectState
+    {
+        private readonly string _csproj;
+        private readonly string _dir;
+        private readonly object _gate = new();
+        private readonly Dictionary<string, (DateTime stamp, SyntaxTree tree)> _files = new(StringComparer.OrdinalIgnoreCase);
+        private SyntaxTree? _usingsTree;
+        private CSharpCompilation? _compilation;
+        private Task<SampleTypeModel?>? _pending;
+        private readonly FileSystemWatcher? _watcher;
+        private volatile bool _dirty = true;
+
+        public ProjectState(string csproj)
+        {
+            _csproj = csproj;
+            _dir = Path.GetDirectoryName(csproj)!;
+            try
+            {
+                // Re-enumerating a large tree on every render is the expensive part; only rescan after a change.
+                _watcher = new FileSystemWatcher(_dir)
+                {
+                    IncludeSubdirectories = true,
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
+                };
+                _watcher.Changed += OnChange;
+                _watcher.Created += OnChange;
+                _watcher.Deleted += OnChange;
+                _watcher.Renamed += (_, _) => _dirty = true;
+                _watcher.Error += (_, _) => _dirty = true;
+                _watcher.EnableRaisingEvents = true;
+            }
+            catch (Exception ex)
+            {
+                _watcher = null; // scan on every refresh instead
+                App.Log($"SAMPLE: no file watcher for {Path.GetFileName(csproj)}: {ex.Message}");
+            }
+        }
+
+        private void OnChange(object sender, FileSystemEventArgs e)
+        {
+            if (e.FullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || !Path.HasExtension(e.FullPath))
+            {
+                _dirty = true; // a .cs file, or a folder (its files come and go with it)
+            }
+        }
+
+        public SampleTypeModel? Last { get; private set; }
+
+        public Task<SampleTypeModel?> Refresh()
+        {
+            lock (_gate)
+            {
+                if (_pending is { IsCompleted: false })
+                {
+                    return _pending;
+                }
+                return _pending = Task.Run(Update);
+            }
+        }
+
+        private SampleTypeModel? Update()
+        {
+            try
+            {
+                if (!_dirty && _watcher is not null && Last is not null)
+                {
+                    return Last;
+                }
+                _dirty = false; // cleared before scanning: a change during the scan marks it dirty again
+
+                var sw = Stopwatch.StartNew();
+                var files = Directory.EnumerateFiles(_dir, "*.cs", SearchOption.AllDirectories)
+                    .Where(f => !IsBuildOutput(_dir, f))
+                    .Take(MaxSourceFiles + 1)
+                    .ToList();
+                if (files.Count > MaxSourceFiles)
+                {
+                    App.Log($"SAMPLE: {Path.GetFileName(_csproj)} has more than {MaxSourceFiles} source files; skipping the type model.");
+                    return null;
+                }
+
+                var compilation = _compilation;
+                if (compilation is null)
+                {
+                    _usingsTree = CSharpSyntaxTree.ParseText(ImplicitUsings(ProjectUsings(_csproj)), ParseOptions);
+                    compilation = CreateCompilation(new[] { _usingsTree });
+                }
+
+                int changed = 0;
+                var present = new HashSet<string>(files, StringComparer.OrdinalIgnoreCase);
+                var removed = new List<SyntaxTree>();
+                foreach (var gone in _files.Keys.Where(k => !present.Contains(k)).ToList())
+                {
+                    removed.Add(_files[gone].tree);
+                    _files.Remove(gone);
+                    changed++;
+                }
+
+                // Parse changed files in parallel and update the compilation in one batch: adding trees one at a time
+                // re-derives compilation state per call (AI Dev Gallery: 6 s one by one, ~0.1 s batched).
+                var stale = files
+                    .Select(f => (file: f, stamp: File.GetLastWriteTimeUtc(f)))
+                    .Where(x => !_files.TryGetValue(x.file, out var known) || known.stamp != x.stamp)
+                    .ToList();
+                var parsed = stale.AsParallel().AsOrdered().Select(x =>
+                {
+                    try
+                    {
+                        return (x.file, x.stamp, tree: (SyntaxTree?)CSharpSyntaxTree.ParseText(File.ReadAllText(x.file), ParseOptions, path: x.file));
+                    }
+                    catch (IOException)
+                    {
+                        return (x.file, x.stamp, tree: (SyntaxTree?)null); // being written; picked up next time
+                    }
+                }).ToList();
+
+                var added = new List<SyntaxTree>();
+                foreach (var (file, stamp, tree) in parsed)
+                {
+                    if (tree is null)
+                    {
+                        continue;
+                    }
+                    if (_files.TryGetValue(file, out var known))
+                    {
+                        removed.Add(known.tree);
+                    }
+                    added.Add(tree);
+                    _files[file] = (stamp, tree);
+                    changed++;
+                }
+                if (removed.Count > 0)
+                {
+                    compilation = compilation.RemoveSyntaxTrees(removed);
+                }
+                if (added.Count > 0)
+                {
+                    compilation = compilation.AddSyntaxTrees(added);
+                }
+
+                if (changed == 0 && Last is not null)
+                {
+                    return Last;
+                }
+
+                _compilation = compilation;
+                Last = new SampleTypeModel(compilation);
+                App.Log($"SAMPLE: type model for {Path.GetFileName(_csproj)}: {_files.Count} file(s), {changed} updated, {sw.ElapsedMilliseconds} ms.");
+                return Last;
+            }
+            catch (Exception ex)
+            {
+                _dirty = true;
+                App.Log($"SAMPLE: type model update failed: {ex.GetType().Name}: {ex.Message}");
+                return Last;
+            }
+        }
+
+    }
+
+    /// <summary>True when <paramref name="file"/> sits under a <c>bin</c>, <c>obj</c> or dot folder anywhere below
+    /// <paramref name="projectDir"/> (a nested project's build output holds generated copies too).</summary>
+    internal static bool IsBuildOutput(string projectDir, string file)
+    {
+        var folders = Path.GetRelativePath(projectDir, file).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[..^1];
+        return folders.Any(f => f.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                                f.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+                                f.StartsWith(".", StringComparison.Ordinal));
+    }
+}
