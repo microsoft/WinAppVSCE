@@ -14,7 +14,7 @@ public sealed class AttributeCompletionTests
     private const string Types = """
         namespace TestApp
         {
-            public class DependencyObject : Microsoft.UI.Xaml.DependencyObject { }
+            public class DependencyObject : Microsoft.UI.Xaml.FrameworkElement { }
             public class Page : DependencyObject
             {
                 public Microsoft.UI.Xaml.ResourceDictionary Resources { get; } = new();
@@ -104,6 +104,7 @@ public sealed class AttributeCompletionTests
         namespace TestApp.Converters
         {
             public sealed class UpperConverter { }
+            public sealed class Person : Microsoft.UI.Xaml.DependencyObject { public string Name { get; set; } = ""; }
             public sealed class ItemViewModel { public ItemViewModel(string name) { } }
             public sealed class AppShell : Microsoft.UI.Xaml.Application { }
             public static class Formatting { }
@@ -113,6 +114,7 @@ public sealed class AttributeCompletionTests
         {
             public class Application { }
             public class DependencyObject { }
+            public class FrameworkElement : DependencyObject { }
             public struct Thickness { }
             public class FrameworkTemplate { }
             public class DataTemplate : FrameworkTemplate { }
@@ -545,6 +547,16 @@ public sealed class AttributeCompletionTests
             """));
         Assert.DoesNotContain("x:Name", CompleteLabels("""
             <Button xmlns="using:TestApp" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    Name="A" x:| />
+            """));
+
+        // On a non-FrameworkElement, Name is an ordinary property and may coexist with x:Name.
+        Assert.Contains("Name", CompleteLabels("""
+            <Person xmlns="using:TestApp.Converters" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    x:Name="A" Na| />
+            """));
+        Assert.Contains("x:Name", CompleteLabels("""
+            <Person xmlns="using:TestApp.Converters" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     Name="A" x:| />
             """));
     }

@@ -2543,6 +2543,12 @@ public class XamlValidatorTests
         Assert.Contains(Validate(Page("""Text="{x:Bind Child.Name, Mode=TwoWay}" """)), d => d.Code == XamlValidator.ReadOnlyTwoWayBindCode);
         Assert.DoesNotContain(Validate(Page("""Text="{x:Bind Child.Text, Mode=TwoWay}" """)), d => d.Code == XamlValidator.ReadOnlyTwoWayBindCode);
         Assert.DoesNotContain(Validate(Page("""Text="{x:Bind Child.Name, Mode=OneWay}" """)), d => d.Code == XamlValidator.ReadOnlyTwoWayBindCode);
+        Assert.Contains(
+            Validate(PageWithContent("""<Child x:DefaultBindMode="TwoWay" Text="{x:Bind Child.Name}" />""")),
+            d => d.Code == XamlValidator.ReadOnlyTwoWayBindCode);
+        Assert.DoesNotContain(
+            Validate(PageWithContent("""<Child x:DefaultBindMode="TwoWay" Text="{x:Bind Child.Name, Mode=OneWay}" />""")),
+            d => d.Code == XamlValidator.ReadOnlyTwoWayBindCode);
     }
 
     [Fact]

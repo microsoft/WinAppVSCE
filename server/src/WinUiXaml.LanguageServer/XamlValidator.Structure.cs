@@ -339,6 +339,25 @@ internal static partial class XamlValidator
              typeSystem.FindMember(owner, name.LocalName[(dot + 1)..]) is { Kind: XamlMemberKind.Event });
     }
 
+    /// <summary>An explicit x:Bind Mode, otherwise the nearest enclosing x:DefaultBindMode.</summary>
+    private static string? EffectiveBindMode(XamlAttribute attribute, XamlMarkupExtension extension)
+    {
+        if (extension.Arguments.FirstOrDefault(argument => argument.IsNamed && argument.Name?.LocalName == "Mode") is { } mode)
+        {
+            return mode.Value?.Trim();
+        }
+
+        for (var node = attribute.Parent; node is not null; node = node.Parent)
+        {
+            if (node is XamlElement element && XamlSemanticFacts.GetDirectiveAttribute(element, "DefaultBindMode")?.Value is { } value)
+            {
+                return value.Text.Trim();
+            }
+        }
+
+        return null;
+    }
+
     private static void ValidateBindTargetMember(
         XamlAttribute attribute, INamedTypeSymbol? elementType, INamedTypeSymbol bindRoot,
         INamedTypeSymbol? pageClass, XamlNamespaceScope scope, XamlTypeSystem typeSystem,
@@ -366,9 +385,7 @@ internal static partial class XamlValidator
             return;
         }
 
-        bool twoWay = extension.Arguments.Any(argument =>
-            argument.IsNamed && argument.Name?.LocalName == "Mode" &&
-            string.Equals(argument.Value?.Trim(), "TwoWay", System.StringComparison.Ordinal));
+        bool twoWay = string.Equals(EffectiveBindMode(attribute, extension), "TwoWay", System.StringComparison.Ordinal);
         bool hasBindBack = extension.Arguments.Any(argument =>
             argument.IsNamed && argument.Name?.LocalName == "BindBack");
         bool writable = symbol switch

@@ -527,10 +527,11 @@ internal static partial class CompletionProvider
             StringComparer.Ordinal);
 
         var items = new List<CompletionItem>();
+        bool nameAliasesXName = NameAliasesXName(elementType, typeSystem);
         foreach (var member in typeSystem.GetAttributeMembers(elementType))
         {
             if (!StartsWith(member.Name, ctx.Partial) || existing.Contains(member.Name) ||
-                (member.Name == "Name" && existingDirectives.Contains("Name")))
+                (nameAliasesXName && member.Name == "Name" && existingDirectives.Contains("Name")))
             {
                 continue;
             }
@@ -581,6 +582,12 @@ internal static partial class CompletionProvider
             .FirstOrDefault();
     }
 
+    /// <summary>Name aliases x:Name only on FrameworkElement; elsewhere it is an ordinary property (matches WXAML0039).</summary>
+    private static bool NameAliasesXName(INamedTypeSymbol? type, XamlTypeSystem typeSystem) =>
+        type is null ||
+        typeSystem.Capabilities.FrameworkElement is not { } frameworkElement ||
+        XamlTypeSystem.IsAssignableTo(type, frameworkElement);
+
     private static void AddXamlDirectives(
         List<CompletionItem> items,
         HashSet<string> existing,
@@ -609,10 +616,11 @@ internal static partial class CompletionProvider
             return;
         }
 
+        bool nameAliasesXName = NameAliasesXName(XamlSemanticFacts.ResolveElementType(element, typeSystem), typeSystem);
         foreach (var (localName, description) in XamlDirectiveMetadata.AttributeDirectives)
         {
             if (existingDirectives.Contains(localName) ||
-                (localName == "Name" && existing.Contains("Name")) ||
+                (nameAliasesXName && localName == "Name" && existing.Contains("Name")) ||
                 !IsApplicableXamlDirective(localName, element, typeSystem))
             {
                 continue;
