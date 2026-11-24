@@ -1241,6 +1241,34 @@ describe('Application isUwp (#263)', () => {
         assert.equal(appWith('uap10:RuntimeBehavior="windowsApp" EntryPoint="App.App"').isUwp, true);
         assert.equal(appWith('EntryPoint="App.App"').isUwp, true);
     });
+
+    describe('template EntryPoint="$targetentrypoint$"', () => {
+        const templateApp = (capability: string, extensions = '', projectKind?: 'desktop' | 'uwp') => parseManifest(`<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10">
+  <Applications><Application Id="App" Executable="$targetnametoken$.exe" EntryPoint="$targetentrypoint$"><Extensions>${extensions}</Extensions></Application></Applications>
+  <Capabilities>${capability}</Capabilities>
+</Package>`, { projectKind }).applications[0].isUwp;
+        const FULL_TRUST = '<rescap:Capability Name="runFullTrust" />';
+
+        it('reads a WinUI 3 template (runFullTrust) as desktop', () => {
+            assert.equal(templateApp(FULL_TRUST), false);
+        });
+
+        it('reads a UWP template (no runFullTrust) as UWP', () => {
+            assert.equal(templateApp('<Capability Name="internetClient" />'), true);
+        });
+
+        it('keeps a UWP app with a full-trust helper process as UWP', () => {
+            assert.equal(templateApp(FULL_TRUST, '<desktop:Extension Category="windows.fullTrustProcess" Executable="Helper.exe" />'), true);
+        });
+
+        it('lets the project file override the manifest heuristic', () => {
+            assert.equal(templateApp(FULL_TRUST, '', 'uwp'), true);
+            assert.equal(templateApp('', '', 'desktop'), false);
+        });
+    });
 });
 
 describe('extension text content parsing', () => {

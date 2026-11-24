@@ -16,6 +16,8 @@ import { WebviewToExtensionMessage } from './manifest-types';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { AssetCopyTokenStore } from './asset-copy-token-store';
+import { detectProjectAppKind } from './project-app-kind';
+import type { ProjectAppKind } from '../manifest-schema/semantic-validation';
 import { MrtResolution, checkAspectRatio, getImageDimensions, isPathWithin, resolveManifestImagePath } from './image-utils';
 import { applyFlushedChanges, documentParses } from './flush-changes';
 
@@ -78,6 +80,10 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
         // applyEdit, so isApplyingEdit cannot cover them; match on the result instead.
         let pendingFlushText: string | null = null;
         const assetCopyTokens = new AssetCopyTokenStore();
+        // The project file decides UWP vs desktop for template manifests; read it once per panel.
+        let projectKind: ProjectAppKind | undefined;
+        const projectKindReady = detectProjectAppKind(path.dirname(document.uri.fsPath))
+            .then(kind => { projectKind = kind; });
 
         /** Load the editor document. Reassigning `webview.html` destroys all webview UI state,
             so this runs once per panel: parse failures surface as an overlay instead. */
@@ -160,7 +166,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             const text = document.getText();
             let data;
             try {
-                data = parseManifest(text);
+                data = parseManifest(text, { projectKind });
             } catch (e) {
                 // Surface the failure as an overlay rather than rebuilding the document, which
                 // would wipe tab/scroll/expanded-field state every time the XML is transiently bad.
@@ -178,7 +184,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
         const refreshValidationOnly = () => {
             let data;
             try {
-                data = parseManifest(document.getText());
+                data = parseManifest(document.getText(), { projectKind });
             } catch {
                 // A flush only edits text that parses, so this is unexpected: fall back to the
                 // full path, which raises the overlay.
@@ -270,6 +276,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                     switch (message.type) {
                         case 'ready':
                             postWorkspaceTrust();
+                            await projectKindReady;
                             updateWebview();
                             return;
 

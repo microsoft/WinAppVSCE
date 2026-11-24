@@ -521,9 +521,14 @@ test('hiding a tab for a non-application package clears its button selection', a
 
 test('Supports Multiple Instances is only offered to UWP applications (#263)', async ({ page }) => {
     await loadEditor(page);
-    await postUpdate(page, manifestData);
+    // The same template manifest is UWP when its project file says so.
+    await postUpdate(page, parseManifest(manifestXml, { projectKind: 'uwp' }));
     await page.click('.tab-btn[data-tab="applications"]');
     await expect(page.locator('#add-app-0-multiinstance')).toBeVisible();
+
+    // Without a project file, $targetentrypoint$ plus runFullTrust reads as a WinUI 3 desktop app.
+    await postUpdate(page, manifestData, true);
+    await expect(page.locator('#add-app-0-multiinstance')).toBeHidden();
 
     // dataWithAdvancedAttrs sets RuntimeBehavior="win32App", a packaged desktop app.
     await postUpdate(page, dataWithAdvancedAttrs, true);

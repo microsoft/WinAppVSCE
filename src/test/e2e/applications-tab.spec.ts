@@ -572,28 +572,9 @@ test('can add Runtime Behavior attribute', async () => {
     expect(await trigger.textContent()).toContain('windowsApp');
 });
 
-test('can change Runtime Behavior to packagedClassicApp', async () => {
-    const card = frame.locator('.app-card').first();
-    const group = card.locator('#app-0-runtimebehavior-group');
-    const trigger = group.locator('.custom-select-trigger');
-    await trigger.click();
-    await group.locator('.custom-select-option[data-value="packagedClassicApp"]').click();
-    await ctx.page.waitForTimeout(1_000);
-
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'RuntimeBehavior="packagedClassicApp"');
-    expect(xml).toContain('RuntimeBehavior="packagedClassicApp"');
-});
-
-test('can remove Runtime Behavior attribute', async () => {
-    const card = frame.locator('.app-card').first();
-    const group = card.locator('#app-0-runtimebehavior-group');
-    await group.locator('.btn-remove-field').click();
-    await ctx.page.waitForTimeout(500);
-
-    await expect(card.locator('#add-app-0-runtimebehavior')).toBeVisible();
-});
-
+// SupportsMultipleInstances is UWP-only (#263), so these run while RuntimeBehavior is windowsApp.
 test('can add Supports Multiple Instances attribute', async () => {
+    await readManifestXml(ctx.page, ctx.workspacePath, 'RuntimeBehavior="windowsApp"');
     const card = frame.locator('.app-card').first();
     const addBtn = card.locator('#add-app-0-multiinstance');
     await expect(addBtn).toBeVisible();
@@ -614,6 +595,34 @@ test('can remove Supports Multiple Instances attribute', async () => {
     await ctx.page.waitForTimeout(500);
 
     await expect(card.locator('#add-app-0-multiinstance')).toBeVisible();
+});
+
+test('can change Runtime Behavior to packagedClassicApp', async () => {
+    const card = frame.locator('.app-card').first();
+    const group = card.locator('#app-0-runtimebehavior-group');
+    const trigger = group.locator('.custom-select-trigger');
+    await trigger.click();
+    await group.locator('.custom-select-option[data-value="packagedClassicApp"]').click();
+    await ctx.page.waitForTimeout(1_000);
+
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'RuntimeBehavior="packagedClassicApp"');
+    expect(xml).toContain('RuntimeBehavior="packagedClassicApp"');
+    await expect(card.locator('#add-app-0-multiinstance')).toBeHidden();
+});
+
+test('can remove Runtime Behavior attribute', async () => {
+    const card = frame.locator('.app-card').first();
+    const group = card.locator('#app-0-runtimebehavior-group');
+    await group.locator('.btn-remove-field').click();
+    await ctx.page.waitForTimeout(500);
+
+    await expect(card.locator('#add-app-0-runtimebehavior')).toBeVisible();
+});
+
+test('a WinUI 3 template manifest is not offered Supports Multiple Instances', async () => {
+    // EntryPoint="$targetentrypoint$" plus runFullTrust marks the fixture as a packaged desktop app.
+    await ctx.page.waitForTimeout(1_000);
+    await expect(frame.locator('.app-card').first().locator('#add-app-0-multiinstance')).toBeHidden();
 });
 
 test('can add Parameters attribute', async () => {

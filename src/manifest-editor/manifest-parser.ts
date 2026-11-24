@@ -9,7 +9,7 @@ export * from './manifest-xml-ops';
 import { XMLSerializer } from '@xmldom/xmldom';
 import type { Element } from '@xmldom/xmldom';
 import { parseXml } from '../xml-read';
-import { isUwpApplication } from '../manifest-schema/semantic-validation';
+import { isUwpApplication, type AppModelHints, type ProjectAppKind } from '../manifest-schema/semantic-validation';
 import {
     ManifestData,
     IdentityData,
@@ -195,7 +195,7 @@ function labelRepeatedElements(owners: FieldOwner[]): void {
  * windows.activatableClass.inProcessServer and background task host DLLs.
  * See: https://github.com/microsoft/winappVSCE/issues
  */
-export function parseManifest(xmlText: string): ManifestData {
+export function parseManifest(xmlText: string, options: { projectKind?: ProjectAppKind } = {}): ManifestData {
     const { doc, errors } = parseXml(xmlText);
     if (errors.length > 0) {
         throw new Error(`XML parse error: ${errors[0].message}`);
@@ -203,13 +203,15 @@ export function parseManifest(xmlText: string): ManifestData {
     const root = doc.documentElement;
     if (!root) { throw new Error('Invalid XML: no root element'); }
 
+    const capabilities = parseCapabilities(root);
+    const hasRunFullTrust = capabilities.some(c => c === 'runFullTrust' || c.endsWith(':runFullTrust'));
     return {
         identity: parseIdentity(root),
         phoneIdentity: parsePhoneIdentity(root),
         properties: parseProperties(root),
         dependencies: parseDependencies(root),
-        applications: parseApplications(root),
-        capabilities: parseCapabilities(root),
+        applications: parseApplications(root, { projectKind: options.projectKind, hasRunFullTrust }),
+        capabilities,
         resources: parseResources(root),
     };
 }
@@ -388,7 +390,7 @@ function parseDependencies(root: Element): DependenciesData {
     };
 }
 
-function parseApplications(root: Element): ApplicationData[] {
+function parseApplications(root: Element, hints: AppModelHints): ApplicationData[] {
     const appsEl = getChildByLocalName(root, 'Applications');
     if (!appsEl) { return []; }
 
@@ -414,6 +416,7 @@ function parseApplications(root: Element): ApplicationData[] {
 
         // Gather extension data: raw XML + pre-parsed fields from the DOM
         const extensions: ExtensionData[] = [];
+        let hasFullTrustProcess = false;
         const extEl = getChildByLocalName(appEl, 'Extensions');
         if (extEl) {
             const serializer = new XMLSerializer();
@@ -421,6 +424,7 @@ function parseApplications(root: Element): ApplicationData[] {
             for (let i = 0; i < extChildren.length; i++) {
                 const child = extChildren[i];
                 if (child.nodeType === 1) {
+                    if ((child as Element).getAttribute('Category') === 'windows.fullTrustProcess') { hasFullTrustProcess = true; }
                     const xml = serializer.serializeToString(child as Element);
                     const fields: ExtensionField[] = [];
                     const owners: FieldOwner[] = [];
@@ -445,7 +449,7 @@ function parseApplications(root: Element): ApplicationData[] {
                 ?? appEl.getAttribute('desktop4:SupportsMultipleInstances')
                 ?? appEl.getAttribute('iot2:SupportsMultipleInstances')
                 ?? '',
-            isUwp: isUwpApplication(runtimeBehavior, entryPoint),
+            isUwp: isUwpApplication(runtimeBehavior, entryPoint, { ...hints, hasFullTrustProcess }),
             parameters: appEl.getAttribute('uap10:Parameters') ?? '',
             visualElements: {
                 displayName: visualEl?.getAttribute('DisplayName') ?? '',

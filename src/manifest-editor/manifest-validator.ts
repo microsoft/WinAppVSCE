@@ -367,7 +367,7 @@ function validateApplications(data: ManifestData, errors: ValidationError[], sch
             errors.push({ field: `${prefix}.entryPoint`, message: 'Entry point is required when Executable is specified.', severity: 'error' });
         }
 
-        if (app.supportsMultipleInstances && !isUwpApplication(app.runtimeBehavior, app.entryPoint)) {
+        if (app.supportsMultipleInstances && !(app.isUwp ?? isUwpApplication(app.runtimeBehavior, app.entryPoint))) {
             errors.push({ field: `${prefix}.supportsMultipleInstances`, message: 'SupportsMultipleInstances only applies to UWP apps (RuntimeBehavior "windowsApp"). Remove it for packaged desktop apps.', severity: 'warning' });
         }
 
