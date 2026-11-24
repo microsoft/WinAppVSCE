@@ -1207,6 +1207,20 @@ describe('CDATA preservation on edit (#152)', () => {
         const result = applyFieldChange(withDescription('Old'), 'properties', 'description', 'A & B');
         assert.ok(result.includes('<Description>A &amp; B</Description>'));
     });
+
+    it('does not add a second element when the value is unchanged', () => {
+        for (const inner of ['Old', '<![CDATA[Old]]>']) {
+            const xml = withDescription(inner);
+            assert.equal(applyFieldChange(xml, 'properties', 'description', 'Old'), xml, inner);
+        }
+    });
+
+    it('keeps the document editable after the value contains the closing tag text', () => {
+        const first = applyFieldChange(withDescription('<![CDATA[old]]>'), 'properties', 'description', 'Example: </Description>');
+        assert.equal(parseManifest(first).properties.description, 'Example: </Description>');
+        const second = applyFieldChange(first, 'properties', 'description', 'Updated');
+        assert.equal(parseManifest(second).properties.description, 'Updated');
+    });
 });
 
 describe('Application isUwp (#263)', () => {

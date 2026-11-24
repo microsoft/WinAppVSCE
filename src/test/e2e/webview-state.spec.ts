@@ -537,23 +537,18 @@ test('Supports Multiple Instances is only offered to UWP applications (#263)', a
     await expect(page.locator('#app-0-multiinstance-group')).toBeVisible();
 });
 
-test('an image outside the package and workspace offers a native picker, not a copy token (#167)', async ({ page }) => {
+test('extension-field errors land on the matching repeated element', async ({ page }) => {
     await loadEditor(page);
     await postUpdate(page, manifestData);
+    // The validator suffixes repeated-element errors with "@<elementPath>"; the second <Host> is 0.1.
     await page.evaluate(() => {
         (globalThis as unknown as { postMessage(m: unknown, o: string): void }).postMessage({
-            type: 'imagePathStatus', field: 'logo', status: 'outsideRoots',
+            type: 'validationErrors',
+            errors: [{ field: 'applications.0.extensions.0.Host.Name@0.1', message: 'bad host', severity: 'error' }],
         }, '*');
     });
 
-    const link = page.locator('.choose-image-to-copy-link');
-    await expect(link).toHaveCount(1);
-    await expect(page.locator('.copy-to-assets-link')).toHaveCount(0);
-    await link.evaluate(el => (el as unknown as { click(): void }).click());
-
-    const posted = await page.evaluate(() =>
-        (globalThis as unknown as { __posted: Record<string, unknown>[] }).__posted.filter(m => m.type === 'chooseImageToCopy'));
-    expect(posted).toEqual([{
-        type: 'chooseImageToCopy', section: 'properties', field: 'logo', index: undefined,
-    }]);
+    const hosts = page.locator('input[data-ext-field="Host.Name"]');
+    await expect(hosts.nth(1).locator('xpath=ancestor::div[contains(@class,"form-group")][1]')).toHaveClass(/has-error/);
+    await expect(hosts.nth(0).locator('xpath=ancestor::div[contains(@class,"form-group")][1]')).not.toHaveClass(/has-error/);
 });

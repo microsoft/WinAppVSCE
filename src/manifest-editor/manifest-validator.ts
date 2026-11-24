@@ -486,11 +486,13 @@ export function validateExtensionField(fieldLabel: string, value: string, isRequ
             }
             break;
         }
-        case 'FileTypeAssociation.Name':
-            if (!/^[a-zA-Z0-9.]+$/.test(value)) {
-                return { level: 'error', message: 'Name must contain only letters, digits, and periods.' };
+        case 'FileTypeAssociation.Name': {
+            const err = validateValueAgainstType(schema, 'ST_FTAName', value);
+            if (err) {
+                return { level: 'error', message: `Name: ${err}` };
             }
             break;
+        }
         case 'StartupTask.Enabled':
             if (value !== 'true' && value !== 'false') {
                 return { level: 'error', message: 'Value must be "true" or "false".' };

@@ -16,7 +16,7 @@ import { WebviewToExtensionMessage } from './manifest-types';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { AssetCopyTokenStore } from './asset-copy-token-store';
-import { MrtResolution, checkAspectRatio, getImageDimensions, resolveManifestImagePath } from './image-utils';
+import { MrtResolution, checkAspectRatio, getImageDimensions, isPathWithin, resolveManifestImagePath } from './image-utils';
 import { applyFlushedChanges, documentParses } from './flush-changes';
 
 /** Debounce window for external document changes (e.g. typing in the XML text editor). */
@@ -139,15 +139,20 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             return `Assets\\${destName}`;
         }
 
-        /** Browse for a file and return its path relative to the manifest directory. */
-        async function browseAndApplyField(title: string, filters: Record<string, string[]>): Promise<string | undefined> {
+        /** Show a native file picker starting in the manifest directory; returns the picked path. */
+        async function pickFile(title: string, filters: Record<string, string[]>): Promise<string | undefined> {
             const filePath = await vscode.window.showOpenDialog({
                 canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
                 title, filters,
                 defaultUri: vscode.Uri.file(path.dirname(document.uri.fsPath)),
             });
-            if (!filePath || filePath.length === 0) { return undefined; }
-            return path.relative(path.dirname(document.uri.fsPath), filePath[0].fsPath);
+            return filePath && filePath.length > 0 ? filePath[0].fsPath : undefined;
+        }
+
+        /** Browse for a file and return its path relative to the manifest directory. */
+        async function browseAndApplyField(title: string, filters: Record<string, string[]>): Promise<string | undefined> {
+            const picked = await pickFile(title, filters);
+            return picked ? path.relative(path.dirname(document.uri.fsPath), picked) : undefined;
         }
 
         /** Send the current document state to the webview. */
@@ -371,20 +376,6 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             break;
                         }
 
-                        case 'chooseImageToCopy': {
-                            // Files outside the package and workspace are only read after the user picks them.
-                            // The dialog never opens at a webview-supplied path, which could be a UNC share.
-                            const picked = await vscode.window.showOpenDialog({
-                                canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
-                                title: 'Select image to copy into Assets',
-                                filters: { 'Images': ['png', 'jpg', 'jpeg', 'svg', 'ico'] },
-                                defaultUri: vscode.Uri.file(path.dirname(document.uri.fsPath)),
-                            });
-                            if (!picked || picked.length === 0) { return; }
-                            newText = applyFieldChange(text, message.section, message.field, copyIntoAssets(picked[0].fsPath), message.index);
-                            break;
-                        }
-
                         case 'fieldChanged':
                             newText = applyFieldChange(text, message.section, message.field, message.value, message.index, message.subIndex);
                             break;
@@ -413,9 +404,15 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                         }
 
                         case 'browseImage': {
-                            const relPath = await browseAndApplyField('Select image', { 'Images': ['png', 'jpg', 'jpeg', 'svg', 'ico'] });
-                            if (!relPath) { return; }
-                            newText = applyFieldChange(text, message.section, message.field, relPath, message.index);
+                            const picked = await pickFile('Select image', { 'Images': ['png', 'jpg', 'jpeg', 'svg', 'ico'] });
+                            if (!picked) { return; }
+                            // A package can't reference files outside it, so copy those in rather than
+                            // writing a "..\" path that only leads to a second copy step.
+                            const manifestDirPath = path.dirname(document.uri.fsPath);
+                            const workspaceRoots = (vscode.workspace.workspaceFolders ?? []).map(wf => wf.uri.fsPath);
+                            const insideRoots = [manifestDirPath, ...workspaceRoots].some(root => isPathWithin(root, picked));
+                            const value = insideRoots ? path.relative(manifestDirPath, picked) : copyIntoAssets(picked);
+                            newText = applyFieldChange(text, message.section, message.field, value, message.index);
                             break;
                         }
 

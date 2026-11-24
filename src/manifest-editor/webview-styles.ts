@@ -261,12 +261,12 @@ export function getEditorStyles(nonce: string): string {
         .form-group.has-warning .custom-select-trigger {
             border-color: var(--vscode-editorWarning-foreground, #cca700);
         }
-        .copy-to-assets-link, .choose-image-to-copy-link {
+        .copy-to-assets-link {
             color: var(--vscode-textLink-foreground, #3794ff);
             text-decoration: underline;
             cursor: pointer;
         }
-        .copy-to-assets-link:hover, .choose-image-to-copy-link:hover {
+        .copy-to-assets-link:hover {
             color: var(--vscode-textLink-activeForeground, #3794ff);
         }
 

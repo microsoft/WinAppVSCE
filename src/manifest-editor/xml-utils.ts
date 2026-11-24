@@ -56,12 +56,14 @@ const CDATA_CONTENT = /^(\s*)<!\[CDATA\[[\s\S]*\]\]>(\s*)$/;
 
 /**
  * Encode new element text, keeping the CDATA wrapper when the previous content was CDATA.
- * A literal "]]>" in the value is split across two sections so the CDATA stays well-formed.
+ * "]]>" and "</" are split across sections so the CDATA stays well-formed and later edits
+ * that locate the closing tag by text cannot stop inside it.
  */
 export function encodeElementText(previousInner: string, value: string): string {
     const cdata = CDATA_CONTENT.exec(previousInner);
     if (!cdata) { return escapeXmlText(value); }
-    return `${cdata[1]}<![CDATA[${value.split(']]>').join(']]]]><![CDATA[>')}]]>${cdata[2]}`;
+    const body = value.split(']]>').join(']]]]><![CDATA[>').split('</').join('<]]><![CDATA[/');
+    return `${cdata[1]}<![CDATA[${body}]]>${cdata[2]}`;
 }
 
 /** Replace an XML attribute value in-place. Returns `null` if the element or attribute is not found. */

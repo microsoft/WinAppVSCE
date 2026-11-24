@@ -142,10 +142,16 @@ describe('validateExtensionField', () => {
             assert.equal(validateExtensionField('FileTypeAssociation.Name', 'my.file.type1', false, schema), null);
         });
 
-        it('rejects name with special characters', () => {
-            const result = validateExtensionField('FileTypeAssociation.Name', 'my-file', false, schema);
-            assert.equal(result?.level, 'error');
-            assert.ok(result?.message.includes('letters, digits'));
+        it('accepts hyphens and underscores, which the schema allows', () => {
+            assert.equal(validateExtensionField('FileTypeAssociation.Name', 'my-file_type', false, schema), null);
+        });
+
+        it('rejects uppercase letters and spaces', () => {
+            for (const bad of ['MyFiles', 'my files']) {
+                const result = validateExtensionField('FileTypeAssociation.Name', bad, false, schema);
+                assert.equal(result?.level, 'error', bad);
+                assert.ok(result?.message.includes('ST_FTAName'), bad);
+            }
         });
     });
 

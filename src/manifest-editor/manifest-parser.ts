@@ -618,38 +618,37 @@ function applyPropertiesChangeString(xml: string, field: string, value: string):
         return xml;
     }
 
-    const result = replaceElementText(xml, tagRegex, value);
-
-    // If the element wasn't found and the value is non-empty, insert it into <Properties>
-    if (result === xml && value) {
-        let workXml = xml;
-
-        // Ensure namespace for prefixed elements
-        const ns = nsPrefix[field];
-        if (ns) {
-            workXml = ensureNamespace(workXml, ns.prefix, ns.uri);
-        }
-
-        let propsBounds = findParentBounds(workXml, 'Properties');
-        if (!propsBounds) {
-            // Create <Properties> before </Package>
-            const pkgClose = workXml.lastIndexOf('</Package>');
-            if (pkgClose < 0) { return xml; }
-            const pkgIndent = detectIndent(workXml, pkgClose);
-            const propsIndent = pkgIndent + '  ';
-            const block = propsIndent + '<Properties>\n' + propsIndent + '</Properties>\n';
-            let lineStart = pkgClose;
-            while (lineStart > 0 && workXml[lineStart - 1] !== '\n') { lineStart--; }
-            workXml = workXml.substring(0, lineStart) + block + workXml.substring(lineStart);
-            propsBounds = findParentBounds(workXml, 'Properties');
-            if (!propsBounds) { return xml; }
-        }
-        const propIndent = detectIndent(workXml, propsBounds.openStart);
-        const elemTag = ns ? `${ns.prefix}:${tag}` : tag;
-        return insertChildBeforeClose(workXml, propsBounds.contentEnd, `<${elemTag}>${escapeXmlText(value)}</${elemTag}>`, propIndent);
+    // Writing the current value leaves the text unchanged, so "not found" must come from the match itself.
+    if (tagRegex.test(xml)) {
+        return replaceElementText(xml, tagRegex, value);
     }
 
-    return result;
+    // The element wasn't found and the value is non-empty: insert it into <Properties>
+    let workXml = xml;
+
+    // Ensure namespace for prefixed elements
+    const ns = nsPrefix[field];
+    if (ns) {
+        workXml = ensureNamespace(workXml, ns.prefix, ns.uri);
+    }
+
+    let propsBounds = findParentBounds(workXml, 'Properties');
+    if (!propsBounds) {
+        // Create <Properties> before </Package>
+        const pkgClose = workXml.lastIndexOf('</Package>');
+        if (pkgClose < 0) { return xml; }
+        const pkgIndent = detectIndent(workXml, pkgClose);
+        const propsIndent = pkgIndent + '  ';
+        const block = propsIndent + '<Properties>\n' + propsIndent + '</Properties>\n';
+        let lineStart = pkgClose;
+        while (lineStart > 0 && workXml[lineStart - 1] !== '\n') { lineStart--; }
+        workXml = workXml.substring(0, lineStart) + block + workXml.substring(lineStart);
+        propsBounds = findParentBounds(workXml, 'Properties');
+        if (!propsBounds) { return xml; }
+    }
+    const propIndent = detectIndent(workXml, propsBounds.openStart);
+    const elemTag = ns ? `${ns.prefix}:${tag}` : tag;
+    return insertChildBeforeClose(workXml, propsBounds.contentEnd, `<${elemTag}>${escapeXmlText(value)}</${elemTag}>`, propIndent);
 }
 
 /** Handle autoUpdateUri: manages uap13:AutoUpdate > uap13:AppInstaller Uri="..." */

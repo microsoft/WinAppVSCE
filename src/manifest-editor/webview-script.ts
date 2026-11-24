@@ -854,7 +854,7 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     } else if (msg.status === 'outsideRoots') {
                         fg.classList.add('has-warning');
                         vmsg.classList.add('warning');
-                        vmsg.innerHTML = 'Image is outside the package and workspace. <a href="#" class="choose-image-to-copy-link" data-field="' + escapeHtml(msg.field) + '" data-index="' + (msg.index !== undefined ? msg.index : '') + '">Choose file to copy into Assets?</a>';
+                        vmsg.textContent = '⚠ Image is outside the package and workspace. Use Choose file to copy it into Assets.';
                     } else {
                         fg.classList.add('has-warning');
                         vmsg.classList.add('warning');
@@ -940,19 +940,6 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
 
         // Delegated click handler for "Copy to Assets" links
         document.addEventListener('click', (e) => {
-            const pickLink = e.target.closest('.choose-image-to-copy-link');
-            if (pickLink) {
-                e.preventDefault();
-                const pickField = pickLink.getAttribute('data-field');
-                const pickIdx = pickLink.getAttribute('data-index');
-                vscode.postMessage({
-                    type: 'chooseImageToCopy',
-                    section: pickField === 'logo' ? 'properties' : 'applications',
-                    field: pickField,
-                    index: pickIdx !== '' ? parseInt(pickIdx, 10) : undefined
-                });
-                return;
-            }
             const link = e.target.closest('.copy-to-assets-link');
             if (!link) return;
             e.preventDefault();

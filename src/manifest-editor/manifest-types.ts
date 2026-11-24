@@ -197,7 +197,6 @@ export type WebviewToExtensionMessage =
     | { type: 'removeVisualAsset'; field: string; index: number }
     | { type: 'checkImagePath'; imagePath: string; field: string; index?: number }
     | { type: 'copyToAssets'; copyToken: string; section: string; field: string; index?: number }
-    | { type: 'chooseImageToCopy'; section: string; field: string; index?: number }
     | { type: 'browseExe'; section: string; field: string; index?: number }
     | { type: 'movePackageDependency'; index: number; direction: 'up' | 'down' }
     | { type: 'addMainPackageDependency'; dependency: MainPackageDependencyData }

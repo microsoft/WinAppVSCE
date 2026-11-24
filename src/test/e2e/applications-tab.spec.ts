@@ -847,11 +847,10 @@ test('shows warning for image path not in package directory', async () => {
     await ctx.page.waitForTimeout(2_000);
 
     // Outside the package and workspace the host must not reveal whether the file exists (#167):
-    // no copy token is issued, only an offer to pick the file through the native dialog.
+    // no copy token is issued; the user is pointed at the native Choose file button instead.
     const formGroup = card.locator('.form-group[data-field*="visualElements.square150x150Logo"]');
     const validationMsg = formGroup.locator('.validation-msg');
     await expect(validationMsg).toContainText('Image is outside the package and workspace.', { timeout: 10_000 });
-    await expect(validationMsg.locator('.choose-image-to-copy-link')).toBeVisible();
     await expect(validationMsg.locator('.copy-to-assets-link')).toHaveCount(0);
 
     // Clean up
