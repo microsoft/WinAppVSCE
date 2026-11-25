@@ -86,6 +86,11 @@ internal static partial class XamlValidator
                     {
                         "DynamicResource" => " Use ThemeResource or StaticResource instead.",
                         "Type" => " Use the type name directly instead.",
+                        // x:Bind needs code-behind and is not allowed in a Style Setter, so only suggest it where it compiles.
+                        "Static" when doc.Parsed.Root is { } root &&
+                            XamlSemanticFacts.GetDirectiveAttribute(root, "Class") is not null &&
+                            !XamlSemanticFacts.IsSetter(element, typeSystem) =>
+                            " Use a static x:Bind path such as {x:Bind local:Type.Member} instead.",
                         _ => string.Empty,
                     };
                     diagnostics.Add(Diag(doc, name.Span, SeverityError, UnsupportedMarkupExtensionCode,
@@ -238,32 +243,14 @@ internal static partial class XamlValidator
         XamlElement style, XamlTypeSystem typeSystem, XamlSemanticFacts.ResourceScopeIndex resourceIndex,
         TextDocument doc, List<Diagnostic> diagnostics)
     {
+        // A key that names the style itself resolves to an outer or framework style at runtime, so self-references are not errors.
         if (!XamlSemanticFacts.IsElement(style, typeSystem.Capabilities.Style, typeSystem, allowDerived: true) ||
             TryGetBasedOnReference(style, resourceIndex, typeSystem) is not { } reference)
         {
             return;
         }
 
-        var (key, span, target) = reference;
-        if (ReferenceEquals(target, style))
-        {
-            diagnostics.Add(Diag(doc, span, SeverityError, InvalidBasedOnCode,
-                $"The style '{key}' cannot be based on itself."));
-            return;
-        }
-
-        var visited = new HashSet<XamlElement> { style };
-        for (var current = target; current is not null && visited.Add(current);)
-        {
-            current = TryGetBasedOnReference(current, resourceIndex, typeSystem)?.Target;
-            if (ReferenceEquals(current, style))
-            {
-                diagnostics.Add(Diag(doc, span, SeverityError, InvalidBasedOnCode,
-                    $"The BasedOn chain through '{key}' is circular."));
-                return;
-            }
-        }
-
+        var (_, span, target) = reference;
         if (XamlSemanticFacts.ResolveStyleTargetType(style, style.NamespaceScope, typeSystem) is { } derivedTarget &&
             XamlSemanticFacts.ResolveStyleTargetType(target, target.NamespaceScope, typeSystem) is { } baseTarget &&
             !XamlTypeSystem.IsAssignableTo(derivedTarget, baseTarget))
@@ -285,7 +272,8 @@ internal static partial class XamlValidator
             return null;
         }
 
-        var target = resourceIndex.FindDeclaration(style, key, extension.Span.Start, allowForwardReference: true);
+        var target = resourceIndex.FindDeclaration(
+            style, key, extension.Span.Start, allowForwardReference: true, skip: new HashSet<XamlElement> { style });
         return target is null ? null : (key, span, target);
     }
 

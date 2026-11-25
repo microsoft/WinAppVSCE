@@ -114,7 +114,7 @@ internal static partial class XamlValidator
     public const string EmptyEventHandlerCode = "WXAML0043";
     /// <summary>A TwoWay x:Bind targets a source member that cannot be written.</summary>
     public const string ReadOnlyTwoWayBindCode = "WXAML0044";
-    /// <summary>A Style.BasedOn is self-referencing, cyclic, or has an incompatible TargetType.</summary>
+    /// <summary>A Style.BasedOn style has an incompatible TargetType.</summary>
     public const string InvalidBasedOnCode = "WXAML0046";
     /// <summary>A StaticResource value is not assignable to the target property type.</summary>
     public const string InvalidResourceTypeCode = "WXAML0047";

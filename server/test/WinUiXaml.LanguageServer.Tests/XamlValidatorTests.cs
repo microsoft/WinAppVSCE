@@ -44,6 +44,8 @@ public class XamlValidatorTests
                 public System.Uri Uri { get; set; }
                 public System.Uri? OptionalUri { get; set; }
                 public string ImagePath { get; set; } = "";
+                public Microsoft.UI.Xaml.Input.ICommand Command { get; set; }
+                public Microsoft.UI.Xaml.DataTemplate ItemTemplate { get; set; }
                 public string? OptionalImagePath { get; set; }
                 public Windows.UI.Color Color { get; set; }
                 public Microsoft.UI.Xaml.ResourceDictionary Resources { get; } = new();
@@ -231,6 +233,11 @@ public class XamlValidatorTests
             public class DataTemplate : FrameworkTemplate { }
             public class Style { public System.Type TargetType { get; set; } }
             public class Setter { public string Property { get; set; } = ""; }
+        }
+
+        namespace Microsoft.UI.Xaml.Input
+        {
+            public interface ICommand { }
         }
 
         namespace Microsoft.UI.Xaml.Markup
@@ -1724,6 +1731,8 @@ public class XamlValidatorTests
     [Theory]
     [InlineData("IsEnabled", "Code")]
     [InlineData("Foreground", "Color")]
+    [InlineData("Command", "Text")]
+    [InlineData("ItemTemplate", "Text")]
     public void BindAssignment_StillReportsIncompatibleNonStringSources(string target, string source)
     {
         Assert.Single(
@@ -2521,6 +2530,14 @@ public class XamlValidatorTests
             Validate(PageWithContent("""<Child Text="{ui:DynamicResource Key}" />""")),
             d => d.Code == XamlValidator.UnsupportedMarkupExtensionCode);
         Assert.Contains("ThemeResource", diagnostic.Message);
+
+        // x:Static suggests a static x:Bind only where x:Bind compiles (code-behind, not a Setter).
+        Assert.Contains("x:Bind", Assert.Single(
+            Validate(PageWithContent("""<Child Text="{x:Static local:BindStatics.Flag}" />""")),
+            d => d.Code == XamlValidator.UnsupportedMarkupExtensionCode).Message);
+        Assert.DoesNotContain("x:Bind", Assert.Single(
+            Validate(PageWithContent("""<ui:Setter Property="Text" Value="{x:Static local:BindStatics.Flag}" />""")),
+            d => d.Code == XamlValidator.UnsupportedMarkupExtensionCode).Message);
     }
 
     [Fact]
@@ -2554,6 +2571,7 @@ public class XamlValidatorTests
     [Fact]
     public void Structure_ReportsInvalidBasedOn()
     {
+        // A reused key (self or A->B->A) resolves outward at runtime, so only TargetType mismatches are errors.
         const string resources = """
             <ui:ResourceDictionary>
               <ui:Style x:Key="Self" TargetType="StyleHostBase" BasedOn="{ui:StaticResource Self}" />
@@ -2570,10 +2588,29 @@ public class XamlValidatorTests
             .Where(d => d.Code == XamlValidator.InvalidBasedOnCode)
             .Select(d => d.Message)
             .ToArray();
-        Assert.Equal(4, basedOn.Length);
-        Assert.Contains(basedOn, m => m.Contains("itself"));
-        Assert.Equal(2, basedOn.Count(m => m.Contains("circular")));
-        Assert.Contains(basedOn, m => m.Contains("'StyleHostOther'"));
+        Assert.Contains("'StyleHostOther'", Assert.Single(basedOn));
+    }
+
+    [Fact]
+    public void Structure_SameKeyBasedOnResolvesToOuterStyle()
+    {
+        const string xaml = """
+            <ui:FrameworkElement>
+              <ui:FrameworkElement.Resources>
+                <ui:Style x:Key="Shared" TargetType="StyleHostOther" />
+              </ui:FrameworkElement.Resources>
+              <ui:FrameworkElement>
+                <ui:FrameworkElement.Resources>
+                  <ui:Style x:Key="Shared" TargetType="StyleHostDerived" BasedOn="{ui:StaticResource Shared}" />
+                </ui:FrameworkElement.Resources>
+              </ui:FrameworkElement>
+            </ui:FrameworkElement>
+            """;
+
+        // The inner style skips itself and reaches the outer 'Shared', whose TargetType is incompatible.
+        Assert.Contains(
+            Validate(PageWithContent(xaml)),
+            d => d.Code == XamlValidator.InvalidBasedOnCode && d.Message.Contains("'StyleHostOther'"));
     }
 
     [Fact]

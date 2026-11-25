@@ -1259,7 +1259,8 @@ export async function runCoreScenarios(ctx) {
   const structureDiag = await validateDoc(
     `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <Page.Resources>\n` +
     `    <SolidColorBrush Color="Red" />\n    <SolidColorBrush x:Key="Accent" Color="Red" />\n` +
-    `    <Style x:Key="Self" TargetType="Button" BasedOn="{StaticResource Self}" />\n` +
+    `    <Style x:Key="TextStyle" TargetType="TextBlock" />\n` +
+    `    <Style x:Key="Derived" TargetType="Button" BasedOn="{StaticResource TextStyle}" />\n` +
     `    <Style TargetType="Nope" />\n  </Page.Resources>\n` +
     `  <StackPanel Spacing="{StaticResource Accent}">hello<Panel />\n` +
     `    <TextBlock x:Name="A" Name="B" Text="{x:Static Foo}" />\n` +

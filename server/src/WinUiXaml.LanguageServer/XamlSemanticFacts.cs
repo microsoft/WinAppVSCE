@@ -290,14 +290,16 @@ internal static class XamlSemanticFacts
                 .ToArray();
         }
 
+        /// <summary>Resolves key from reference outward; declarations in skip are passed over, as WinUI does for a key that is already loading.</summary>
         internal XamlElement? FindDeclaration(
             XamlElement reference,
             string key,
             int referenceStart,
-            bool allowForwardReference)
+            bool allowForwardReference,
+            IReadOnlySet<XamlElement>? skip = null)
         {
             LookupCount++;
-            return FindDeclarationCore(reference, key, referenceStart, allowForwardReference);
+            return FindDeclarationCore(reference, key, referenceStart, allowForwardReference, skip);
         }
 
         internal IReadOnlyCollection<string> GetVisibleKeys(
@@ -312,7 +314,8 @@ internal static class XamlSemanticFacts
             XamlElement reference,
             string key,
             int referenceStart,
-            bool allowForwardReference)
+            bool allowForwardReference,
+            IReadOnlySet<XamlElement>? skip = null)
         {
             XamlElement? previousDictionary = null;
             bool sameLogicalDictionary = true;
@@ -335,7 +338,8 @@ internal static class XamlSemanticFacts
                             key,
                             enforceOrder: sameLogicalDictionary && !allowForwardReference,
                             referenceStart,
-                            out var declaration))
+                            out var declaration) &&
+                        skip?.Contains(declaration!) != true)
                     {
                         return declaration;
                     }
@@ -352,7 +356,8 @@ internal static class XamlSemanticFacts
                 {
                     if (IsResourceOwnerPropertyScope(child, _typeSystem) &&
                         !IsAncestorOf(child, reference) &&
-                        TryFind(child, key, enforceOrder: false, referenceStart, out var declaration))
+                        TryFind(child, key, enforceOrder: false, referenceStart, out var declaration) &&
+                        skip?.Contains(declaration!) != true)
                     {
                         return declaration;
                     }
