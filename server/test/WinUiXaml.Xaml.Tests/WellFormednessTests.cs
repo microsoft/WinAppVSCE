@@ -158,4 +158,18 @@ public sealed class WellFormednessTests
         thread.Join();
         Assert.True(doc!.Root!.HasEndTag);
     }
+
+    // An unclosed string with many escaped quotes must not rescan the rest of the value per quote.
+    [Theory]
+    [InlineData("{x:Bind Format('a", "^'b", ")}")]
+    [InlineData("{Binding A", ", B=F('x)", "}")]
+    public void UnclosedQuotes_ParseInLinearTime(string prefix, string repeated, string suffix)
+    {
+        var text = "<TextBlock Text=\"" + prefix + string.Concat(Enumerable.Repeat(repeated, 40000)) + suffix + "\"/>";
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var doc = XamlParser.Parse(text);
+        watch.Stop();
+        Assert.NotNull(doc.Root);
+        Assert.True(watch.ElapsedMilliseconds < 2000, $"parse took {watch.ElapsedMilliseconds} ms");
+    }
 }

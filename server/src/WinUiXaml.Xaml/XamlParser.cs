@@ -15,6 +15,8 @@ namespace WinUiXaml.Xaml
         private readonly List<string> _openTagStack = new List<string>();
         private int _pos;
         private int _depth;
+        private int _unclosedQuoteLimit = -1;
+        private int _unclosedQuoteFrom;
 
         private XamlParser(string text)
         {
@@ -607,7 +609,9 @@ namespace WinUiXaml.Xaml
 
                 // Quotes delimit a value at its start, in x:Bind function arguments, or in indexer keys.
                 // The text is still XML-escaped, so any spelling of the quote character counts.
-                if ((p == valueStart || parenDepth > 0 || bracketDepth > 0) && TryReadQuote(p, limit, out char quote, out int openLength))
+                // Once a quote runs unclosed to the limit, later ones would only rescan the same suffix.
+                bool pastUnclosedQuote = limit == _unclosedQuoteLimit && p >= _unclosedQuoteFrom;
+                if (!pastUnclosedQuote && (p == valueStart || parenDepth > 0 || bracketDepth > 0) && TryReadQuote(p, limit, out char quote, out int openLength))
                 {
                     // x:Bind function arguments escape a quote with '^' as well as '\'.
                     bool hatEscapes = parenDepth > 0;
@@ -622,6 +626,12 @@ namespace WinUiXaml.Xaml
                         {
                             close += TryReadQuote(close, limit, out _, out int escapedLength) ? escapedLength : 1;
                         }
+                    }
+
+                    if (close >= limit)
+                    {
+                        _unclosedQuoteLimit = limit;
+                        _unclosedQuoteFrom = p;
                     }
 
                     p = close < limit ? close + closeLength : p + 1;
