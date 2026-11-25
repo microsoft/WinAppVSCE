@@ -14,6 +14,7 @@ import { SchemaModel } from '../manifest-schema/schema-model';
 import type { ManifestData, ValidationError, ExtensionData } from '../manifest-editor/manifest-types';
 import * as path from 'path';
 import { parseXml } from '../xml-read';
+import { parseManifest } from '../manifest-editor/manifest-parser';
 
 let schema: SchemaModel;
 before(() => {
@@ -1379,6 +1380,21 @@ describe('Applications Validation', () => {
         m.applications[0].visualElements.splashScreenImage = 'Assets\\Splash.jpeg';
         expectNoError(validateManifest(m, schema), 'applications.0.visualElements.splashScreenImage');
     });
+
+    it('should warn when a packaged desktop app declares SupportsMultipleInstances (#263)', () => {
+        const m = makeValidManifest();
+        m.applications[0].supportsMultipleInstances = 'true';
+        const warnings = errorsFor(validateManifest(m, schema), 'applications.0.supportsMultipleInstances');
+        assert.equal(warnings.length, 1);
+        assert.equal(warnings[0].severity, 'warning');
+    });
+
+    it('should accept SupportsMultipleInstances on a UWP app', () => {
+        const m = makeValidManifest();
+        m.applications[0].entryPoint = 'App.App';
+        m.applications[0].supportsMultipleInstances = 'true';
+        expectNoError(validateManifest(m, schema), 'applications.0.supportsMultipleInstances');
+    });
 });
 
 // ─── 13. Cross-section: valid manifest produces no errors ──────────────────
@@ -1500,6 +1516,20 @@ describe('Custom Capability validation', () => {
 // ─── Extension Field Validation via validateManifest ────────────────────────
 
 describe('Extension Field Validation in validateManifest', () => {
+    it('should suffix errors on repeated elements with their element path', () => {
+        const m = makeValidManifest();
+        m.applications[0].extensions = parseManifest(`<?xml version="1.0"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+  <Applications><Application Id="App" Executable="App.exe" EntryPoint="App.App"><Extensions>
+    <Extension Category="windows.backgroundTasks" EntryPoint="Tasks.Bg">
+      <BackgroundTasks><Task Type="timer" /><Task Type="" /></BackgroundTasks>
+    </Extension>
+  </Extensions></Application></Applications>
+</Package>`).applications[0].extensions;
+        const taskErrors = validateManifest(m, schema).filter(e => e.field.includes('.Task.Type'));
+        assert.deepEqual(taskErrors.map(e => e.field), ['applications.0.extensions.0.Task.Type@0.1']);
+    });
+
     it('should report error for invalid GUID in Class.Id extension field', () => {
         const m = makeValidManifest();
         m.applications[0].extensions = [

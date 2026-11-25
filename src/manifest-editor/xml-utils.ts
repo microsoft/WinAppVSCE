@@ -52,6 +52,20 @@ export function escapeXmlText(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+const CDATA_CONTENT = /^(\s*)<!\[CDATA\[[\s\S]*\]\]>(\s*)$/;
+
+/**
+ * Encode new element text, keeping the CDATA wrapper when the previous content was CDATA.
+ * "]]>" and "</" are split across sections so the CDATA stays well-formed and later edits
+ * that locate the closing tag by text cannot stop inside it.
+ */
+export function encodeElementText(previousInner: string, value: string): string {
+    const cdata = CDATA_CONTENT.exec(previousInner);
+    if (!cdata) { return escapeXmlText(value); }
+    const body = value.split(']]>').join(']]]]><![CDATA[>').split('</').join('<]]><![CDATA[/');
+    return `${cdata[1]}<![CDATA[${body}]]>${cdata[2]}`;
+}
+
 /** Replace an XML attribute value in-place. Returns `null` if the element or attribute is not found. */
 export function replaceAttribute(xml: string, elementPattern: RegExp, attrName: string, newValue: string): string | null {
     const escaped = escapeXmlAttr(newValue);
@@ -120,10 +134,9 @@ export function replaceElementText(xml: string, tagPattern: RegExp, newValue: st
     const match = tagPattern.exec(xml);
     if (!match) { return xml; }
 
-    // Escape XML-special characters in text content
-    const escaped = newValue.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     // match[0] is the full match including tags, match[1] is the opening tag, match[2] is the old text
-    return xml.substring(0, match.index) + match[1] + escaped + match[3] + xml.substring(match.index + match[0].length);
+    const encoded = encodeElementText(match[2], newValue);
+    return xml.substring(0, match.index) + match[1] + encoded + match[3] + xml.substring(match.index + match[0].length);
 }
 
 /** Find the bounds of a parent element by local name (handles optional namespace prefix). */
@@ -238,6 +251,28 @@ export function findDirectChildElementBounds(xml: string, regionStart: number, r
     }
 
     return elements;
+}
+
+/**
+ * Walk from the element at `root` through child-element indexes (comments, CDATA and PIs are
+ * not counted). Returns the bounds of the element at the end of `path`, or null if it is gone.
+ */
+export function findElementByPath(
+    xml: string, root: { start: number; end: number }, path: readonly number[],
+): { start: number; end: number } | null {
+    let current = root;
+    if (!Array.isArray(path)) { return null; }
+    for (const index of path) {
+        if (!Number.isInteger(index) || index < 0) { return null; }
+        const openEnd = xml.indexOf('>', current.start);
+        if (openEnd < 0 || openEnd >= current.end || xml[openEnd - 1] === '/') { return null; }
+        const closeStart = xml.lastIndexOf('</', current.end - 1);
+        if (closeStart <= openEnd) { return null; }
+        const children = findDirectChildElementBounds(xml, openEnd + 1, closeStart);
+        if (index >= children.length) { return null; }
+        current = children[index];
+    }
+    return current;
 }
 
 /** Ensure a namespace declaration is present on the Package element. */

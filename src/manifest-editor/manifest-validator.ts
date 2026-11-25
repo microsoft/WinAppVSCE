@@ -12,6 +12,7 @@ import { SchemaModel } from '../manifest-schema/schema-model';
 import { validateValueAgainstType, matchesSchemaPattern, isValidSchemaColor } from '../manifest-schema/schema-helpers';
 import {
     executableRequiresEntryPoint,
+    isUwpApplication,
 } from '../manifest-schema/semantic-validation';
 
 // BCP-47: language[-script][-region][-variant] (simplified for common MSIX usage)
@@ -366,6 +367,10 @@ function validateApplications(data: ManifestData, errors: ValidationError[], sch
             errors.push({ field: `${prefix}.entryPoint`, message: 'Entry point is required when Executable is specified.', severity: 'error' });
         }
 
+        if (app.supportsMultipleInstances && !(app.isUwp ?? isUwpApplication(app.runtimeBehavior, app.entryPoint))) {
+            errors.push({ field: `${prefix}.supportsMultipleInstances`, message: 'SupportsMultipleInstances only applies to UWP apps (RuntimeBehavior "windowsApp"). Remove it for packaged desktop apps.', severity: 'warning' });
+        }
+
         if (!app.visualElements.displayName) {
             errors.push({ field: `${prefix}.visualElements.displayName`, message: 'Display name is required.', severity: 'error' });
         } else {
@@ -405,8 +410,10 @@ function validateApplications(data: ManifestData, errors: ValidationError[], sch
                     const isRequired = REQUIRED_EXT_FIELDS.has(field.label);
                     const validation = validateExtensionField(field.label, field.value, isRequired, schema);
                     if (validation) {
+                        // Repeated elements share a label, so the element path picks the right input.
+                        const pathSuffix = field.displayLabel && field.elementPath ? `@${field.elementPath.join('.')}` : '';
                         errors.push({
-                            field: `${prefix}.extensions.${extIdx}.${field.label}`,
+                            field: `${prefix}.extensions.${extIdx}.${field.label}${pathSuffix}`,
                             message: validation.message,
                             severity: validation.level,
                         });
@@ -479,11 +486,13 @@ export function validateExtensionField(fieldLabel: string, value: string, isRequ
             }
             break;
         }
-        case 'FileTypeAssociation.Name':
-            if (!/^[a-zA-Z0-9.]+$/.test(value)) {
-                return { level: 'error', message: 'Name must contain only letters, digits, and periods.' };
+        case 'FileTypeAssociation.Name': {
+            const err = validateValueAgainstType(schema, 'ST_FTAName', value);
+            if (err) {
+                return { level: 'error', message: `Name: ${err}` };
             }
             break;
+        }
         case 'StartupTask.Enabled':
             if (value !== 'true' && value !== 'false') {
                 return { level: 'error', message: 'Value must be "true" or "false".' };

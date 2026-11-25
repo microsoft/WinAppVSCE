@@ -68,6 +68,13 @@ export function getApplicationsScript(): string {
             return html;
         }
 
+        // Reads data-ext-element-path ("0.1") into [0, 1]; undefined when the element has none.
+        function parseElementPath(el) {
+            const raw = el.getAttribute('data-ext-element-path');
+            if (raw === null) return undefined;
+            return raw === '' ? [] : raw.split('.').map(n => parseInt(n, 10));
+        }
+
         function renderApplications(apps) {
             const container = document.getElementById('applications-list');
             container.innerHTML = '';
@@ -85,23 +92,25 @@ export function getApplicationsScript(): string {
                         let fieldsHtml = fields.map(f => {
                             let descHtml = f.description ? '<div class="description">' + escapeHtml(f.description) + '</div>' : '';
                             const textContentAttr = f.isTextContent ? ' data-ext-text-content="true"' : '';
+                            const elementPathAttr = Array.isArray(f.elementPath) ? ' data-ext-element-path="' + f.elementPath.join('.') + '"' : '';
+                            const shownLabel = escapeHtml(f.displayLabel || f.label);
                             const errorClass = '';
                             const errorMsg = '<div class="validation-msg"></div>';
                             if (!f.editable) {
-                                return '<div class="form-group"><label>' + escapeHtml(f.label) + ':</label>' +
+                                return '<div class="form-group"><label>' + shownLabel + ':</label>' +
                                     '<input type="text" value="' + escapeHtml(f.value) + '" readonly class="ext-field-computed" />' +
                                     descHtml + '</div>';
                             }
                             // Add a browse button for Registration fields
                             const isBrowsable = f.isTextContent && f.label === 'Registration';
-                            const inputHtml = '<input type="text" value="' + escapeHtml(f.value) + '" data-ext-field="' + escapeHtml(f.label) + '" data-app-index="' + idx + '" data-ext-index="' + eidx + '"' + textContentAttr + ' />';
+                            const inputHtml = '<input type="text" value="' + escapeHtml(f.value) + '" data-ext-field="' + escapeHtml(f.label) + '" data-app-index="' + idx + '" data-ext-index="' + eidx + '"' + elementPathAttr + textContentAttr + ' />';
                             if (isBrowsable) {
-                                return '<div class="form-group' + errorClass + '"><label>' + escapeHtml(f.label) + ':</label>' +
+                                return '<div class="form-group' + errorClass + '"><label>' + shownLabel + ':</label>' +
                                     '<div class="browse-row">' + inputHtml +
-                                    '<button class="btn btn-sm browse-file-btn" data-app-index="' + idx + '" data-ext-index="' + eidx + '" data-ext-field="' + escapeHtml(f.label) + '">Choose file</button>' +
+                                    '<button class="btn btn-sm browse-file-btn" data-app-index="' + idx + '" data-ext-index="' + eidx + '" data-ext-field="' + escapeHtml(f.label) + '"' + elementPathAttr + '>Choose file</button>' +
                                     '</div>' + descHtml + errorMsg + '</div>';
                             }
-                            return '<div class="form-group' + errorClass + '"><label>' + escapeHtml(f.label) + ':</label>' +
+                            return '<div class="form-group' + errorClass + '"><label>' + shownLabel + ':</label>' +
                                 inputHtml + descHtml + errorMsg + '</div>';
                         }).join('');
                         extListHtml += '<div class="list-item"><div class="item-header"><span class="item-title">Extension #' + (eidx + 1) + '</span><button class="btn-remove-field remove-ext" data-app-index="' + idx + '" data-ext-index="' + eidx + '" title="Remove">✕</button></div>' + fieldsHtml + '</div>';
@@ -348,6 +357,11 @@ export function getApplicationsScript(): string {
                 toggleOptionalField('app-' + idx + '-trustlevel-group', 'add-app-' + idx + '-trustlevel', app.trustLevel);
                 toggleOptionalField('app-' + idx + '-runtimebehavior-group', 'add-app-' + idx + '-runtimebehavior', app.runtimeBehavior);
                 toggleOptionalField('app-' + idx + '-multiinstance-group', 'add-app-' + idx + '-multiinstance', app.supportsMultipleInstances);
+                // SupportsMultipleInstances is UWP-only: never offer to add it to a desktop app.
+                if (app.isUwp === false && !app.supportsMultipleInstances) {
+                    document.getElementById('app-' + idx + '-multiinstance-group')?.classList.add('hidden-optional');
+                    document.getElementById('add-app-' + idx + '-multiinstance')?.classList.add('hidden-optional');
+                }
                 toggleOptionalField('app-' + idx + '-parameters-group', 'add-app-' + idx + '-parameters', app.parameters);
                 toggleOptionalField('app-' + idx + '-applistentry-group', 'add-app-' + idx + '-applistentry', app.visualElements.appListEntry);
                 toggleOptionalField('app-' + idx + '-shortname-group', 'add-app-' + idx + '-shortname', app.visualElements.shortName);
@@ -407,6 +421,7 @@ export function getApplicationsScript(): string {
                     const appIndex = parseInt(inp.getAttribute('data-app-index'), 10);
                     const extIndex = parseInt(inp.getAttribute('data-ext-index'), 10);
                     const fieldPath = inp.getAttribute('data-ext-field');
+                    const elementPath = parseElementPath(inp);
                     // The ordinal keeps the key unique: an extension can render two inputs with the
                     // same field path (e.g. two <Host> elements both bound to Host.Name).
                     const key = 'ext:' + appIndex + ':' + extIndex + ':' + fieldPath + ':' + inpOrdinal;
@@ -416,7 +431,8 @@ export function getApplicationsScript(): string {
                         extIndex: extIndex,
                         fieldPath: fieldPath,
                         value: inp.value,
-                        isTextContent: inp.hasAttribute('data-ext-text-content')
+                        isTextContent: inp.hasAttribute('data-ext-text-content'),
+                        elementPath: elementPath
                     });
                     inp.addEventListener('input', () => {
                         queueDebouncedChange(key, describe, () => {
@@ -427,7 +443,8 @@ export function getApplicationsScript(): string {
                                 extIndex: c.extIndex,
                                 fieldPath: c.fieldPath,
                                 value: c.value,
-                                isTextContent: c.isTextContent
+                                isTextContent: c.isTextContent,
+                                elementPath: c.elementPath
                             });
                         });
                     });
@@ -440,7 +457,8 @@ export function getApplicationsScript(): string {
                             type: 'browseFile',
                             appIndex: parseInt(btn.getAttribute('data-app-index'), 10),
                             extIndex: parseInt(btn.getAttribute('data-ext-index'), 10),
-                            fieldPath: btn.getAttribute('data-ext-field')
+                            fieldPath: btn.getAttribute('data-ext-field'),
+                            elementPath: parseElementPath(btn)
                         });
                     });
                 });

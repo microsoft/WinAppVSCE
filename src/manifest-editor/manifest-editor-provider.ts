@@ -16,7 +16,9 @@ import { WebviewToExtensionMessage } from './manifest-types';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { AssetCopyTokenStore } from './asset-copy-token-store';
-import { MrtResolution, checkAspectRatio, getImageDimensions, resolveManifestImagePath } from './image-utils';
+import { detectProjectAppKind } from './project-app-kind';
+import type { ProjectAppKind } from '../manifest-schema/semantic-validation';
+import { MrtResolution, checkAspectRatio, getImageDimensions, relativeImagePathOrCopy, resolveManifestImagePath } from './image-utils';
 import { applyFlushedChanges, documentParses } from './flush-changes';
 
 /** Debounce window for external document changes (e.g. typing in the XML text editor). */
@@ -78,6 +80,10 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
         // applyEdit, so isApplyingEdit cannot cover them; match on the result instead.
         let pendingFlushText: string | null = null;
         const assetCopyTokens = new AssetCopyTokenStore();
+        // The project file decides UWP vs desktop for template manifests; read it once per panel.
+        let projectKind: ProjectAppKind | undefined;
+        const projectKindReady = detectProjectAppKind(path.dirname(document.uri.fsPath))
+            .then(kind => { projectKind = kind; });
 
         /** Load the editor document. Reassigning `webview.html` destroys all webview UI state,
             so this runs once per panel: parse failures surface as an overlay instead. */
@@ -120,19 +126,39 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             removeApplication: (t, m) => removeApplication(t, m.index),
             addExtension: (t, m) => addExtension(t, m.index, m.xml),
             removeExtension: (t, m) => removeExtension(t, m.appIndex, m.extIndex),
-            updateExtensionField: (t, m) => updateExtensionField(t, m.appIndex, m.extIndex, m.fieldPath, m.value, m.isTextContent),
+            updateExtensionField: (t, m) => updateExtensionField(t, m.appIndex, m.extIndex, m.fieldPath, m.value, m.isTextContent, m.elementPath),
             setShowNameOnTiles: (t, m) => setShowNameOnTiles(t, m.appIndex, m.tiles),
         };
 
-        /** Browse for a file and return its path relative to the manifest directory. */
-        async function browseAndApplyField(title: string, filters: Record<string, string[]>): Promise<string | undefined> {
+        /** Copy a file into the manifest's Assets folder without overwriting; returns the manifest-relative path. */
+        function copyIntoAssets(sourcePath: string): string {
+            const assetsDir = path.join(path.dirname(document.uri.fsPath), 'Assets');
+            fs.mkdirSync(assetsDir, { recursive: true });
+            const fileName = path.basename(sourcePath);
+            const ext = path.extname(fileName);
+            const base = path.basename(fileName, ext);
+            let destName = fileName;
+            for (let counter = 1; fs.existsSync(path.join(assetsDir, destName)); counter++) {
+                destName = `${base}_${counter}${ext}`;
+            }
+            fs.copyFileSync(sourcePath, path.join(assetsDir, destName));
+            return `Assets\\${destName}`;
+        }
+
+        /** Show a native file picker starting in the manifest directory; returns the picked path. */
+        async function pickFile(title: string, filters: Record<string, string[]>): Promise<string | undefined> {
             const filePath = await vscode.window.showOpenDialog({
                 canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
                 title, filters,
                 defaultUri: vscode.Uri.file(path.dirname(document.uri.fsPath)),
             });
-            if (!filePath || filePath.length === 0) { return undefined; }
-            return path.relative(path.dirname(document.uri.fsPath), filePath[0].fsPath);
+            return filePath && filePath.length > 0 ? filePath[0].fsPath : undefined;
+        }
+
+        /** Browse for a file and return its path relative to the manifest directory. */
+        async function browseAndApplyField(title: string, filters: Record<string, string[]>): Promise<string | undefined> {
+            const picked = await pickFile(title, filters);
+            return picked ? path.relative(path.dirname(document.uri.fsPath), picked) : undefined;
         }
 
         /** Send the current document state to the webview. */
@@ -140,7 +166,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             const text = document.getText();
             let data;
             try {
-                data = parseManifest(text);
+                data = parseManifest(text, { projectKind });
             } catch (e) {
                 // Surface the failure as an overlay rather than rebuilding the document, which
                 // would wipe tab/scroll/expanded-field state every time the XML is transiently bad.
@@ -158,7 +184,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
         const refreshValidationOnly = () => {
             let data;
             try {
-                data = parseManifest(document.getText());
+                data = parseManifest(document.getText(), { projectKind });
             } catch {
                 // A flush only edits text that parses, so this is unexpected: fall back to the
                 // full path, which raises the overlay.
@@ -250,6 +276,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                     switch (message.type) {
                         case 'ready':
                             postWorkspaceTrust();
+                            await projectKindReady;
                             updateWebview();
                             return;
 
@@ -338,6 +365,8 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             } else if (outcome.status === 'external') {
                                 const copyToken = assetCopyTokens.issue(outcome.sourcePath);
                                 webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', copyToken });
+                            } else if (outcome.status === 'outsideRoots') {
+                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'outsideRoots' });
                             } else {
                                 webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'notFound' });
                             }
@@ -345,37 +374,12 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                         }
 
                         case 'copyToAssets': {
-                            const manifestDirPath2 = path.dirname(document.uri.fsPath);
-                            const assetsDir = path.join(manifestDirPath2, 'Assets');
                             const sourcePath = assetCopyTokens.consume(message.copyToken);
                             if (!sourcePath) {
                                 updateWebview(true);
                                 return;
                             }
-                            const fileName = path.basename(sourcePath);
-
-                            let destName = fileName;
-                            if (!fs.existsSync(assetsDir)) {
-                                fs.mkdirSync(assetsDir, { recursive: true });
-                            }
-
-                            let destPath = path.join(assetsDir, destName);
-                            if (fs.existsSync(destPath)) {
-                                const ext = path.extname(fileName);
-                                const base = path.basename(fileName, ext);
-                                let counter = 1;
-                                while (fs.existsSync(destPath)) {
-                                    destName = `${base}_${counter}${ext}`;
-                                    destPath = path.join(assetsDir, destName);
-                                    counter++;
-                                }
-                            }
-
-                            fs.copyFileSync(sourcePath, destPath);
-                            const newRelPath = `Assets\\${destName}`;
-
-                            // Apply the field change with the new path
-                            newText = applyFieldChange(text, message.section, message.field, newRelPath, message.index);
+                            newText = applyFieldChange(text, message.section, message.field, copyIntoAssets(sourcePath), message.index);
                             break;
                         }
 
@@ -402,14 +406,19 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                         case 'browseFile': {
                             const relPath = await browseAndApplyField('Select JSON file', { 'JSON': ['json'] });
                             if (!relPath) { return; }
-                            newText = updateExtensionField(text, message.appIndex, message.extIndex, message.fieldPath, relPath, true);
+                            newText = updateExtensionField(text, message.appIndex, message.extIndex, message.fieldPath, relPath, true, message.elementPath);
                             break;
                         }
 
                         case 'browseImage': {
-                            const relPath = await browseAndApplyField('Select image', { 'Images': ['png', 'jpg', 'jpeg', 'svg', 'ico'] });
-                            if (!relPath) { return; }
-                            newText = applyFieldChange(text, message.section, message.field, relPath, message.index);
+                            const picked = await pickFile('Select image', { 'Images': ['png', 'jpg', 'jpeg', 'svg', 'ico'] });
+                            if (!picked) { return; }
+                            // A package can't reference files outside it, so copy those in rather than
+                            // writing a "..\" path that only leads to a second copy step.
+                            const workspaceRoots = (vscode.workspace.workspaceFolders ?? []).map(wf => wf.uri.fsPath);
+                            const value = relativeImagePathOrCopy(path.dirname(document.uri.fsPath), workspaceRoots, picked)
+                                ?? copyIntoAssets(picked);
+                            newText = applyFieldChange(text, message.section, message.field, value, message.index);
                             break;
                         }
 

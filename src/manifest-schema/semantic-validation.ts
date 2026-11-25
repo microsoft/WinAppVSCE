@@ -70,6 +70,41 @@ export function executableRequiresEntryPoint(
     return effective === 'windowsApp';
 }
 
+/** What a project file next to the manifest says about the app model. */
+export type ProjectAppKind = 'desktop' | 'uwp';
+
+/** Extra signals for manifests whose EntryPoint is a build-time token rather than a real value. */
+export interface AppModelHints {
+    /** From the project file next to the manifest, when one was found and recognized. */
+    projectKind?: ProjectAppKind;
+    /** Package declares the runFullTrust capability. */
+    hasRunFullTrust?: boolean;
+    /** This Application declares a windows.fullTrustProcess extension (a UWP app with a desktop helper). */
+    hasFullTrustProcess?: boolean;
+}
+
+/** VS and WinUI 3 templates write this token; MSBuild replaces it at build time. */
+const ENTRY_POINT_BUILD_TOKEN = '$targetentrypoint$';
+
+/**
+ * Whether an Application is a UWP app. RuntimeBehavior decides when present; otherwise the
+ * full/partial-trust EntryPoint values mark a packaged desktop app (see the Application schema).
+ * For the template build token, the project file decides, then the runFullTrust capability.
+ */
+export function isUwpApplication(
+    runtimeBehavior: string | null | undefined,
+    entryPoint: string | null | undefined,
+    hints: AppModelHints = {},
+): boolean {
+    const behavior = (runtimeBehavior ?? '').trim();
+    if (behavior) { return behavior === 'windowsApp'; }
+    const ep = (entryPoint ?? '').trim().toLowerCase();
+    if ([...FULL_TRUST_ENTRY_POINTS].some(fullTrust => fullTrust.toLowerCase() === ep)) { return false; }
+    if (ep !== ENTRY_POINT_BUILD_TOKEN) { return true; }
+    if (hints.projectKind) { return hints.projectKind === 'uwp'; }
+    return !(hints.hasRunFullTrust && !hints.hasFullTrustProcess);
+}
+
 /**
  * Whether StartPage and Executable conflict.
  */

@@ -202,13 +202,16 @@ export function resolveMrtAsset(baseDir: string, referencePath: string, options?
 export type ImagePathResolution =
     /** The reference resolves inside the package (or a workspace folder) — show a preview. */
     | { status: 'found'; resolution: MrtResolution }
-    /** The literal file exists outside the package — offer to copy it into Assets. */
+    /** The literal file exists in a workspace folder outside the package — offer to copy it into Assets. */
     | { status: 'external'; sourcePath: string }
+    /** The path is outside the package and workspace, so it was not inspected at all. */
+    | { status: 'outsideRoots' }
     | { status: 'notFound' };
 
 /**
  * Decides how a manifest image reference should be reported in the editor.
  * `workspaceRoots` are the open workspace folders, used for `..\`-escaping references.
+ * Paths outside the manifest folder and workspace are never touched on disk.
  */
 export function resolveManifestImagePath(
     manifestDir: string,
@@ -220,8 +223,14 @@ export function resolveManifestImagePath(
     // Only these directories may be enumerated while probing for MRT variants.
     const probeRoots = [manifestDir, ...workspaceRoots];
     const escapesPackage = imagePath.startsWith('..\\') || imagePath.startsWith('../');
-    const resolved = path.resolve(manifestDir, imagePath);
+    let resolved: string;
+    try {
+        resolved = path.resolve(manifestDir, imagePath);
+    } catch {
+        return { status: 'notFound' };
+    }
     const inWorkspace = workspaceRoots.some(root => isPathWithin(root, resolved));
+    if (!inWorkspace && !isPathWithin(manifestDir, resolved)) { return { status: 'outsideRoots' }; }
 
     const packageResolution = resolveMrtAsset(manifestDir, imagePath, { probeRoots });
 
@@ -240,6 +249,17 @@ export function resolveManifestImagePath(
     }
 
     return { status: 'notFound' };
+}
+
+/**
+ * Decides what an image picked in the native dialog becomes in the manifest: a relative path
+ * when it sits in the package or a workspace folder, otherwise a copy into Assets (null here).
+ */
+export function relativeImagePathOrCopy(
+    manifestDir: string, workspaceRoots: readonly string[], pickedPath: string,
+): string | null {
+    const insideRoots = [manifestDir, ...workspaceRoots].some(root => isPathWithin(root, pickedPath));
+    return insideRoots ? path.relative(manifestDir, pickedPath) : null;
 }
 
 /** Reads width/height from PNG or JPEG file headers without loading the full image. */
