@@ -21,6 +21,69 @@ public class XamlSuggestionsTests
         Assert.Equal("Button", result[0]);
     }
 
+    [Theory]
+    [InlineData("Gird", "Grid")]
+    [InlineData("Txet", "Text")]
+    [InlineData("Ture", "True")]
+    public void AdjacentTransposition_CountsAsOneTypo(string bad, string expected)
+    {
+        Assert.Equal(expected, Assert.Single(XamlSuggestions.Nearest(bad, [expected])));
+    }
+
+    [Fact]
+    public void TwoLetterSwap_IsNotTreatedAsOneTypo()
+    {
+        Assert.Empty(XamlSuggestions.Nearest("On", ["No"]));
+    }
+
+    [Theory]
+    [InlineData("FrozenEdgeCount", "FrozenEdge")]
+    [InlineData("FrozenColumnCount", "FrozenEdge")]
+    [InlineData("frozenEdgeCount", "FrozenEdge")]
+    [InlineData("Edge", "FrozenEdge")]
+    [InlineData("Visib", "Visibility")]
+    public void RelatedNames_FindsThePartialOrWordMatch(string typed, string expected)
+    {
+        Assert.Equal(expected, Assert.Single(
+            XamlSuggestions.RelatedNames(typed, ["FrozenEdge", "Visibility", "Width", "Header"])));
+    }
+
+    [Fact]
+    public void RelatedNames_MapsDataGridStyleNameOnRealTableViewColumnMembers()
+    {
+        string[] columnMembers =
+        [
+            "ActualWidth", "CanResize", "CanSort", "CellEditingTemplate", "CellTemplate", "CellToolTipBinding",
+            "CustomSortComparer", "FrozenEdge", "Header", "HeaderTemplate", "HeaderTemplateSelector", "HeaderToolTip",
+            "IsReadOnly", "MaxWidth", "MinWidth", "SortCycle", "SortDirection", "SortMemberPath", "Visibility", "Width",
+        ];
+
+        Assert.Equal("FrozenEdge", Assert.Single(XamlSuggestions.RelatedNames("FrozenColumnCount", columnMembers)));
+    }
+
+    [Theory]
+    [InlineData("BackgroundColor", new[] { "Background", "RowBackground", "BackgroundSizing" })]
+    [InlineData("Font", new[] { "FontSize", "FontStyle", "FontFamily" })]
+    public void RelatedNames_ListsUpToThreeTiedMatchesClosestFirst(string typed, string[] expected)
+    {
+        string[] candidates =
+        [
+            "AlternatingRowBackground", "BackgroundSizing", "RowBackground", "Background", "Foreground",
+            "FontWeight", "FontFamily", "FontStyle", "FontSize",
+        ];
+
+        Assert.Equal(expected, XamlSuggestions.RelatedNames(typed, candidates));
+    }
+
+    [Theory]
+    [InlineData("Ed")]
+    [InlineData("Zebra")]
+    [InlineData("IsDefault")]
+    public void RelatedNames_OffersNothingWithoutAPartialOrSharedWordMatch(string typed)
+    {
+        Assert.Empty(XamlSuggestions.RelatedNames(typed, ["EdgeMode", "Background", "FontSize", "IsEnabled", "IsTabStop"]));
+    }
+
     [Fact]
     public void CasingOnlySlip_ScoresBestAndRanksFirst()
     {

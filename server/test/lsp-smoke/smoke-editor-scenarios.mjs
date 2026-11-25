@@ -524,6 +524,51 @@ export async function runEditorScenarios(ctx) {
   }
   console.log(`[ok] code actions: <Buton> -> "Change 'Buton' to 'Button'" quickfix replacing exactly the flagged span (${caActions.length} action(s))`);
 
+  // Name and value fixes stay separate: typos are preferred, related names (partial or one word off) are not.
+  const spellingCases = [
+    { body: "<Gird></Gird>", bad: "Gird", good: "Grid", code: "WXAML0002", count: 2, preferred: true },
+    { body: '<TextBlock Txet="unchanged" />', bad: "Txet", good: "Text", code: "WXAML0003", count: 1, preferred: true },
+    { body: '<Button IsEnabled="Ture" />', bad: "Ture", good: "True", code: "WXAML0012", count: 1, preferred: true },
+    { body: '<Button HorizontalAlignment="Strech" />', bad: "Strech", good: "Stretch", code: "WXAML0012", count: 1, preferred: true },
+    { body: '<Button MaxHieght="200" />', bad: "MaxHieght", good: "MaxHeight", code: "WXAML0003", count: 1, preferred: true },
+    { body: '<Button VisibilityCount="Collapsed" />', bad: "VisibilityCount", good: "Visibility", code: "WXAML0003", count: 1, preferred: false },
+    { body: '<Button Visib="Collapsed" />', bad: "Visib", good: "Visibility", code: "WXAML0003", count: 1, preferred: false },
+    { body: '<Button ForegroundColor="Red" />', bad: "ForegroundColor", good: "Foreground", code: "WXAML0003", count: 1, preferred: false },
+    { body: '<Button BackgroundColor="Red" />', bad: "BackgroundColor", good: "Background", code: "WXAML0003", count: 1, preferred: false },
+  ];
+  for (const [index, scenario] of spellingCases.entries()) {
+    const text = pageCls(scenario.body);
+    const diagnostics = await validateDoc(
+      text,
+      (items) => items.some((item) => item.code === scenario.code && item.message.includes(scenario.bad)),
+      `spelling ${scenario.bad}`,
+    );
+    const diagnostic = diagnostics.find((item) => item.code === scenario.code && item.message.includes(scenario.bad));
+    const actions = await codeActionWith(920100 + index, diagnostic, `spelling ${scenario.bad}`);
+    const action = actions.find((item) => item.title === `Change '${scenario.bad}' to '${scenario.good}'`);
+    const edits = action?.edit?.changes?.[xamlUri];
+    if (action?.kind !== "quickfix" || (action.isPreferred === true) !== scenario.preferred || action.command ||
+        edits?.length !== scenario.count) {
+      fail(`spelling ${scenario.bad}: expected a direct replacement (preferred=${scenario.preferred}), got ${JSON.stringify(actions)}`);
+    }
+
+    let fixed = text;
+    for (const edit of [...edits].sort((a, b) =>
+      positionToOffset(text, b.range.start) - positionToOffset(text, a.range.start))) {
+      const start = positionToOffset(text, edit.range.start);
+      const end = positionToOffset(text, edit.range.end);
+      if (text.slice(start, end) !== scenario.bad || edit.newText !== scenario.good) {
+        fail(`spelling ${scenario.bad}: incorrect replacement span or text: ${JSON.stringify(edit)}`);
+      }
+      fixed = fixed.slice(0, start) + edit.newText + fixed.slice(end);
+    }
+    if (fixed !== text.replaceAll(scenario.bad, scenario.good)) {
+      fail(`spelling ${scenario.bad}: replacement changed unrelated markup`);
+    }
+    await validateDoc(fixed, (items) => items.length === 0, `fixed spelling ${scenario.bad}`);
+    console.log(`[ok] spelling quick fix: ${scenario.bad} -> ${scenario.good}, exact edits clear diagnostics`);
+  }
+
   // 21b) code action for a misspelled property element whose intended target is a GET-ONLY collection property (Grid.RowDefinitions has no setter). Regression guard: the suggestion candidate source must mirror property-element VALIDITY (HasProperty, get-only included), not the setter-only GetMembers — otherwise a real fix like RowDefinitionz -> RowDefinitions would be silently missing.
   const caPe = `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <Grid>\n    <Grid.RowDefinitionz><RowDefinition /></Grid.RowDefinitionz>\n  </Grid>\n</Page>`;
   const caPeDiags = await validateDoc(

@@ -122,6 +122,7 @@ internal static class XamlCodeActions
                     AddPromptedReplacementFix(actions, uri, doc, diagnostic, bad);
                     continue;
                 }
+                bool related = IsRelatedSuggestion(diagnostic.Data);
 
                 // The stored token is authoritative; fall back to the live span only if it is somehow absent.
                 if (bad.Length == 0 && doc is not null)
@@ -152,7 +153,7 @@ internal static class XamlCodeActions
                         Kind = "quickfix",
                         Diagnostics = new List<Diagnostic> { diagnostic },
                         IsPreferred =
-                            i == 0 && !preferredImportAdded && uniqueNamespaceSuggestion
+                            i == 0 && !related && !preferredImportAdded && uniqueNamespaceSuggestion
                                 ? true
                                 : null,
                         Edit = new WorkspaceEdit
@@ -242,6 +243,14 @@ internal static class XamlCodeActions
                 return (string.Empty, Array.Empty<string>());
         }
     }
+
+    private static bool IsRelatedSuggestion(object? data) => data switch
+    {
+        DiagnosticData typed => typed.Related == true,
+        JsonElement json when json.ValueKind == JsonValueKind.Object =>
+            json.TryGetProperty("related", out var related) && related.ValueKind == JsonValueKind.True,
+        _ => false,
+    };
 
     private static string RangeText(TextDocument doc, Lsp.Range range)
     {
@@ -699,6 +708,12 @@ internal static class XamlCodeActions
 
             case XamlValidator.InvalidAttributeValueCode:
             {
+                // A close spelling (for example Ture -> True) beats a default value; the suggestion path offers it.
+                if (ReadSuggestions(diagnostic.Data).Suggestions.Count > 0)
+                {
+                    return false;
+                }
+
                 var attribute = FindAncestor<XamlAttribute>(doc.Parsed.FindNode(offset));
                 var element = attribute?.Parent as XamlElement;
                 var elementType = element is null || typeSystem is null
@@ -712,6 +727,7 @@ internal static class XamlCodeActions
                     : XamlValueConverter.GetDefaultLiteral(memberType);
                 if (attribute?.Value is null ||
                     replacement is null ||
+                    !XamlValidator.IsClosedLiteral(doc, attribute.Value) ||
                     !DiagnosticTargetsSpan(doc, diagnostic.Range, attribute.Value.InnerSpan) ||
                     memberType is not null &&
                     XamlValueConverter.TryValidate(
