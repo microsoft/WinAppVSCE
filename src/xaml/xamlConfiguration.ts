@@ -23,6 +23,7 @@ import {
   PROJECT_CONTEXT_RESTORING_MESSAGE,
   PROJECT_CONTEXT_WINUI_REQUIRED_MESSAGE,
   ProjectContextState,
+  SERVER_STOPPED_MESSAGE,
 } from "./projectContextStatus";
 
 export type { XamlStatusAction };
@@ -69,13 +70,21 @@ export function getXamlStatus(
   running: boolean,
   trusted: boolean,
   hasOpenXamlDocument: boolean,
-  projectContext?: XamlProjectContextSummary
+  projectContext?: XamlProjectContextSummary,
+  serverStopped = false
 ): XamlStatus {
   if (!enabled) {
     return {
       message:
         `${XAML_STATUS_PREFIX} IntelliSense is disabled in Settings; syntax highlighting remains active.`,
       actions: [XAML_STATUS_ACTIONS.openSettings],
+    };
+  }
+
+  if (!running && serverStopped) {
+    return {
+      message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${SERVER_STOPPED_MESSAGE}`,
+      actions: [XAML_STATUS_ACTIONS.restartServer, XAML_STATUS_ACTIONS.showOutput],
     };
   }
 
@@ -287,9 +296,11 @@ export function normalizeFormattingProvider(value: unknown): XamlFormattingProvi
   return value === "winapp" || value === "disabled" ? value : "auto";
 }
 
+/** The C# extension only formats XAML when C# Dev Kit is installed and its XAML tools are enabled. */
 export function shouldEnableWinAppXamlFormatting(
   provider: XamlFormattingProvider,
   csharpExtensionInstalled: boolean,
+  csharpDevKitInstalled: boolean,
   csharpXamlToolsEnabled: boolean
 ): boolean {
   if (provider === "disabled") {
@@ -298,7 +309,7 @@ export function shouldEnableWinAppXamlFormatting(
   if (provider === "winapp") {
     return true;
   }
-  return !csharpExtensionInstalled || !csharpXamlToolsEnabled;
+  return !(csharpExtensionInstalled && csharpDevKitInstalled && csharpXamlToolsEnabled);
 }
 
 export function shouldRestartXamlLanguageServer(

@@ -319,4 +319,83 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     assert.ok(recovered.includes("Button"), "server should start once trust is granted (seam cleared)");
   });
 
+  // Regression for #363: after repeated crashes the client gives up; the server must stay down
+  // (not be resurrected by demand) until Restart Language Server, which must bring it back.
+  it("stays stopped after the crash limit and recovers through Restart Language Server", async function () {
+    if (process.platform !== "win32") {
+      this.skip();
+    }
+    const { execFileSync } = require("node:child_process");
+    // Only this extension host's own server children are ever killed.
+    const serverPids = () =>
+      execFileSync(
+        "powershell",
+        [
+          "-NoProfile",
+          "-Command",
+          `Get-CimInstance Win32_Process -Filter "ParentProcessId=${process.pid}" | ` +
+            "Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*WinUiXaml.LanguageServer*' } | " +
+            "ForEach-Object { $_.ProcessId }",
+        ],
+        { encoding: "utf8" }
+      )
+        .split(/\r?\n/)
+        .map((line) => Number(line.trim()))
+        .filter((pid) => pid > 0);
+    const waitForServer = async (exclude) => {
+      const started = Date.now();
+      while (Date.now() - started < 60000) {
+        const pid = serverPids().find((candidate) => !exclude.has(candidate));
+        if (pid) {
+          return pid;
+        }
+        await h.delay(250);
+      }
+      return undefined;
+    };
+    const waitForInitialized = async () => {
+      const started = Date.now();
+      while (Date.now() - started < 60000) {
+        const { tokens } = await h.semanticTokensAt(`<Page ${h.NS}>\n  <Button />\n</Page>`);
+        if (tokens.length > 0) {
+          return;
+        }
+        await h.delay(250);
+      }
+      assert.fail("the restarted server never answered a semantic tokens request");
+    };
+
+    await waitForSemanticButton(true, 60000);
+    const killed = new Set();
+    // The client restarts four times in three minutes; the fifth crash stops it for good.
+    for (let crash = 1; crash <= 5; crash++) {
+      const pid = await waitForServer(killed);
+      assert.ok(pid, `expected a running server before crash ${crash}`);
+      // A kill during initialize fails the start instead of counting as a crash, so wait until it answers.
+      await waitForInitialized();
+      killed.add(pid);
+      process.kill(pid);
+    }
+
+    await h.delay(3000);
+    assert.deepEqual(
+      serverPids().filter((pid) => !killed.has(pid)),
+      [],
+      "the client should stop restarting after the crash limit"
+    );
+
+    // Opening another XAML document fires the demand-driven start; it must not resurrect the server.
+    const other = await vscode.workspace.openTextDocument({ language: "xaml", content: `<Page ${h.NS} />` });
+    await h.delay(3000);
+    assert.deepEqual(
+      serverPids().filter((pid) => !killed.has(pid)),
+      [],
+      `opening ${other.uri.toString()} must not restart a server the client gave up on`
+    );
+
+    await assert.doesNotReject(() => vscode.commands.executeCommand("winapp.xaml.restartServer"));
+    await h.warmUp();
+    await waitForSemanticButton(true, 60000);
+  });
+
 });

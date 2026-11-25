@@ -14,7 +14,7 @@ internal sealed class TextDocument
         Text = text;
         Version = version;
         Parsed = XamlParser.Parse(text);
-        _lineStarts = ComputeLineStarts(text);
+        _lineStarts = LineBreaks.ComputeLineStarts(text);
     }
 
     public string Uri { get; }
@@ -24,6 +24,10 @@ internal sealed class TextDocument
     public int? Version { get; }
 
     public XamlDocument Parsed { get; }
+
+    public int LineCount => _lineStarts.Length;
+
+    public int LineStart(int line) => _lineStarts[line];
 
     public int OffsetAt(Position position)
     {
@@ -76,18 +80,4 @@ internal sealed class TextDocument
 
     public Lsp.Range RangeOf(TextSpan span) =>
         new(PositionAt(span.Start), PositionAt(span.End));
-
-    private static int[] ComputeLineStarts(string text)
-    {
-        var starts = new List<int> { 0 };
-        for (int i = 0; i < text.Length; i++)
-        {
-            if (text[i] == '\n')
-            {
-                starts.Add(i + 1);
-            }
-        }
-
-        return starts.ToArray();
-    }
 }

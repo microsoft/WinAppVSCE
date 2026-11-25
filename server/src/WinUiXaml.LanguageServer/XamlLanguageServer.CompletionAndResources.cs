@@ -1209,27 +1209,8 @@ internal sealed partial class XamlLanguageServer
         new(OffsetToPosition(text, span.Start), OffsetToPosition(text, span.End));
 
     /// <summary>Converts a character offset into a zero-based LSP line/character position by scanning the text.</summary>
-    private static Position OffsetToPosition(string text, int offset)
-    {
-        int limit = System.Math.Min(offset, text.Length);
-        int line = 0;
-        int character = 0;
-        for (int i = 0; i < limit; i++)
-        {
-            char c = text[i];
-            if (c == '\n')
-            {
-                line++;
-                character = 0;
-            }
-            else if (c != '\r')
-            {
-                character++;
-            }
-        }
-
-        return new Position(line, character);
-    }
+    private static Position OffsetToPosition(string text, int offset) =>
+        LineBreaks.OffsetToPosition(text, offset);
 
     private static int MapSeverity(XamlDiagnosticSeverity severity) => severity switch
     {

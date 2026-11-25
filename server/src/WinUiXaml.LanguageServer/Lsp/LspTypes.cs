@@ -188,7 +188,9 @@ internal sealed class TextDocumentItem
     [JsonPropertyName("uri")] public string Uri { get; set; } = string.Empty;
     [JsonPropertyName("languageId")] public string LanguageId { get; set; } = string.Empty;
     [JsonPropertyName("version")] public int Version { get; set; }
-    [JsonPropertyName("text")] public string Text { get; set; } = string.Empty;
+    [JsonPropertyName("text")]
+    [JsonConverter(typeof(LenientStringConverter))]
+    public string Text { get; set; } = string.Empty;
 }
 
 internal sealed class DidOpenTextDocumentParams
@@ -210,7 +212,9 @@ internal sealed class DidChangeTextDocumentParams
 internal sealed class TextDocumentContentChangeEvent
 {
     /// <summary>Under full sync (the only mode we advertise), this is the whole document text.</summary>
-    [JsonPropertyName("text")] public string Text { get; set; } = string.Empty;
+    [JsonPropertyName("text")]
+    [JsonConverter(typeof(LenientStringConverter))]
+    public string Text { get; set; } = string.Empty;
 }
 
 internal sealed class DidCloseTextDocumentParams
