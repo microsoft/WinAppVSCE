@@ -15,7 +15,7 @@ import {
   type ErrorHandler,
   type Message,
 } from "vscode-languageclient/node";
-import { reportFinalStops } from "./serverStopHandling";
+import { confirmFinalStop, reportFinalStops } from "./serverStopHandling";
 import { firstExistingPath } from "../winapp-cli-utils";
 import {
   buildDegradedNotification,
@@ -107,6 +107,7 @@ let projectStatusItem: vscode.StatusBarItem | undefined;
 let clientFormattingEnabled: boolean | undefined;
 /** True after the client gave up restarting; demand-driven starts wait for an explicit restart. */
 let serverStopped = false;
+const SERVER_RELAUNCH_FAILED_MESSAGE = "Relaunching the server after it stopped failed.";
 const CSHARP_EXTENSION_ID = "ms-dotnettools.csharp";
 const APPLY_GENERATED_EVENT_HANDLER_COMMAND = "winapp.xaml.applyGeneratedEventHandler";
 const PROMPT_TEXT_EDIT_COMMAND = "winapp.xaml.promptTextEdit";
@@ -793,9 +794,13 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     if (newState === State.Starting) {
       // An automatic restart after a crash: the old server's project states are stale.
       clearProjectContextStatus();
-    } else if (newState === State.Stopped && finalStop && !lifecycle.isDisposing) {
-      // An automatic restart also passes through Stopped; only a reported final stop is terminal.
-      handleServerStopped(candidate, finalStop.reason, context);
+    } else if (newState === State.Stopped && !lifecycle.isDisposing) {
+      // An automatic restart passes through Stopped too; act only if the client stays stopped,
+      // which covers both an exhausted restart budget and a relaunch that failed to spawn.
+      confirmFinalStop(
+        () => client === candidate && candidate.state === State.Stopped && !lifecycle.isDisposing,
+        () => handleServerStopped(candidate, finalStop?.reason ?? SERVER_RELAUNCH_FAILED_MESSAGE, context)
+      );
     }
   });
   candidate.onNotification(

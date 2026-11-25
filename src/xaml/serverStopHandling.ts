@@ -46,3 +46,19 @@ export function reportFinalStops<TError, TMessage>(
     },
   };
 }
+
+/**
+ * Calls onFinal if the client is still stopped a tick after reporting Stopped. An automatic
+ * restart passes through Stopped but re-enters Starting synchronously; a failed relaunch does not.
+ */
+export function confirmFinalStop(
+  isStillStopped: () => boolean,
+  onFinal: () => void,
+  defer: (callback: () => void) => void = (callback) => setTimeout(callback, 0)
+): void {
+  defer(() => {
+    if (isStillStopped()) {
+      onFinal();
+    }
+  });
+}
