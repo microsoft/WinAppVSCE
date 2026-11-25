@@ -84,7 +84,7 @@ describe("WinUI XAML red-team 7 — diagnostics false positives and misses", fun
       "<Page.Resources>",
       '  <SolidColorBrush x:Key="ProbeBrush" Color="Red" />',
       "</Page.Resources>",
-      '<Grid x:Load="True" x:DefaultBindMode="OneWay">',
+      '<Grid x:Name="LoadProbe" x:Load="True" x:DefaultBindMode="OneWay">',
       '  <TextBlock Text="{x:Bind GreetingText}" />',
       "</Grid>",
     ].join("\n  "));

@@ -52,7 +52,7 @@ internal static partial class XamlValidator
                 argument.Value is { Length: > 0 } rawElementName &&
                 argument.ValueSpan is { } elementNameSpan &&
                 rawElementName.Trim() is { Length: > 0 } elementName &&
-                XamlSemanticFacts.FindNamedElementInScope(
+                XamlSemanticFacts.FindElementNameBindingTarget(
                     doc, attribute.Parent, elementName, typeSystem) is null)
             {
                 diagnostics.Add(Diag(doc, elementNameSpan, SeverityError, UnknownBindingElementNameCode,
@@ -614,17 +614,40 @@ internal static partial class XamlValidator
             return true;
         }
 
-        if (source.SpecialType == SpecialType.System_String &&
-            (target.Name == "Uri" &&
-             target.ContainingNamespace?.ToDisplayString() == "System" ||
-             target.Name == "ImageSource" &&
-             target.ContainingNamespace?.ToDisplayString() is
-                 "Microsoft.UI.Xaml.Media" or "Windows.UI.Xaml.Media"))
+        // The XAML compiler converts string sources with XamlBindingHelper.ConvertValue, which only creates text-convertible types.
+        if (source.SpecialType == SpecialType.System_String && IsConvertibleFromText(target))
         {
             return true;
         }
 
         return !isFunctionBinding && IsBooleanToVisibilityConversion(source, target);
+    }
+
+    /// <summary>Value types, enums, Uri, and non-template framework classes (Brush, ImageSource); never interfaces or project classes.</summary>
+    private static bool IsConvertibleFromText(ITypeSymbol target)
+    {
+        if (target.TypeKind is TypeKind.Struct or TypeKind.Enum ||
+            target.ToDisplayString() == "System.Uri")
+        {
+            return true;
+        }
+
+        if (target.TypeKind != TypeKind.Class ||
+            target.ContainingNamespace?.ToDisplayString() is not { } ns ||
+            !(ns.StartsWith("Microsoft.UI.Xaml", System.StringComparison.Ordinal) || ns.StartsWith("Windows.", System.StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        for (var current = target; current is not null; current = current.BaseType)
+        {
+            if (current.Name == "FrameworkTemplate")
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool IsBooleanToVisibilityConversion(ITypeSymbol source, ITypeSymbol target)

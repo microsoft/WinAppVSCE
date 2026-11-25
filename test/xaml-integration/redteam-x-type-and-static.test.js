@@ -150,12 +150,13 @@ describe("WinUI XAML red-team 21 — {x:Type}/{x:Static} adversarial probes", fu
     assert.ok(/Visible/.test(md), `DataTemplate x:Static hover should resolve Visible; buffer=${buffer}; got ${md}`);
   });
 
-  it("completion offers x:Type and x:Static as markup-extension names", async () => {
+  // WinUI XAML does not support {x:Type}/{x:Static} (WMC0001), so markup-name completion must not offer them (#357).
+  it("completion does not offer WPF-only x:Type and x:Static as markup-extension names", async () => {
     const typeItems = await h.completionsAt(page('<Button Tag="{x:Typ|}" />'));
-    assert.ok(typeItems.includes("x:Type"), `markup-name completion should include x:Type; got ${typeItems.slice(0, 80).join(", ")}`);
+    assert.ok(!typeItems.includes("x:Type"), `markup-name completion should not include x:Type; got ${typeItems.slice(0, 80).join(", ")}`);
 
     const staticItems = await h.completionsAt(page('<Button Tag="{x:Sta|}" />'));
-    assert.ok(staticItems.includes("x:Static"), `markup-name completion should include x:Static; got ${staticItems.slice(0, 80).join(", ")}`);
+    assert.ok(!staticItems.includes("x:Static"), `markup-name completion should not include x:Static; got ${staticItems.slice(0, 80).join(", ")}`);
   });
 
   it("x:Type completion offers framework type names in the argument", async () => {

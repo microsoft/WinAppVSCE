@@ -51,8 +51,8 @@ public sealed class XamlDirectiveMetadataTests
     [Theory]
     [InlineData("Bind", "compiled binding")]
     [InlineData("Null", "null reference")]
-    [InlineData("Static", "static field")]
-    [InlineData("Type", "System.Type")]
+    [InlineData("Static", "Not supported in WinUI")]
+    [InlineData("Type", "Not supported in WinUI")]
     public void ResolvesXamlMarkupExtensionsWithAlternatePrefix(string localName, string expected)
     {
         var text =

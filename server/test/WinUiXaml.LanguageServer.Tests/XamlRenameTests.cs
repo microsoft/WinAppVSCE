@@ -446,6 +446,28 @@ public class XamlRenameTests
         Assert.All(edits, edit => Assert.Equal("Outer", edit.NewText));
     }
 
+    // Regression #351: a template ElementName with no local match binds to the outer element, so rename follows it.
+    [Theory]
+    [InlineData("<controls:Grid x:Name=\"Out|er\" />", "<controls:TextBox Text=\"{Binding ElementName=Outer}\" />")]
+    [InlineData("<controls:Grid x:Name=\"Outer\" />", "<controls:TextBox Text=\"{Binding ElementName=Out|er}\" />")]
+    public void Rename_NameFollowsTemplateElementNameToOuterScope(string declaration, string usage)
+    {
+        var buffer = $$"""
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              {{declaration}}
+              <DataTemplate>
+                {{usage}}
+              </DataTemplate>
+            </Page>
+            """;
+
+        var edits = RenameEdits(buffer, "Renamed", CreateFrameworkTypeSystem());
+
+        Assert.Equal(2, edits.Count);
+    }
+
     [Fact]
     public void Rename_NameInsideTemplateDoesNotCrossToOuterNameScope()
     {
@@ -466,6 +488,86 @@ public class XamlRenameTests
 
         Assert.Equal(2, edits.Count);
         Assert.All(edits, edit => Assert.Equal("Inner", edit.NewText));
+    }
+
+    [Theory]
+    [InlineData("Out|er", "Inner", "Inner", "Outer")]
+    [InlineData("Outer", "In|ner", "Outer", "Outer")]
+    [InlineData("Out|er", "Inner", "Missing", "Missing")]
+    public void Rename_RefusesWhenTemplateElementNameWouldResolveDifferently(string outer, string inner, string newName, string reference)
+    {
+        var (doc, offset) = Caret($$"""
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              <controls:Grid x:Name="{{outer}}" />
+              <DataTemplate>
+                <controls:Grid x:Name="{{inner}}" />
+                <controls:TextBox Text="{Binding ElementName={{reference}}}" />
+              </DataTemplate>
+            </Page>
+            """);
+
+        Assert.Throws<RenameValidationException>(() =>
+            XamlRename.Rename(doc, offset, newName, CreateFrameworkTypeSystem()));
+    }
+
+    [Fact]
+    public void Rename_RefusesCaptureWhenOldNameIsReusedInNestedTemplate()
+    {
+        var (doc, offset) = Caret("""
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              <controls:Grid x:Name="Target" />
+              <DataTemplate>
+                <controls:Grid x:Name="O|ld" />
+                <DataTemplate>
+                  <controls:Grid x:Name="Old" />
+                  <controls:TextBox Text="{Binding ElementName=Target}" />
+                </DataTemplate>
+              </DataTemplate>
+            </Page>
+            """);
+
+        Assert.Throws<RenameValidationException>(() =>
+            XamlRename.Rename(doc, offset, "Target", CreateFrameworkTypeSystem()));
+    }
+
+    [Fact]
+    public void Rename_SameNameWithElementNameReferenceIsAllowed()
+    {
+        var (doc, offset) = Caret("""
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              <controls:Grid x:Name="Ro|ot">
+                <controls:TextBox Text="{Binding ElementName=Root}" />
+              </controls:Grid>
+            </Page>
+            """);
+
+        var edit = XamlRename.Rename(doc, offset, "Root", CreateFrameworkTypeSystem());
+
+        Assert.Equal(2, Assert.Single(edit!.Changes!).Value.Count);
+    }
+
+    [Theory]
+    [InlineData("Out|er", "Outer")]
+    [InlineData("Outer", "Out|er")]
+    public void Rename_UnsupportedOuterBindRefusesFromDeclarationAndTemplateReference(string declaration, string usage)
+    {
+        var (doc, offset) = Caret($$"""
+            <Page xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <TextBox x:Name="{{declaration}}" />
+              <TextBlock Text="{x:Bind Format(Outer.Text}" />
+              <DataTemplate>
+                <TextBox Text="{Binding ElementName={{usage}}}" />
+              </DataTemplate>
+            </Page>
+            """);
+
+        Assert.Throws<RequestFailedException>(() => XamlRename.Rename(doc, offset, "Entry", FrameworkTypeSystem));
     }
 
     [Fact]
@@ -788,6 +890,23 @@ public class XamlRenameTests
         var edits = RenameEdits(buffer, "Pivot", CreateFrameworkTypeSystem());
         Assert.Equal(3, edits.Count); // declaration + RightOf + AlignTopWith
         Assert.All(edits, e => Assert.Equal("Pivot", e.NewText));
+    }
+
+    [Fact]
+    public void References_DanglingTargetNameInTemplateDoesNotReachOuterElement()
+    {
+        var (doc, offset) = Caret(
+            "<Grid xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
+            "xmlns:anim=\"using:Microsoft.UI.Xaml.Media.Animation\">\n" +
+            "  <Border x:Name=\"Hero\" />\n" +
+            "  <DataTemplate>\n" +
+            "    <DoubleAnimation anim:Storyboard.TargetName=\"He|ro\" />\n" +
+            "  </DataTemplate>\n" +
+            "</Grid>");
+
+        var occurrences = XamlLanguageServer.ResolveOccurrences(doc, doc.Parsed.Root!, offset, CreateFrameworkTypeSystem());
+
+        Assert.DoesNotContain(occurrences ?? [], occurrence => occurrence.IsDeclaration);
     }
 
     [Fact]

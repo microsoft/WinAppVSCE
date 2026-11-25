@@ -68,6 +68,8 @@ internal static partial class XamlValidator
                         doc,
                         typeSystem,
                         diagnostics);
+                    ValidateResourceValueType(
+                        elementType, attribute, extension, key, keySpan, declaration, doc, typeSystem, diagnostics);
                     continue;
                 }
 
@@ -161,6 +163,7 @@ internal static partial class XamlValidator
             {
                 ValidateBindPath(attribute, bindRoot, pageClass, scope, typeSystem, doc, diagnostics);
                 ValidateBindAssignment(attribute, elementType, bindRoot, pageClass, scope, typeSystem, doc, diagnostics);
+                ValidateBindTargetMember(attribute, elementType, bindRoot, pageClass, scope, typeSystem, doc, diagnostics);
             }
         }
 
@@ -279,6 +282,13 @@ internal static partial class XamlValidator
         if (member.Kind == XamlMemberKind.Property && member.Type is not null)
         {
             ValidateLiteralAttributeValue(attribute, member.Type, typeSystem, doc, diagnostics);
+        }
+        else if (member.Kind == XamlMemberKind.Event &&
+                 attribute.Value is { IsMarkupExtension: false, Quote: not null } emptyValue &&
+                 string.IsNullOrWhiteSpace(emptyValue.Text))
+        {
+            diagnostics.Add(Diag(doc, attribute.Name.Span, SeverityError, EmptyEventHandlerCode,
+                $"The event '{name.LocalName}' must name a handler method."));
         }
         else if (member.Kind == XamlMemberKind.Event &&
                  pageClass is not null &&

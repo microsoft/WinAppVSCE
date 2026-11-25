@@ -27,8 +27,8 @@ internal static class XamlDirectiveMetadata
         {
             ["Bind"] = new("{x:Bind}", "Creates a compiled binding resolved against the page x:Class or enclosing x:DataType."),
             ["Null"] = new("{x:Null}", "Supplies a null reference value."),
-            ["Static"] = new("{x:Static}", "References a static field, property, or constant."),
-            ["Type"] = new("{x:Type}", "Supplies the System.Type represented by a XAML type name."),
+            ["Static"] = new("{x:Static}", "WPF only. Not supported in WinUI XAML; use a static x:Bind path instead."),
+            ["Type"] = new("{x:Type}", "WPF only. Not supported in WinUI XAML; use the type name directly."),
         };
 
     private static readonly DirectiveInfo Ignorable = new(

@@ -110,6 +110,12 @@ internal static partial class CompletionProvider
         int ws = IndexOfWhitespace(tag);
         if (ws < 0)
         {
+            // A '<' typed inside a quoted attribute value is text, not a new element.
+            if (IsInsideOpenTagValue(text, lt))
+            {
+                return Context.None;
+            }
+
             // Still inside the element-name token.
             return new Context(ContextKind.ElementName, tag, lt + 1);
         }
@@ -128,6 +134,38 @@ internal static partial class CompletionProvider
         }
 
         return new Context(ContextKind.AttributeName, text.Substring(wordStart, offset - wordStart), wordStart);
+    }
+
+    /// <summary>True when lt sits inside a quoted attribute value of an earlier, still-open start tag.</summary>
+    private static bool IsInsideOpenTagValue(string text, int lt)
+    {
+        if (lt == 0)
+        {
+            return false;
+        }
+
+        int previousLt = text.LastIndexOf('<', lt - 1);
+        int previousGt = text.LastIndexOf('>', lt - 1);
+        if (previousLt < 0 || previousGt > previousLt)
+        {
+            return false;
+        }
+
+        char quote = '\0';
+        for (int i = previousLt + 1; i < lt; i++)
+        {
+            char c = text[i];
+            if (quote == '\0' && c is '"' or '\'')
+            {
+                quote = c;
+            }
+            else if (c == quote)
+            {
+                quote = '\0';
+            }
+        }
+
+        return quote != '\0';
     }
 
     /// <summary>If the caret sits inside a quoted attribute value within the start tag opened at ltIndex</summary>

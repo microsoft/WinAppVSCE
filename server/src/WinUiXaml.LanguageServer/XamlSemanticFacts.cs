@@ -290,14 +290,16 @@ internal static class XamlSemanticFacts
                 .ToArray();
         }
 
+        /// <summary>Resolves key from reference outward; declarations in skip are passed over, as WinUI does for a key that is already loading.</summary>
         internal XamlElement? FindDeclaration(
             XamlElement reference,
             string key,
             int referenceStart,
-            bool allowForwardReference)
+            bool allowForwardReference,
+            IReadOnlySet<XamlElement>? skip = null)
         {
             LookupCount++;
-            return FindDeclarationCore(reference, key, referenceStart, allowForwardReference);
+            return FindDeclarationCore(reference, key, referenceStart, allowForwardReference, skip);
         }
 
         internal IReadOnlyCollection<string> GetVisibleKeys(
@@ -312,7 +314,8 @@ internal static class XamlSemanticFacts
             XamlElement reference,
             string key,
             int referenceStart,
-            bool allowForwardReference)
+            bool allowForwardReference,
+            IReadOnlySet<XamlElement>? skip = null)
         {
             XamlElement? previousDictionary = null;
             bool sameLogicalDictionary = true;
@@ -335,7 +338,8 @@ internal static class XamlSemanticFacts
                             key,
                             enforceOrder: sameLogicalDictionary && !allowForwardReference,
                             referenceStart,
-                            out var declaration))
+                            out var declaration) &&
+                        skip?.Contains(declaration!) != true)
                     {
                         return declaration;
                     }
@@ -352,7 +356,8 @@ internal static class XamlSemanticFacts
                 {
                     if (IsResourceOwnerPropertyScope(child, _typeSystem) &&
                         !IsAncestorOf(child, reference) &&
-                        TryFind(child, key, enforceOrder: false, referenceStart, out var declaration))
+                        TryFind(child, key, enforceOrder: false, referenceStart, out var declaration) &&
+                        skip?.Contains(declaration!) != true)
                     {
                         return declaration;
                     }
@@ -808,6 +813,51 @@ internal static class XamlSemanticFacts
         EnumerateNamedElementsInScope(document, context, typeSystem)
             .FirstOrDefault(candidate => string.Equals(candidate.Name, name, StringComparison.Ordinal))
             .Element;
+
+    /// <summary>Resolves a classic Binding ElementName. At runtime the lookup walks out of template namescopes.</summary>
+    internal static XamlElement? FindElementNameBindingTarget(
+        TextDocument document,
+        XamlNode? context,
+        string name,
+        XamlTypeSystem typeSystem) =>
+        EnumerateElementNameBindingTargets(document, context, typeSystem)
+            .FirstOrDefault(candidate => string.Equals(candidate.Name, name, StringComparison.Ordinal))
+            .Element;
+
+    /// <summary>Named elements visible to a classic Binding ElementName, innermost namescope first; shadowed names omitted unless requested.</summary>
+    internal static IEnumerable<(string Name, XamlElement Element)> EnumerateElementNameBindingTargets(
+        TextDocument document,
+        XamlNode? context,
+        XamlTypeSystem typeSystem,
+        bool includeShadowed = false)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var candidate in EnumerateNamedElementsInScope(document, context, typeSystem))
+        {
+            if (seen.Add(candidate.Name) || includeShadowed)
+            {
+                yield return candidate;
+            }
+        }
+
+        for (var node = context; node is not null; node = node.Parent)
+        {
+            if (node is not XamlElement element ||
+                !IsNameScopeBoundary(element, typeSystem) ||
+                !IsWithinElementContent(context, element))
+            {
+                continue;
+            }
+
+            foreach (var candidate in EnumerateNamedElementsInScope(document, element, typeSystem))
+            {
+                if (seen.Add(candidate.Name) || includeShadowed)
+                {
+                    yield return candidate;
+                }
+            }
+        }
+    }
 
     internal static INamedTypeSymbol? ResolveNamedElementTypeInScope(
         TextDocument document,
