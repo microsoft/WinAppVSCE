@@ -550,14 +550,21 @@ namespace WinUiXaml.Xaml
                 p++; // consume '='
                 SkipWhitespace(ref p, limit);
 
-                if (p < limit && _text[p] == '{')
+                // A leading "{}" escapes the value: the rest is literal text such as a format string.
+                bool literal = StartsWithAt(p, limit, "{}");
+                if (!literal && p < limit && _text[p] == '{')
                 {
                     var nested = ParseMarkupExtension(ref p, limit, depth + 1);
                     return new XamlMarkupExtensionArgument(name, equalsSpan, null, null, nested, TextSpan.FromBounds(start, p));
                 }
 
                 int valStart = p;
-                ScanMarkupValue(ref p, limit, stopAtOpenBrace: false);
+                if (literal)
+                {
+                    p += 2;
+                }
+
+                ScanMarkupValue(ref p, limit, stopAtOpenBrace: false, balanceBraces: literal);
 
                 int valEnd = TrimEnd(valStart, p);
                 string val = _text.Substring(valStart, valEnd - valStart);
@@ -583,11 +590,12 @@ namespace WinUiXaml.Xaml
         }
 
         /// <summary>Advances to the ',' or '}' ending a markup value, skipping parenthesized commas, escapes, and quoted text.</summary>
-        private void ScanMarkupValue(ref int p, int limit, bool stopAtOpenBrace)
+        private void ScanMarkupValue(ref int p, int limit, bool stopAtOpenBrace, bool balanceBraces = false)
         {
             int valueStart = p;
             int parenDepth = 0;
             int bracketDepth = 0;
+            int braceDepth = 0;
             while (p < limit)
             {
                 char c = _text[p];
@@ -601,15 +609,36 @@ namespace WinUiXaml.Xaml
                 // The text is still XML-escaped, so any spelling of the quote character counts.
                 if ((p == valueStart || parenDepth > 0 || bracketDepth > 0) && TryReadQuote(p, limit, out char quote, out int openLength))
                 {
+                    // x:Bind function arguments escape a quote with '^' as well as '\'.
+                    bool hatEscapes = parenDepth > 0;
                     int close = p + openLength;
                     int closeLength = 0;
                     while (close < limit &&
                            !(TryReadQuote(close, limit, out char closing, out closeLength) && closing == quote))
                     {
-                        close += _text[close] == '\\' ? 2 : 1;
+                        bool escape = _text[close] == '\\' || (hatEscapes && _text[close] == '^');
+                        close++;
+                        if (escape && close < limit)
+                        {
+                            close += TryReadQuote(close, limit, out _, out int escapedLength) ? escapedLength : 1;
+                        }
                     }
 
                     p = close < limit ? close + closeLength : p + 1;
+                    continue;
+                }
+
+                if (balanceBraces && c == '{')
+                {
+                    braceDepth++;
+                    p++;
+                    continue;
+                }
+
+                if (c == '}' && braceDepth > 0)
+                {
+                    braceDepth--;
+                    p++;
                     continue;
                 }
 
@@ -640,7 +669,7 @@ namespace WinUiXaml.Xaml
                         bracketDepth--;
                     }
                 }
-                else if (c == ',' && parenDepth == 0 && bracketDepth == 0)
+                else if (c == ',' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
                 {
                     break;
                 }
