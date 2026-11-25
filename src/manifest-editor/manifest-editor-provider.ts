@@ -18,7 +18,7 @@ import { SchemaModel } from '../manifest-schema/schema-model';
 import { AssetCopyTokenStore } from './asset-copy-token-store';
 import { detectProjectAppKind } from './project-app-kind';
 import type { ProjectAppKind } from '../manifest-schema/semantic-validation';
-import { MrtResolution, checkAspectRatio, getImageDimensions, isPathWithin, resolveManifestImagePath } from './image-utils';
+import { MrtResolution, checkAspectRatio, getImageDimensions, relativeImagePathOrCopy, resolveManifestImagePath } from './image-utils';
 import { applyFlushedChanges, documentParses } from './flush-changes';
 
 /** Debounce window for external document changes (e.g. typing in the XML text editor). */
@@ -415,10 +415,9 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             if (!picked) { return; }
                             // A package can't reference files outside it, so copy those in rather than
                             // writing a "..\" path that only leads to a second copy step.
-                            const manifestDirPath = path.dirname(document.uri.fsPath);
                             const workspaceRoots = (vscode.workspace.workspaceFolders ?? []).map(wf => wf.uri.fsPath);
-                            const insideRoots = [manifestDirPath, ...workspaceRoots].some(root => isPathWithin(root, picked));
-                            const value = insideRoots ? path.relative(manifestDirPath, picked) : copyIntoAssets(picked);
+                            const value = relativeImagePathOrCopy(path.dirname(document.uri.fsPath), workspaceRoots, picked)
+                                ?? copyIntoAssets(picked);
                             newText = applyFieldChange(text, message.section, message.field, value, message.index);
                             break;
                         }

@@ -22,6 +22,7 @@ import {
     hasTargetSizeQualifier,
     resolveMrtAsset,
     resolveManifestImagePath,
+    relativeImagePathOrCopy,
     isPathWithin,
     getImageDimensions,
     checkAspectRatio,
@@ -447,6 +448,25 @@ describe('resolveManifestImagePath', () => {
 });
 
 // ─── Path containment ───────────────────────────────────
+
+describe('relativeImagePathOrCopy (Choose file)', () => {
+    const workspace = path.join('C:', 'repo');
+    const manifestDir = path.join(workspace, 'app');
+
+    it('keeps a package-relative path for images inside the package', () => {
+        assert.equal(relativeImagePathOrCopy(manifestDir, [workspace], path.join(manifestDir, 'Assets', 'Logo.png')), path.join('Assets', 'Logo.png'));
+    });
+
+    it('keeps a relative path for images elsewhere in the workspace', () => {
+        assert.equal(relativeImagePathOrCopy(manifestDir, [workspace], path.join(workspace, 'Shared', 'Logo.png')), path.join('..', 'Shared', 'Logo.png'));
+    });
+
+    // A package can't reference files outside it, so those are copied into Assets in one step.
+    it('asks for a copy for images outside the package and every workspace folder', () => {
+        assert.equal(relativeImagePathOrCopy(manifestDir, [workspace], path.join('C:', 'Users', 'me', 'Downloads', 'Logo.png')), null);
+        assert.equal(relativeImagePathOrCopy(manifestDir, [], path.join(workspace, 'Shared', 'Logo.png')), null);
+    });
+});
 
 /**
  * `isPathWithin` gates every directory enumeration MRT probing performs, so its failure

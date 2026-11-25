@@ -251,6 +251,17 @@ export function resolveManifestImagePath(
     return { status: 'notFound' };
 }
 
+/**
+ * Decides what an image picked in the native dialog becomes in the manifest: a relative path
+ * when it sits in the package or a workspace folder, otherwise a copy into Assets (null here).
+ */
+export function relativeImagePathOrCopy(
+    manifestDir: string, workspaceRoots: readonly string[], pickedPath: string,
+): string | null {
+    const insideRoots = [manifestDir, ...workspaceRoots].some(root => isPathWithin(root, pickedPath));
+    return insideRoots ? path.relative(manifestDir, pickedPath) : null;
+}
+
 /** Reads width/height from PNG or JPEG file headers without loading the full image. */
 export function getImageDimensions(filePath: string): { width: number; height: number } | null {
     let fd: number | undefined;
