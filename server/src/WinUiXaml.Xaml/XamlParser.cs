@@ -15,8 +15,9 @@ namespace WinUiXaml.Xaml
         private readonly List<string> _openTagStack = new List<string>();
         private int _pos;
         private int _depth;
-        private int _unclosedQuoteLimit = -1;
-        private int _unclosedQuoteFrom;
+        // Per quote character and '^' escape mode: where an unclosed quote search ran to its limit.
+        private readonly int[] _unclosedQuoteLimit = [-1, -1, -1, -1];
+        private readonly int[] _unclosedQuoteFrom = new int[4];
 
         private XamlParser(string text)
         {
@@ -607,11 +608,12 @@ namespace WinUiXaml.Xaml
                     continue;
                 }
 
-                // Quotes delimit a value at its start, in x:Bind function arguments, or in indexer keys.
-                // The text is still XML-escaped, so any spelling of the quote character counts.
-                // Once a quote runs unclosed to the limit, later ones would only rescan the same suffix.
-                bool pastUnclosedQuote = limit == _unclosedQuoteLimit && p >= _unclosedQuoteFrom;
-                if (!pastUnclosedQuote && (p == valueStart || parenDepth > 0 || bracketDepth > 0) && TryReadQuote(p, limit, out char quote, out int openLength))
+                // Quotes delimit a value at its start, in x:Bind function arguments, or in indexer keys,
+                // in any XML-escaped spelling. Once one runs unclosed to the limit, the same quote and
+                // escape mode would only rescan that suffix; other quotes are still recognized.
+                if ((p == valueStart || parenDepth > 0 || bracketDepth > 0) &&
+                    TryReadQuote(p, limit, out char quote, out int openLength) &&
+                    !IsPastUnclosedQuote(UnclosedQuoteSlot(quote, parenDepth > 0), p, limit))
                 {
                     // x:Bind function arguments escape a quote with '^' as well as '\'.
                     bool hatEscapes = parenDepth > 0;
@@ -630,8 +632,9 @@ namespace WinUiXaml.Xaml
 
                     if (close >= limit)
                     {
-                        _unclosedQuoteLimit = limit;
-                        _unclosedQuoteFrom = p;
+                        int slot = UnclosedQuoteSlot(quote, hatEscapes);
+                        _unclosedQuoteLimit[slot] = limit;
+                        _unclosedQuoteFrom[slot] = p;
                     }
 
                     p = close < limit ? close + closeLength : p + 1;
@@ -687,6 +690,12 @@ namespace WinUiXaml.Xaml
                 p++;
             }
         }
+
+        private static int UnclosedQuoteSlot(char quote, bool hatEscapes) =>
+            (quote == '"' ? 2 : 0) + (hatEscapes ? 1 : 0);
+
+        private bool IsPastUnclosedQuote(int slot, int p, int limit) =>
+            _unclosedQuoteLimit[slot] == limit && p >= _unclosedQuoteFrom[slot];
 
         private bool StartsWithAt(int p, int limit, string s) =>
             p + s.Length <= limit && string.CompareOrdinal(_text, p, s, 0, s.Length) == 0;

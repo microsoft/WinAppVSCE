@@ -159,10 +159,19 @@ public sealed class WellFormednessTests
         Assert.True(doc!.Root!.HasEndTag);
     }
 
+    // An unclosed quote in one argument must not stop a later, differently quoted argument from parsing.
+    [Fact]
+    public void UnclosedQuote_DoesNotSplitALaterQuotedArgument()
+    {
+        var doc = XamlParser.Parse("<TextBlock Text=\"{Binding Path='oops, ConverterParameter=&quot;a,b&quot;}\"/>");
+        Assert.DoesNotContain(doc.Diagnostics, d => d.Id == XamlDiagnosticIds.MalformedMarkupExtension);
+    }
+
     // An unclosed string with many escaped quotes must not rescan the rest of the value per quote.
     [Theory]
     [InlineData("{x:Bind Format('a", "^'b", ")}")]
     [InlineData("{Binding A", ", B=F('x)", "}")]
+    [InlineData("{Binding A", ", B=F('x&quot;y)", "}")]
     public void UnclosedQuotes_ParseInLinearTime(string prefix, string repeated, string suffix)
     {
         var text = "<TextBlock Text=\"" + prefix + string.Concat(Enumerable.Repeat(repeated, 40000)) + suffix + "\"/>";
